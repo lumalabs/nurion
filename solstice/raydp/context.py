@@ -138,9 +138,12 @@ def init_spark(
         # ray has not initialized, init local
         ray.init(log_to_driver=log_to_driver, logging_level=logging_level)
 
+    # Defensive copy to avoid mutating caller's dict
+    _configs = {} if configs is None else configs.copy()
+
     # Auto-configure executor settings if requested and not explicitly provided
     if auto_configure:
-        inferred_config = auto_infer_executor_config(logger=logger)
+        inferred_config = auto_infer_executor_config()
 
         if executor_cores is None:
             executor_cores = inferred_config.executor_cores
@@ -155,10 +158,8 @@ def init_spark(
             logger.info(f"Auto-configured num_executors: {num_executors}")
 
         # Also set driver memory if not already in configs
-        if configs is None:
-            configs = {}
-        if "spark.driver.memory" not in configs:
-            configs["spark.driver.memory"] = inferred_config.driver_memory
+        if "spark.driver.memory" not in _configs:
+            _configs["spark.driver.memory"] = inferred_config.driver_memory
             logger.info(f"Auto-configured driver_memory: {inferred_config.driver_memory}")
 
     # Validate required parameters
@@ -173,7 +174,6 @@ def init_spark(
 
     with _spark_context_lock:
         global _global_spark_context
-        _configs = {} if configs is None else configs.copy()
         if dynamic_allocation:
             _configs["spark.dynamicAllocation.enabled"] = "true"
             assert min_executors is not None, (
