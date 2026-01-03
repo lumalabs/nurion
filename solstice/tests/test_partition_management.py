@@ -26,10 +26,10 @@ All tests use real implementations (no mocks) to catch real issues.
 import pytest
 from dataclasses import dataclass
 
-from solstice.core.stage_master import StageMaster, StageConfig, QueueType
+from solstice.core.stage_master import StageMaster, StageConfig
 from solstice.core.stage import Stage
 from solstice.core.operator import OperatorConfig, Operator
-from solstice.queue import TansuBackend
+from solstice.queue import QueueType
 
 
 @dataclass

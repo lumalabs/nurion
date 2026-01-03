@@ -32,7 +32,7 @@ from solstice.core.job import Job
 from solstice.core.stage import Stage
 from solstice.core.operator import Operator, OperatorConfig
 from solstice.core.models import Split, SplitPayload
-from solstice.core.stage_master import QueueType
+from solstice.queue import QueueType
 from solstice.runtime.ray_runner import RayJobRunner
 from solstice.operators.sources.source import SourceMaster
 

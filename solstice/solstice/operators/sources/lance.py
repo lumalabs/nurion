@@ -23,7 +23,7 @@ import lance
 
 from solstice.core.models import Split, SplitPayload
 from solstice.core.operator import SourceOperator, OperatorConfig
-from solstice.core.stage_master import QueueType
+from solstice.queue import QueueType
 from solstice.operators.sources.source import SourceMaster, SourceConfig
 
 if TYPE_CHECKING:

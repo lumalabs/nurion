@@ -163,7 +163,8 @@ class TestIcebergPipeline:
         from dataclasses import dataclass
 
         from solstice.core.operator import Operator, OperatorConfig
-        from solstice.core.stage_master import QueueType, StageMaster, StageConfig
+        from solstice.core.stage_master import StageMaster, StageConfig
+        from solstice.queue import QueueType
 
         # Create a simple pass-through operator for testing
         @dataclass

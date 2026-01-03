@@ -31,7 +31,7 @@ import pytest_asyncio
 import ray
 
 from solstice.core.split_payload_store import RaySplitPayloadStore
-from solstice.queue import TansuBackend
+from solstice.queue import TansuBrokerManager, TansuQueueClient
 
 if TYPE_CHECKING:
     pass
@@ -79,14 +79,19 @@ def _find_free_port() -> int:
 
 @pytest_asyncio.fixture
 async def tansu_backend():
-    """Start a real TansuBackend backed by in-memory storage."""
+    """Start a Tansu broker and client (for backward compatibility)."""
+    import asyncio
     port = _find_free_port()
-    backend = TansuBackend(storage_url="memory://tansu/", port=port)
-    await backend.start()
+    broker = TansuBrokerManager(storage_url="memory://tansu/", port=port)
+    await broker.start()
+    client = TansuQueueClient(broker.get_broker_url())
+    await client.start()
     try:
-        yield backend
+        yield broker, client
     finally:
-        await backend.stop()
+        await client.stop()
+        await broker.stop()
+        await asyncio.sleep(0.5)
 
 
 @pytest.fixture(scope="session", autouse=True)

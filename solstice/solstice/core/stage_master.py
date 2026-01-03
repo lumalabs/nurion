@@ -62,20 +62,18 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 
 import ray
 
-from solstice.queue import QueueBackend
-from solstice.queue.factory import create_queue_backend
+from solstice.queue import (
+    QueueType,
+    MemoryBroker,
+    MemoryClient,
+    TansuBrokerManager,
+    TansuQueueClient,
+)
 from solstice.utils.logging import create_ray_logger
 from solstice.core.split_payload_store import SplitPayloadStore
 
 if TYPE_CHECKING:
     from solstice.core.stage import Stage
-
-
-class QueueType(str, Enum):
-    """Type of queue backend to use."""
-
-    MEMORY = "memory"  # In-process only (for single-worker testing)
-    TANSU = "tansu"  # Persistent broker (for production)
 
 
 @dataclass
@@ -251,7 +249,8 @@ class StageMaster:
         self.payload_store = payload_store
 
         # Output queue (managed by master)
-        self._output_queue: Optional[QueueBackend] = None
+        self._output_broker: Optional[TansuBrokerManager | MemoryBroker] = None
+        self._output_queue = None  # MemoryClient or TansuQueueClient
         self._output_topic = f"{job_id}_{self.stage_id}_output"
 
         # Output endpoint info for workers/downstream
@@ -281,18 +280,14 @@ class StageMaster:
         self._backpressure_active = False
         self._downstream_stage_refs: Dict[str, StageMaster] = {}  # For backpressure propagation
 
-    async def _get_upstream_metrics_queue(self) -> Optional[QueueBackend]:
-        """Get or create a client-only queue backend for upstream metrics/lag/skew."""
+    async def _get_upstream_metrics_queue(self) -> Optional[TansuQueueClient]:
+        """Get or create a client-only queue for upstream metrics/lag/skew."""
         if not self.upstream_endpoint or self.upstream_endpoint.queue_type != QueueType.TANSU:
             return None
 
         if self._upstream_metrics_queue is None:
-            self._upstream_metrics_queue = create_queue_backend(
-                queue_type=self.upstream_endpoint.queue_type,
-                storage_url=self.upstream_endpoint.storage_url,
-                port=self.upstream_endpoint.port,
-                client_only=True,
-            )
+            broker_url = f"{self.upstream_endpoint.host}:{self.upstream_endpoint.port}"
+            self._upstream_metrics_queue = TansuQueueClient(broker_url)
             await self._upstream_metrics_queue.start()
 
         return self._upstream_metrics_queue
@@ -332,20 +327,39 @@ class StageMaster:
             )
             partition_count = 1
 
-        queue = create_queue_backend(
-            queue_type=self.config.queue_type,
-            storage_url=self.config.tansu_storage_url,
-            port=None,  # allow backend to choose a free port if applicable
-            client_only=False,
-        )
-        await queue.start()
+        if self.config.queue_type == QueueType.TANSU:
+            # Tansu: Start broker + create client
+            self._output_broker = TansuBrokerManager(
+                storage_url=self.config.tansu_storage_url or "memory://tansu/",
+            )
+            await self._output_broker.start()
 
-        self._output_endpoint = QueueEndpoint(
-            queue_type=self.config.queue_type,
-            host=queue.host,
-            port=queue.port,
-            storage_url=self.config.tansu_storage_url,
-        )
+            broker_url = self._output_broker.get_broker_url()
+            host, port_str = broker_url.split(":")
+            queue = TansuQueueClient(broker_url)
+            await queue.start()
+
+            self._output_endpoint = QueueEndpoint(
+                queue_type=self.config.queue_type,
+                host=host,
+                port=int(port_str),
+                storage_url=self.config.tansu_storage_url or "memory://tansu/",
+            )
+        else:
+            # Memory: Start broker + create client
+            self._output_broker = MemoryBroker()
+            await self._output_broker.start()
+
+            queue = MemoryClient(self._output_broker)
+            await queue.start()
+
+            self._output_endpoint = QueueEndpoint(
+                queue_type=self.config.queue_type,
+                host="memory",
+                port=0,
+                storage_url=self._output_broker.get_broker_url(),
+            )
+
         self.logger.info(
             f"Created {self.config.queue_type} backend on {self._output_endpoint.host}:{self._output_endpoint.port} "
             f"with {partition_count} partition(s)"
@@ -487,6 +501,9 @@ class StageMaster:
         if self._output_queue:
             await self._output_queue.stop()
             self._output_queue = None
+        if self._output_broker:
+            await self._output_broker.stop()
+            self._output_broker = None
 
     def notify_upstream_finished(self) -> None:
         """Notify this stage that all upstream stages have finished.
@@ -929,14 +946,14 @@ class StageWorker:
         self._last_commit_time = time.time()
         self._upstream_finished = False
 
-    async def _create_queue_from_endpoint(self, endpoint: QueueEndpoint) -> QueueBackend:
+    async def _create_queue_from_endpoint(self, endpoint: QueueEndpoint):
         """Create a queue connection from endpoint info."""
-        queue = create_queue_backend(
-            queue_type=endpoint.queue_type,
-            storage_url=endpoint.storage_url,
-            port=endpoint.port,
-            client_only=True,  # Worker should only connect to existing queue
-        )
+        if endpoint.queue_type == QueueType.TANSU:
+            broker_url = f"{endpoint.host}:{endpoint.port}"
+            queue = TansuQueueClient(broker_url)
+        else:
+            # Memory: Use broker URL to look up the broker instance
+            queue = MemoryClient(endpoint.storage_url)
         await queue.start()
         return queue
 
