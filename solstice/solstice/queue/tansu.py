@@ -28,12 +28,12 @@ Example:
     # On Master
     broker = TansuBrokerManager(storage_url="memory://tansu/")
     await broker.start()
-    
+
     client = TansuQueueClient(broker.get_broker_url())
     await client.start()
     await client.create_topic("my-topic")
     await client.produce("my-topic", b"hello")
-    
+
     # On Worker (only needs broker_url)
     client = TansuQueueClient("master-host:9092")
     await client.start()
@@ -108,10 +108,10 @@ class _BrokerEventHandler(BrokerEventHandler):
 class TansuBrokerManager:
     """
     Manages the embedded Tansu broker lifecycle.
-    
+
     Implements QueueBroker protocol. Should only run on StageMaster.
     Workers connect to the broker using TansuQueueClient.
-    
+
     Example:
         broker = TansuBrokerManager(storage_url="memory://tansu/")
         await broker.start()
@@ -129,7 +129,7 @@ class TansuBrokerManager:
     ):
         """
         Initialize broker manager.
-        
+
         Args:
             storage_url: Storage backend URL (memory://tansu/, s3://bucket/)
             port: Port for Kafka protocol. None = auto-select free port.
@@ -164,13 +164,9 @@ class TansuBrokerManager:
         self._broker.start()
 
         try:
-            await asyncio.wait_for(
-                self._ready_event.wait(), timeout=self.startup_timeout
-            )
+            await asyncio.wait_for(self._ready_event.wait(), timeout=self.startup_timeout)
         except asyncio.TimeoutError:
-            raise RuntimeError(
-                f"Tansu broker failed to start within {self.startup_timeout}s"
-            )
+            raise RuntimeError(f"Tansu broker failed to start within {self.startup_timeout}s")
 
         if not self._running:
             raise RuntimeError("Tansu broker failed to start (fatal error)")
@@ -205,25 +201,25 @@ class TansuBrokerManager:
 class TansuQueueClient:
     """
     Kafka client for Tansu broker.
-    
+
     Implements QueueClient protocol (Producer + Consumer + Admin).
     Can run on any node - only needs broker_url to connect.
-    
+
     Example:
         client = TansuQueueClient(broker_url="master-host:9092")
         await client.start()
-        
+
         await client.create_topic("my-topic")
         offset = await client.produce("my-topic", b"hello")
         records = await client.fetch("my-topic", offset=0)
-        
+
         await client.stop()
     """
 
     def __init__(self, broker_url: str):
         """
         Initialize queue client.
-        
+
         Args:
             broker_url: Broker address in format "host:port".
         """
@@ -307,9 +303,9 @@ class TansuQueueClient:
             raise RuntimeError("Client not started")
 
         try:
-            await self._admin_client.create_topics([
-                NewTopic(topic, num_partitions=partitions, replication_factor=1)
-            ])
+            await self._admin_client.create_topics(
+                [NewTopic(topic, num_partitions=partitions, replication_factor=1)]
+            )
             self.logger.info(f"Created topic: {topic}")
         except Exception as e:
             if "TopicAlreadyExistsError" in str(type(e).__name__):
@@ -429,10 +425,10 @@ class TansuQueueClient:
         """Commit the consumer offset for a consumer group."""
         # Get or create a consumer for this group
         consumer = await self._get_consumer(topic, partition=partition, group_id=group)
-        
+
         tp = TopicPartition(topic, partition)
         offsets = {tp: OffsetAndMetadata(offset, "")}
-        
+
         try:
             await asyncio.wait_for(consumer.commit(offsets), timeout=10.0)
             self._committed_offsets[(group, topic, partition)] = offset
@@ -479,12 +475,10 @@ class TansuQueueClient:
         """Get the latest offset in the topic."""
         consumer = await self._get_consumer(topic, partition=partition)
         tp = TopicPartition(topic, partition)
-        
+
         try:
             # Get end offsets with timeout
-            end_offsets = await asyncio.wait_for(
-                consumer.end_offsets([tp]), timeout=10.0
-            )
+            end_offsets = await asyncio.wait_for(consumer.end_offsets([tp]), timeout=10.0)
             return end_offsets.get(tp, 0)
         except asyncio.TimeoutError:
             self.logger.warning("Timeout getting latest offset")

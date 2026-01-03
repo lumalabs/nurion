@@ -28,11 +28,11 @@ Example:
     # Create client
     client = TansuQueueClient(broker.get_broker_url())
     await client.start()
-    
+
     await client.create_topic("my-topic")
     offset = await client.produce("my-topic", b"message data")
     records = await client.fetch("my-topic", offset=0)
-    
+
     await client.stop()
     await broker.stop()
     ```

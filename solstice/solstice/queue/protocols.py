@@ -17,14 +17,14 @@ Queue protocols based on Interface Segregation Principle.
 
 This module defines small, focused protocols for queue operations:
 - QueueProducer: For producing messages
-- QueueConsumer: For consuming messages  
+- QueueConsumer: For consuming messages
 - QueueAdmin: For topic management
 - QueueBroker: For broker lifecycle management
 
 Classes can implement only the protocols they need.
 """
 
-from typing import Dict, List, Optional, Protocol, runtime_checkable
+from typing import List, Optional, Protocol, runtime_checkable
 
 from solstice.queue.backend import Record
 
@@ -46,13 +46,13 @@ class QueueProducer(Protocol):
         partition: Optional[int] = None,
     ) -> int:
         """Produce a message to the topic.
-        
+
         Args:
             topic: Name of the topic.
             value: Message payload as bytes.
             key: Optional key for partitioning.
             partition: Optional specific partition.
-            
+
         Returns:
             The offset of the produced message.
         """
@@ -66,13 +66,13 @@ class QueueProducer(Protocol):
         partition: Optional[int] = None,
     ) -> List[int]:
         """Produce multiple messages to the topic.
-        
+
         Args:
             topic: Name of the topic.
             values: List of message payloads.
             keys: Optional list of keys.
             partition: Optional specific partition.
-            
+
         Returns:
             List of offsets for the produced messages.
         """
@@ -97,14 +97,14 @@ class QueueConsumer(Protocol):
         partition: int = 0,
     ) -> List[Record]:
         """Fetch records from the topic.
-        
+
         Args:
             topic: Name of the topic.
             offset: Starting offset (inclusive).
             max_records: Maximum number of records to fetch.
             timeout_ms: Timeout in milliseconds.
             partition: Partition to read from.
-            
+
         Returns:
             List of records.
         """
@@ -118,7 +118,7 @@ class QueueConsumer(Protocol):
         partition: int = 0,
     ) -> None:
         """Commit the consumer offset for a consumer group.
-        
+
         Args:
             group: Consumer group ID.
             topic: Name of the topic.
@@ -134,12 +134,12 @@ class QueueConsumer(Protocol):
         partition: int = 0,
     ) -> Optional[int]:
         """Get the committed offset for a consumer group.
-        
+
         Args:
             group: Consumer group ID.
             topic: Name of the topic.
             partition: Partition.
-            
+
         Returns:
             The committed offset, or None if not committed.
         """
@@ -151,11 +151,11 @@ class QueueConsumer(Protocol):
         partition: int = 0,
     ) -> int:
         """Get the latest offset in the topic.
-        
+
         Args:
             topic: Name of the topic.
             partition: Partition.
-            
+
         Returns:
             The next offset that will be assigned.
         """
@@ -173,7 +173,7 @@ class QueueAdmin(Protocol):
 
     async def create_topic(self, topic: str, partitions: int = 1) -> None:
         """Create a topic.
-        
+
         Args:
             topic: Name of the topic.
             partitions: Number of partitions.
@@ -182,7 +182,7 @@ class QueueAdmin(Protocol):
 
     async def delete_topic(self, topic: str) -> None:
         """Delete a topic.
-        
+
         Args:
             topic: Name of the topic.
         """
@@ -190,7 +190,7 @@ class QueueAdmin(Protocol):
 
     async def health_check(self) -> bool:
         """Check if the backend is healthy.
-        
+
         Returns:
             True if healthy.
         """
@@ -216,7 +216,7 @@ class QueueBroker(Protocol):
 
     def get_broker_url(self) -> str:
         """Get the broker URL for clients to connect.
-        
+
         Returns:
             Broker URL in format "host:port".
         """
@@ -224,7 +224,7 @@ class QueueBroker(Protocol):
 
     def is_running(self) -> bool:
         """Check if broker is running.
-        
+
         Returns:
             True if running.
         """
@@ -239,7 +239,7 @@ class QueueBroker(Protocol):
 @runtime_checkable
 class QueueClient(QueueProducer, QueueConsumer, QueueAdmin, Protocol):
     """Combined protocol for a full-featured queue client.
-    
+
     Implements Producer + Consumer + Admin capabilities.
     """
 
@@ -250,4 +250,3 @@ class QueueClient(QueueProducer, QueueConsumer, QueueAdmin, Protocol):
     async def stop(self) -> None:
         """Stop the client."""
         ...
-

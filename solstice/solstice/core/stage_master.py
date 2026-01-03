@@ -17,7 +17,7 @@
 Key differences from v1:
 - Master only manages its output queue
 - Workers pull directly from upstream queue (not master-to-master)
-- Uses QueueBackend abstraction for flexibility
+- Uses QueueClient abstraction for flexibility
 - Cleaner separation of concerns
 
 Architecture:
@@ -25,7 +25,7 @@ Architecture:
     │                     Stage Master                            │
     │                                                             │
     │  ┌─────────────────────────────────────────────────────┐   │
-    │  │              Output Queue (QueueBackend)            │   │
+    │  │              Output Queue (QueueClient)            │   │
     │  │  - Persistent (Tansu) or in-memory                  │   │
     │  │  - Offset tracking for exactly-once                 │   │
     │  └─────────────────────────────────────────────────────┘   │
@@ -45,7 +45,7 @@ Architecture:
     ┌─────────────────────────────────────────────────────────────┐
     │                  Upstream Stage Master                      │
     │  ┌─────────────────────────────────────────────────────┐   │
-    │  │              Output Queue (QueueBackend)            │   │
+    │  │              Output Queue (QueueClient)            │   │
     │  └─────────────────────────────────────────────────────┘   │
     └─────────────────────────────────────────────────────────────┘
 """
@@ -57,13 +57,13 @@ import json
 import time
 import uuid
 from dataclasses import dataclass, field
-from enum import Enum
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 import ray
 
 from solstice.queue import (
     QueueType,
+    QueueClient,
     MemoryBroker,
     MemoryClient,
     TansuBrokerManager,
@@ -274,7 +274,7 @@ class StageMaster:
         self._consumer_group = f"{job_id}_{self.stage_id}"
 
         # Cached upstream queue backend for metrics collection (client-only, reused)
-        self._upstream_metrics_queue: Optional[QueueBackend] = None
+        self._upstream_metrics_queue: Optional[QueueClient] = None
 
         # Backpressure state
         self._backpressure_active = False
@@ -314,7 +314,7 @@ class StageMaster:
         # This allows each worker to potentially consume from a different partition
         return self.config.max_workers
 
-    async def _create_queue(self) -> QueueBackend:
+    async def _create_queue(self) -> QueueClient:
         """Create the appropriate queue backend with dynamic partition count."""
         # Compute partition count
         partition_count = self._compute_partition_count()
@@ -521,7 +521,7 @@ class StageMaster:
             except Exception as e:
                 self.logger.warning(f"Failed to notify worker {worker_id}: {e}")
 
-    def get_output_queue(self) -> Optional[QueueBackend]:
+    def get_output_queue(self) -> Optional[QueueClient]:
         """Get the output queue for downstream stages."""
         return self._output_queue
 
@@ -900,7 +900,7 @@ class StageWorker:
     4. Commit upstream offset (only after output is durably stored)
 
     Note: Workers create their own queue connections from endpoints,
-    since QueueBackend instances contain locks and cannot be serialized.
+    since QueueClient instances contain locks and cannot be serialized.
     """
 
     def __init__(
@@ -931,8 +931,8 @@ class StageWorker:
         self.consumer_group = consumer_group
 
         # Queue connections (created lazily)
-        self.upstream_queue: Optional[QueueBackend] = None
-        self.output_queue: Optional[QueueBackend] = None
+        self.upstream_queue: Optional[QueueClient] = None
+        self.output_queue: Optional[QueueClient] = None
 
         self.logger = create_ray_logger(f"Worker-{self.stage_id}-{worker_id}")
 

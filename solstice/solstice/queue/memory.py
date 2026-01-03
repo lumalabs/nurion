@@ -26,15 +26,15 @@ Example:
     # Create broker (on master)
     broker = MemoryBroker()
     await broker.start()
-    
+
     # Create client
     client = MemoryClient(broker)
     await client.start()
-    
+
     await client.create_topic("my-topic")
     offset = await client.produce("my-topic", b"hello")
     records = await client.fetch("my-topic", offset=0)
-    
+
     await client.stop()
     await broker.stop()
     ```
@@ -72,14 +72,14 @@ class _TopicData:
 
 class MemoryBroker:
     """In-memory message broker.
-    
+
     Manages topic storage in memory. Data is NOT persisted across restarts.
-    
+
     Implements QueueBroker protocol:
     - start() / stop() for lifecycle
     - get_broker_url() returns a reference ID
     - is_running() for status check
-    
+
     Example:
         broker = MemoryBroker()
         await broker.start()
@@ -96,12 +96,14 @@ class MemoryBroker:
 
     def __init__(self, gc_interval_seconds: float = 60.0):
         """Initialize the memory broker.
-        
+
         Args:
             gc_interval_seconds: Interval for automatic garbage collection.
         """
         self._topics: Dict[str, _TopicData] = {}
-        self._committed_offsets: Dict[Tuple[str, str, int], int] = {}  # (group, topic, partition) -> offset
+        self._committed_offsets: Dict[
+            Tuple[str, str, int], int
+        ] = {}  # (group, topic, partition) -> offset
         self._global_lock = threading.Lock()
         self._gc_interval = gc_interval_seconds
         self._gc_task: Optional[asyncio.Task] = None
@@ -112,22 +114,22 @@ class MemoryBroker:
         """Start the memory broker."""
         if self._running:
             return
-            
+
         self._running = True
-        
+
         # Register this instance
         with MemoryBroker._registry_lock:
             MemoryBroker._instance_counter += 1
             self._broker_id = f"memory://{MemoryBroker._instance_counter}"
             MemoryBroker._instances[self._broker_id] = self
-        
+
         # Start background GC task
         self._gc_task = asyncio.create_task(self._gc_loop())
 
     async def stop(self) -> None:
         """Stop the memory broker."""
         self._running = False
-        
+
         if self._gc_task:
             self._gc_task.cancel()
             try:
@@ -222,28 +224,28 @@ class MemoryBroker:
 
 class MemoryClient:
     """In-memory queue client.
-    
+
     Provides producer, consumer, and admin operations against a MemoryBroker.
-    
+
     Implements QueueClient protocol (QueueProducer + QueueConsumer + QueueAdmin).
-    
+
     Example:
         broker = MemoryBroker()
         await broker.start()
-        
+
         client = MemoryClient(broker)
         await client.start()
-        
+
         await client.create_topic("my-topic")
         offset = await client.produce("my-topic", b"hello")
         records = await client.fetch("my-topic", offset=0)
-        
+
         await client.stop()
     """
 
     def __init__(self, broker: MemoryBroker | str):
         """Initialize the memory client.
-        
+
         Args:
             broker: Either a MemoryBroker instance or a broker URL string.
         """
@@ -257,7 +259,7 @@ class MemoryClient:
         else:
             self._broker = broker
             self._broker_url = broker.get_broker_url()
-        
+
         self._running = False
 
     async def start(self) -> None:
@@ -361,12 +363,14 @@ class MemoryClient:
                     continue
                 if len(result) >= max_records:
                     break
-                result.append(Record(
-                    offset=rec_offset,
-                    value=value,
-                    key=key,
-                    timestamp=timestamp,
-                ))
+                result.append(
+                    Record(
+                        offset=rec_offset,
+                        value=value,
+                        key=key,
+                        timestamp=timestamp,
+                    )
+                )
 
         return result
 
