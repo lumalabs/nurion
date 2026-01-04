@@ -1037,7 +1037,6 @@ class StageWorker:
                 offset=0,  # Offset is managed by consumer group
                 max_records=self.config.batch_size,
                 timeout_ms=1000,  # Shorter timeout for faster completion detection
-                group_id=self.consumer_group,  # Use consumer group for partition assignment
             )
 
             # Debug: Check queue status periodically
