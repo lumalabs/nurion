@@ -311,34 +311,6 @@ class MemoryClient:
             topic_data.next_offset += 1
             return offset
 
-    async def produce_batch(
-        self,
-        topic: str,
-        values: List[bytes],
-        keys: Optional[List[Optional[bytes]]] = None,
-        partition: Optional[int] = None,
-    ) -> List[int]:
-        """Produce multiple messages to the topic."""
-        if keys is not None and len(keys) != len(values):
-            raise ValueError(f"keys length ({len(keys)}) must match values length ({len(values)})")
-
-        if not values:
-            return []
-
-        topic_data = self._broker._get_or_create_topic(topic)
-        timestamp = int(time.time() * 1000)
-        offsets = []
-
-        with topic_data.lock:
-            for i, value in enumerate(values):
-                key = keys[i] if keys else None
-                offset = topic_data.next_offset
-                topic_data.records.append((offset, value, key, timestamp))
-                topic_data.next_offset += 1
-                offsets.append(offset)
-
-        return offsets
-
     # -------------------------------------------------------------------------
     # QueueConsumer Implementation
     # -------------------------------------------------------------------------
@@ -407,3 +379,52 @@ class MemoryClient:
 
         with topic_data.lock:
             return topic_data.next_offset
+
+    async def get_all_partition_offsets(self, topic: str) -> Dict[int, int]:
+        """Get latest offsets for all partitions (memory only has partition 0)."""
+        latest = await self.get_latest_offset(topic, partition=0)
+        return {0: latest}
+
+    async def truncate_before(self, topic: str, offset: int) -> int:
+        """Truncate (garbage collect) records before the given offset.
+
+        Returns:
+            Number of records deleted.
+        """
+        topic_data = self._broker._get_topic(topic)
+        if topic_data is None:
+            return 0
+
+        with topic_data.lock:
+            original_count = len(topic_data.records)
+            topic_data.records = [r for r in topic_data.records if r[0] >= offset]
+            deleted = original_count - len(topic_data.records)
+            return deleted
+
+    async def get_min_committed_offset(self, topic: str) -> Optional[int]:
+        """Get the minimum committed offset across all consumer groups.
+
+        Returns:
+            The minimum committed offset, or None if no offsets are committed.
+        """
+        min_offset = None
+        with self._broker._global_lock:
+            for (group, t, partition), offset in self._broker._committed_offsets.items():
+                if t == topic:
+                    if min_offset is None or offset < min_offset:
+                        min_offset = offset
+        return min_offset
+
+    @property
+    def is_persistent(self) -> bool:
+        """Memory backend is not persistent."""
+        return False
+
+    # Convenience properties for backward compatibility
+    @property
+    def host(self) -> str:
+        return "localhost"
+
+    @property
+    def port(self) -> int:
+        return 0

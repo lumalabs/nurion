@@ -58,26 +58,6 @@ class QueueProducer(Protocol):
         """
         ...
 
-    async def produce_batch(
-        self,
-        topic: str,
-        values: List[bytes],
-        keys: Optional[List[Optional[bytes]]] = None,
-        partition: Optional[int] = None,
-    ) -> List[int]:
-        """Produce multiple messages to the topic.
-
-        Args:
-            topic: Name of the topic.
-            values: List of message payloads.
-            keys: Optional list of keys.
-            partition: Optional specific partition.
-
-        Returns:
-            List of offsets for the produced messages.
-        """
-        ...
-
 
 # =============================================================================
 # Consumer Protocol

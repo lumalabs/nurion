@@ -20,7 +20,7 @@ This module contains unit tests for the queue implementations:
 
 Test categories:
 1. Basic operations: produce, fetch, offset tracking
-2. Batch operations: produce_batch, fetch batches
+2. Batch operations: fetch batches
 3. Exactly-once semantics: offset commit/recovery
 4. Edge cases: empty queues, concurrent access
 """
@@ -198,59 +198,6 @@ class TestMemoryClient:
 
         await memory_client.produce(topic, b"msg2")
         assert await memory_client.get_latest_offset(topic) == 2
-
-
-class TestMemoryClientBatch:
-    """Batch operations for MemoryClient."""
-
-    @pytest.mark.asyncio
-    async def test_produce_batch(self, memory_client):
-        """Test batch produce."""
-        topic = "test-topic"
-
-        values = [f"msg-{i}".encode() for i in range(10)]
-        offsets = await memory_client.produce_batch(topic, values)
-
-        assert offsets == list(range(10))
-
-        # Verify all messages
-        records = await memory_client.fetch(topic, offset=0, max_records=100)
-        assert len(records) == 10
-
-    @pytest.mark.asyncio
-    async def test_produce_batch_with_keys(self, memory_client):
-        """Test batch produce with keys."""
-        topic = "test-topic"
-
-        values = [b"v1", b"v2", b"v3"]
-        keys = [b"k1", b"k2", b"k3"]
-
-        offsets = await memory_client.produce_batch(topic, values, keys=keys)
-        assert len(offsets) == 3
-
-        records = await memory_client.fetch(topic, offset=0)
-        assert records[0].key == b"k1"
-        assert records[1].key == b"k2"
-        assert records[2].key == b"k3"
-
-    @pytest.mark.asyncio
-    async def test_produce_batch_mismatched_keys(self, memory_client):
-        """Test batch produce with mismatched keys raises error."""
-        topic = "test-topic"
-
-        values = [b"v1", b"v2"]
-        keys = [b"k1"]  # Wrong length
-
-        with pytest.raises(ValueError):
-            await memory_client.produce_batch(topic, values, keys=keys)
-
-    @pytest.mark.asyncio
-    async def test_produce_batch_empty(self, memory_client):
-        """Test batch produce with empty list."""
-        topic = "test-topic"
-
-        offsets = await memory_client.produce_batch(topic, [])
-        assert offsets == []
 
 
 class TestMemoryClientOffsetTracking:
@@ -609,19 +556,6 @@ class TestTansuQueueClient:
         assert len(records) == 1
         assert records[0].value == b"hello tansu"
         assert records[0].offset == 0
-
-    @pytest.mark.asyncio
-    async def test_produce_batch(self, tansu_broker_and_client):
-        """Test batch produce."""
-        broker, client = tansu_broker_and_client
-        topic = "batch-topic"
-        await client.create_topic(topic)
-
-        offsets = await client.produce_batch(topic, [b"msg1", b"msg2", b"msg3"])
-        assert offsets == [0, 1, 2]
-
-        records = await client.fetch(topic, offset=0, timeout_ms=3000)
-        assert len(records) == 3
 
     @pytest.mark.asyncio
     async def test_get_latest_offset(self, tansu_broker_and_client):

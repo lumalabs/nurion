@@ -152,10 +152,12 @@ class TestQueueCreationWithPartitions:
         It verifies that:
         1. Partition count is calculated correctly
         2. Tansu queue is created with the correct number of partitions
-        3. The queue backend is actually a TansuBackend instance
+        3. The queue client is actually a TansuQueueClient instance
 
         If Tansu is not available or misconfigured, the test will FAIL (not skip).
         """
+        from solstice.queue import TansuQueueClient
+
         config = StageConfig(
             queue_type=QueueType.TANSU,
             max_workers=4,
@@ -184,7 +186,7 @@ class TestQueueCreationWithPartitions:
             # Verify queue was created with correct partition count
             assert master._output_queue is not None
             assert master._compute_partition_count() == 4
-            assert isinstance(master._output_queue, TansuBackend)
+            assert isinstance(master._output_queue, TansuQueueClient)
         finally:
             await master.stop()
 

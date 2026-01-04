@@ -112,7 +112,7 @@ class LanceSourceMaster(SourceMaster):
     """Source master for Lance tables.
 
     Generates splits based on Lance dataset fragments and writes
-    split metadata to a persistent TansuBackend queue.
+    split metadata to a persistent Tansu queue.
 
     Workers consume from the queue and use LanceTableSource operator
     to read actual data for each split.

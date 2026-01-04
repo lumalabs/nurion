@@ -364,15 +364,17 @@ class TestExactlyOnce:
     @pytest.mark.asyncio
     async def test_offset_tracking(self, ray_cluster):
         """Test that offsets are tracked correctly."""
-        from solstice.queue import MemoryBackend
+        from solstice.queue import MemoryBroker, MemoryClient
 
         # Create a shared queue
-        backend = MemoryBackend()
-        await backend.start()
+        broker = MemoryBroker()
+        await broker.start()
+        client = MemoryClient(broker)
+        await client.start()
 
         topic = "test_topic"
         group = "test_group"
-        await backend.create_topic(topic)
+        await client.create_topic(topic)
 
         # Produce messages
         from solstice.core.stage_master import QueueMessage
@@ -383,23 +385,24 @@ class TestExactlyOnce:
                 split_id=f"split_{i}",
                 payload_key=f"ref_{i}",
             )
-            await backend.produce(topic, msg.to_bytes())
+            await client.produce(topic, msg.to_bytes())
 
         # Consume and commit
-        records = await backend.fetch(topic, offset=0, max_records=5)
+        records = await client.fetch(topic, offset=0, max_records=5)
         assert len(records) == 5
 
-        await backend.commit_offset(group, topic, 5)
+        await client.commit_offset(group, topic, 5)
 
         # Verify committed offset
-        committed = await backend.get_committed_offset(group, topic)
+        committed = await client.get_committed_offset(group, topic)
         assert committed == 5
 
         # Resume from committed
-        remaining = await backend.fetch(topic, offset=committed)
+        remaining = await client.fetch(topic, offset=committed)
         assert len(remaining) == 5
 
-        await backend.stop()
+        await client.stop()
+        await broker.stop()
 
 
 # ============================================================================

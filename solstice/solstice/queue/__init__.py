@@ -40,7 +40,7 @@ Example:
 
 from enum import Enum
 
-from solstice.queue.backend import QueueBackend, Record
+from solstice.queue.backend import Record
 from solstice.queue.protocols import (
     QueueProducer,
     QueueConsumer,
@@ -62,8 +62,6 @@ class QueueType(str, Enum):
 __all__ = [
     # Types
     "QueueType",
-    # Legacy interface (for compatibility)
-    "QueueBackend",
     "Record",
     # Protocols
     "QueueProducer",

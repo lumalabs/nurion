@@ -348,30 +348,6 @@ class TansuQueueClient:
         )
         return result.offset
 
-    async def produce_batch(
-        self,
-        topic: str,
-        values: List[bytes],
-        keys: Optional[List[Optional[bytes]]] = None,
-        partition: Optional[int] = None,
-    ) -> List[int]:
-        """Produce multiple messages to a topic."""
-        if not self._producer:
-            raise RuntimeError("Client not started")
-
-        if keys and len(keys) != len(values):
-            raise ValueError("keys and values must have the same length")
-
-        offsets = []
-        for i, value in enumerate(values):
-            key = keys[i] if keys else None
-            result = await self._producer.send_and_wait(
-                topic, value=value, key=key, partition=partition
-            )
-            offsets.append(result.offset)
-
-        return offsets
-
     # -------------------------------------------------------------------------
     # QueueConsumer Implementation
     # -------------------------------------------------------------------------
@@ -386,10 +362,8 @@ class TansuQueueClient:
     ) -> List[Record]:
         """Fetch records from a topic."""
         consumer = await self._get_consumer(topic, partition=partition)
-
         tp = TopicPartition(topic, partition)
         consumer.seek(tp, offset)
-
         records = []
         try:
             fetch_timeout = (timeout_ms / 1000) + 5.0
@@ -465,7 +439,7 @@ class TansuQueueClient:
             return None
         except Exception as e:
             self.logger.warning(f"Failed to get committed offset: {e}")
-            return None
+        return None
 
     async def get_latest_offset(
         self,

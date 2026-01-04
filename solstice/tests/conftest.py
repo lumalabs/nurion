@@ -31,7 +31,7 @@ import pytest_asyncio
 import ray
 
 from solstice.core.split_payload_store import RaySplitPayloadStore
-from solstice.queue import TansuBrokerManager, TansuQueueClient
+from solstice.queue import TansuBrokerManager, TansuQueueClient, MemoryBroker, MemoryClient
 
 if TYPE_CHECKING:
     pass
@@ -77,21 +77,62 @@ def _find_free_port() -> int:
         return s.getsockname()[1]
 
 
+class TansuTestBackend:
+    """Wrapper combining TansuBrokerManager + TansuQueueClient for tests."""
+
+    def __init__(self, broker: TansuBrokerManager, client: TansuQueueClient):
+        self.broker = broker
+        self.client = client
+        # Delegate common methods to client for backward compatibility
+        self.create_topic = client.create_topic
+        self.delete_topic = client.delete_topic
+        self.produce = client.produce
+        self.fetch = client.fetch
+        self.commit_offset = client.commit_offset
+        self.get_committed_offset = client.get_committed_offset
+        self.get_latest_offset = client.get_latest_offset
+
+    @property
+    def host(self) -> str:
+        broker_url = self.broker.get_broker_url()
+        return broker_url.split(":")[0]
+
+    @property
+    def port(self) -> int:
+        broker_url = self.broker.get_broker_url()
+        return int(broker_url.split(":")[1])
+
+
 @pytest_asyncio.fixture
 async def tansu_backend():
-    """Start a Tansu broker and client (for backward compatibility)."""
+    """Start a Tansu broker and client wrapped for easy testing."""
     import asyncio
     port = _find_free_port()
     broker = TansuBrokerManager(storage_url="memory://tansu/", port=port)
     await broker.start()
     client = TansuQueueClient(broker.get_broker_url())
     await client.start()
+    backend = TansuTestBackend(broker, client)
     try:
-        yield broker, client
+        yield backend
     finally:
         await client.stop()
         await broker.stop()
         await asyncio.sleep(0.5)
+
+
+@pytest_asyncio.fixture
+async def memory_client():
+    """Start a MemoryBroker and MemoryClient, yield the client."""
+    broker = MemoryBroker()
+    await broker.start()
+    client = MemoryClient(broker)
+    await client.start()
+    try:
+        yield client
+    finally:
+        await client.stop()
+        await broker.stop()
 
 
 @pytest.fixture(scope="session", autouse=True)
