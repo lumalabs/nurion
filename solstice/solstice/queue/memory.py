@@ -261,6 +261,8 @@ class MemoryClient:
             self._broker_url = broker.get_broker_url()
 
         self._running = False
+        # Track consumer positions per (topic, partition) for auto-position fetch
+        self._consumer_positions: dict[tuple[str, int], int] = {}
 
     async def start(self) -> None:
         """Start the client."""
@@ -318,15 +320,28 @@ class MemoryClient:
     async def fetch(
         self,
         topic: str,
-        offset: int = 0,
+        offset: Optional[int] = None,
         max_records: int = 100,
         timeout_ms: int = 1000,
         partition: int = 0,
     ) -> List[Record]:
-        """Fetch records from the topic starting at the given offset."""
+        """Fetch records from the topic.
+
+        Args:
+            topic: Topic name.
+            offset: Starting offset. If None, uses tracked position for this client.
+            max_records: Maximum records to fetch.
+            timeout_ms: Fetch timeout (not used in memory implementation).
+            partition: Partition to read from.
+        """
         topic_data = self._broker._get_topic(topic)
         if topic_data is None:
             return []
+
+        # Use tracked position if offset not specified
+        position_key = (topic, partition)
+        if offset is None:
+            offset = self._consumer_positions.get(position_key, 0)
 
         result = []
         with topic_data.lock:
@@ -343,6 +358,10 @@ class MemoryClient:
                         timestamp=timestamp,
                     )
                 )
+
+        # Update position for next fetch
+        if result:
+            self._consumer_positions[position_key] = result[-1].offset + 1
 
         return result
 

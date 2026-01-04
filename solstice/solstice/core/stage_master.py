@@ -1034,7 +1034,7 @@ class StageWorker:
             # The queue backend will automatically assign partitions based on consumer group
             records = await self.upstream_queue.fetch(
                 self.upstream_topic,
-                offset=0,  # Offset is managed by consumer group
+                # offset=None to use consumer's current position (auto-managed)
                 max_records=self.config.batch_size,
                 timeout_ms=1000,  # Shorter timeout for faster completion detection
             )

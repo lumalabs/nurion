@@ -14,6 +14,7 @@
 
 """Pytest configuration and fixtures for Solstice tests."""
 
+import asyncio
 import os
 import socket
 import sys
@@ -106,7 +107,6 @@ class TansuTestBackend:
 @pytest_asyncio.fixture
 async def tansu_backend():
     """Start a Tansu broker and client wrapped for easy testing."""
-    import asyncio
     port = _find_free_port()
     broker = TansuBrokerManager(storage_url="memory://tansu/", port=port, startup_timeout=5.0)
     await broker.start()

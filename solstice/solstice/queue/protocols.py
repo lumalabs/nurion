@@ -71,7 +71,7 @@ class QueueConsumer(Protocol):
     async def fetch(
         self,
         topic: str,
-        offset: int = 0,
+        offset: Optional[int] = None,
         max_records: int = 100,
         timeout_ms: int = 5000,
         partition: int = 0,
@@ -80,7 +80,7 @@ class QueueConsumer(Protocol):
 
         Args:
             topic: Name of the topic.
-            offset: Starting offset (inclusive).
+            offset: Starting offset (inclusive). If None, use current consumer position.
             max_records: Maximum number of records to fetch.
             timeout_ms: Timeout in milliseconds.
             partition: Partition to read from.

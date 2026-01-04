@@ -23,13 +23,15 @@ Tests cover:
 All tests use real implementations (no mocks) to catch real issues.
 """
 
-import pytest
 from dataclasses import dataclass
+
+import pytest
 
 from solstice.core.stage_master import StageMaster, StageConfig
 from solstice.core.stage import Stage
 from solstice.core.operator import OperatorConfig, Operator
 from solstice.queue import QueueType
+from tests.utils import wait_until
 
 
 @dataclass
@@ -259,14 +261,24 @@ class TestPartitionRebalance:
         while len(master._workers) < 4:
             await master._spawn_worker()
 
-        assert len(master._workers) == 4
+        # Wait for all 4 workers to be ready
+        await wait_until(
+            lambda: len(master._workers) == 4,
+            timeout=5.0,
+            message="Workers not spawned",
+        )
 
         # Remove workers
         removed = await master.scale_down(2)
-        assert removed == 2
-        assert len(master._workers) == 2
 
-        # Remaining workers will rebalance via consumer group protocol
+        # Wait for workers to be removed
+        await wait_until(
+            lambda: len(master._workers) == 2,
+            timeout=5.0,
+            message="Workers not removed",
+        )
+
+        assert removed == 2
 
         await master.stop()
 

@@ -355,15 +355,26 @@ class TansuQueueClient:
     async def fetch(
         self,
         topic: str,
-        offset: int = 0,
+        offset: Optional[int] = None,
         max_records: int = 100,
         timeout_ms: int = 5000,
         partition: int = 0,
     ) -> List[Record]:
-        """Fetch records from a topic."""
+        """Fetch records from a topic.
+
+        Args:
+            topic: Topic name
+            offset: If specified, seek to this offset before fetching.
+                    If None, continue from current consumer position.
+            max_records: Maximum records to fetch
+            timeout_ms: Fetch timeout in milliseconds
+            partition: Partition to fetch from
+        """
         consumer = await self._get_consumer(topic, partition=partition)
         tp = TopicPartition(topic, partition)
-        consumer.seek(tp, offset)
+        # Only seek if offset is explicitly specified
+        if offset is not None:
+            consumer.seek(tp, offset)
         records = []
         try:
             fetch_timeout = (timeout_ms / 1000) + 2.0  # Reduced buffer from 5s to 2s
@@ -439,7 +450,7 @@ class TansuQueueClient:
             return None
         except Exception as e:
             self.logger.warning(f"Failed to get committed offset: {e}")
-        return None
+            return None
 
     async def get_latest_offset(
         self,
@@ -481,9 +492,7 @@ class TansuQueueClient:
 
             # Get end offsets for all partitions
             tps = [TopicPartition(topic, p) for p in partitions]
-            end_offsets = await asyncio.wait_for(
-                consumer.end_offsets(tps), timeout=10.0
-            )
+            end_offsets = await asyncio.wait_for(consumer.end_offsets(tps), timeout=10.0)
 
             for tp, offset in end_offsets.items():
                 result[tp.partition] = offset
