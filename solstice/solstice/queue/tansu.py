@@ -366,7 +366,7 @@ class TansuQueueClient:
         consumer.seek(tp, offset)
         records = []
         try:
-            fetch_timeout = (timeout_ms / 1000) + 5.0
+            fetch_timeout = (timeout_ms / 1000) + 2.0  # Reduced buffer from 5s to 2s
             batch = await asyncio.wait_for(
                 consumer.getmany(timeout_ms=timeout_ms, max_records=max_records),
                 timeout=fetch_timeout,
@@ -460,6 +460,42 @@ class TansuQueueClient:
         except Exception as e:
             self.logger.warning(f"Failed to get latest offset: {e}")
             return 0
+
+    async def get_all_partition_offsets(self, topic: str) -> Dict[int, int]:
+        """Get latest offsets for all partitions of a topic.
+
+        Returns:
+            Dict mapping partition id to latest offset.
+        """
+        result: Dict[int, int] = {}
+
+        try:
+            # Get a consumer to query partition info
+            consumer = await self._get_consumer(topic, partition=0)
+
+            # Get partitions for the topic
+            partitions = consumer.partitions_for_topic(topic)
+            if not partitions:
+                # Topic might not exist or no partitions yet
+                return {0: 0}
+
+            # Get end offsets for all partitions
+            tps = [TopicPartition(topic, p) for p in partitions]
+            end_offsets = await asyncio.wait_for(
+                consumer.end_offsets(tps), timeout=10.0
+            )
+
+            for tp, offset in end_offsets.items():
+                result[tp.partition] = offset
+
+        except asyncio.TimeoutError:
+            self.logger.warning("Timeout getting partition offsets")
+            return {0: 0}
+        except Exception as e:
+            self.logger.warning(f"Failed to get partition offsets: {e}")
+            return {0: 0}
+
+        return result if result else {0: 0}
 
     # -------------------------------------------------------------------------
     # Internal Methods

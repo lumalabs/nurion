@@ -322,7 +322,7 @@ class TestPipelineExecution:
         await source_master.start()
 
         # Give it time to produce some messages
-        await asyncio.sleep(2)
+        await asyncio.sleep(0.5)
 
         # Check output queue
         queue = source_master.get_output_queue()
@@ -435,7 +435,7 @@ class TestIntegration:
         await source_master.start()
 
         # Wait for workers to produce
-        await asyncio.sleep(3)
+        await asyncio.sleep(1)
 
         # Check that messages were produced
         queue = source_master.get_output_queue()

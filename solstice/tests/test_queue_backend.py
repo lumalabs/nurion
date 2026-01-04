@@ -489,8 +489,8 @@ async def tansu_broker_and_client():
         s.bind(("", 0))
         port = s.getsockname()[1]
 
-    # Start broker
-    broker = TansuBrokerManager(storage_url="memory://tansu/", port=port)
+    # Start broker with shorter timeout for tests
+    broker = TansuBrokerManager(storage_url="memory://tansu/", port=port, startup_timeout=5.0)
     await broker.start()
 
     # Create and start client
@@ -502,9 +502,10 @@ async def tansu_broker_and_client():
     # Cleanup
     await client.stop()
     await broker.stop()
-    await asyncio.sleep(1)
+    await asyncio.sleep(0.1)  # Reduced from 1s
 
 
+@pytest.mark.slow
 class TestTansuBrokerManager:
     """Tests for TansuBrokerManager (QueueBroker implementation)."""
 
@@ -524,6 +525,7 @@ class TestTansuBrokerManager:
         assert 1024 < port < 65535
 
 
+@pytest.mark.slow
 class TestTansuQueueClient:
     """Tests for TansuQueueClient (QueueClient implementation)."""
 
@@ -552,7 +554,7 @@ class TestTansuQueueClient:
         assert offset == 0
 
         # Fetch
-        records = await client.fetch(topic, offset=0, timeout_ms=3000)
+        records = await client.fetch(topic, offset=0, timeout_ms=1000)
         assert len(records) == 1
         assert records[0].value == b"hello tansu"
         assert records[0].offset == 0
@@ -594,6 +596,7 @@ class TestTansuQueueClient:
         assert committed == 1
 
 
+@pytest.mark.slow
 class TestTansuMultiClient:
     """Tests for multiple clients connecting to same broker."""
 
@@ -619,8 +622,8 @@ class TestTansuMultiClient:
             assert offset == 1
 
             # Both clients can fetch all messages
-            records1 = await client1.fetch(topic, offset=0, timeout_ms=3000)
-            records2 = await client2.fetch(topic, offset=0, timeout_ms=3000)
+            records1 = await client1.fetch(topic, offset=0, timeout_ms=1000)
+            records2 = await client2.fetch(topic, offset=0, timeout_ms=1000)
 
             assert len(records1) == 2
             assert len(records2) == 2

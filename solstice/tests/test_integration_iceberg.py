@@ -242,7 +242,7 @@ class TestIcebergPipeline:
         # Wait briefly for processing
         import asyncio
 
-        await asyncio.sleep(2)
+        await asyncio.sleep(0.5)
 
         # Cleanup
         await master.stop()

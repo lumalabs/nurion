@@ -108,7 +108,7 @@ async def tansu_backend():
     """Start a Tansu broker and client wrapped for easy testing."""
     import asyncio
     port = _find_free_port()
-    broker = TansuBrokerManager(storage_url="memory://tansu/", port=port)
+    broker = TansuBrokerManager(storage_url="memory://tansu/", port=port, startup_timeout=5.0)
     await broker.start()
     client = TansuQueueClient(broker.get_broker_url())
     await client.start()
@@ -118,7 +118,7 @@ async def tansu_backend():
     finally:
         await client.stop()
         await broker.stop()
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(0.1)  # Reduced from 0.5s
 
 
 @pytest_asyncio.fixture
@@ -412,9 +412,11 @@ def s3_storage_options(minio_endpoint: str, minio_credentials: dict) -> dict:
 # ============================================================================
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="session")
 def ray_cluster():
     """Initialize Ray cluster with unified configuration.
+
+    Session-scoped to avoid Ray restart overhead per module (~3-5s each).
 
     - num_cpus=4
     - Includes raydp JARs if available
@@ -423,7 +425,9 @@ def ray_cluster():
     from ray.job_config import JobConfig
 
     if ray.is_initialized():
-        ray.shutdown()
+        # Reuse existing cluster in session
+        yield
+        return
 
     # Try to get raydp jars if available
     jars_paths = []
