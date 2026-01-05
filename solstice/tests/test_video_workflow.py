@@ -14,13 +14,13 @@
 
 """Ray-based end-to-end test for the video slice workflow.
 
+Uses public HTTPS URLs for video files (no authentication required).
+
 Local Debug Mode:
-    Set VIDEO_CACHE_DIR environment variable to enable local caching:
+    Set VIDEO_CACHE_DIR environment variable to preserve output:
 
         export VIDEO_CACHE_DIR=~/.cache/solstice_test_videos
         pytest tests/test_video_workflow.py -v -m integration
-
-    Videos will be downloaded once and reused in subsequent runs.
 """
 
 from __future__ import annotations
@@ -35,13 +35,12 @@ from pathlib import Path
 import lance
 import pyarrow as pa
 import pytest
+import requests
 
 logger = logging.getLogger("test")
 
-# S3/R2 bucket for videos
-S3_VIDEO_PATH = "s3://owen-public/videos/raw"
-# Public HTTPS endpoint (no auth required, for CI environments)
-PUBLIC_HTTPS_PATH = "https://pub-8bc1f1d3d1984bdfb056d0bc0bf97c3d.r2.dev/videos/raw"
+# Public HTTPS endpoint (no auth required)
+PUBLIC_VIDEO_URL = "https://pub-8bc1f1d3d1984bdfb056d0bc0bf97c3d.r2.dev/videos/raw"
 
 # Video files available at the public endpoint
 TEST_VIDEOS = [
@@ -61,75 +60,36 @@ TEST_VIDEOS = [
 LOCAL_CACHE_DIR = os.environ.get("VIDEO_CACHE_DIR")
 
 
-def _has_s3_credentials() -> bool:
-    """Check if S3 credentials are available."""
-    # Check environment variables
-    if os.environ.get("AWS_ACCESS_KEY_ID") and os.environ.get("AWS_SECRET_ACCESS_KEY"):
-        return True
-    # Check for credentials file (with safe exists check for sandboxed environments)
-    creds_path = Path.home() / ".aws" / "credentials"
-    try:
-        if creds_path.exists():
-            return True
-    except PermissionError:
-        pass
-    return False
-
-
-def get_video_path(video_filename: str) -> str:
-    """Get video path - local cached file if available, otherwise remote URL.
-
-    Priority:
-    1. If VIDEO_CACHE_DIR is set and file exists in cache, returns local file path
-    2. If S3 credentials available, returns S3 URL
-    3. Otherwise, returns public HTTPS URL (no auth required, for CI)
-    """
-    if LOCAL_CACHE_DIR:
-        # Local cache mode - check if file exists
-        cache_dir = Path(LOCAL_CACHE_DIR).expanduser()
-        local_path = cache_dir / video_filename
-
-        if local_path.exists():
-            logger.debug(f"Using cached: {local_path}")
-            return str(local_path)
-
-    # Use S3 URL if credentials available, otherwise public HTTPS
-    if _has_s3_credentials():
-        url = f"{S3_VIDEO_PATH}/{video_filename}"
-        logger.debug(f"Using S3 URL: {url}")
-    else:
-        url = f"{PUBLIC_HTTPS_PATH}/{video_filename}"
-        logger.debug(f"Using public HTTPS URL (no S3 credentials): {url}")
-
-    return url
-
-
 def create_test_lance_table(table_path: str) -> None:
-    """Create a local Lance table with video paths for testing.
-
-    Uses local cached files if VIDEO_CACHE_DIR is set, otherwise uses remote URLs.
-    In CI environments without S3 credentials, uses public HTTPS URLs.
-    """
+    """Create a local Lance table with public video URLs for testing."""
     records = []
     for i, video in enumerate(TEST_VIDEOS):
-        video_path = get_video_path(video)
+        video_url = f"{PUBLIC_VIDEO_URL}/{video}"
         slug = video.rsplit(".", 1)[0]
 
         records.append(
             {
                 "global_index": i,
                 "video_uid": slug,
-                "source_url": video_path,  # Same as video_path (S3 or HTTPS based on credentials)
-                "video_path": video_path,
+                "source_url": video_url,
+                "video_path": video_url,
                 "subset": "train" if i < 8 else "validation",
             }
         )
 
     table = pa.Table.from_pylist(records)
     lance.write_dataset(table, table_path, mode="overwrite")
+    logger.info(f"Created test Lance table at {table_path} with {len(records)} videos")
 
-    mode = "local cache" if LOCAL_CACHE_DIR else "S3 URLs"
-    logger.info(f"Created test Lance table at {table_path} with {len(records)} videos ({mode})")
+
+def _check_video_access() -> bool:
+    """Check if we can access the public video endpoint."""
+    try:
+        test_url = f"{PUBLIC_VIDEO_URL}/{TEST_VIDEOS[0]}"
+        r = requests.head(test_url, timeout=10)
+        return r.status_code == 200
+    except Exception:
+        return False
 
 
 @pytest.mark.integration
@@ -144,6 +104,10 @@ def test_video_slice_workflow_with_ray(ray_cluster):
 
     In local debug mode (VIDEO_CACHE_DIR set), output is preserved in the cache directory.
     """
+    # Skip if public endpoint not accessible
+    if not _check_video_access():
+        pytest.skip("Public video endpoint not accessible.")
+
     # In local debug mode, use cache directory for output (preserved after test)
     # Otherwise use temp directory (cleaned up after test)
     if LOCAL_CACHE_DIR:
