@@ -401,6 +401,12 @@ class StageMaster:
             # is_min_worker=True means failure will raise RuntimeError
             await self._spawn_worker_with_resource_check(is_min_worker=True)
 
+        # Rebalance partitions after all workers are spawned
+        # This ensures all workers have consistent, non-overlapping assignments
+        if self._workers:
+            self._rebalance_partitions()
+            await self._notify_workers_partition_update()
+
         self.logger.info(f"Stage {self.stage_id} started with {len(self._workers)} workers")
 
     def _rebalance_partitions(self) -> None:
@@ -424,17 +430,27 @@ class StageMaster:
             return
 
         # Round-robin assignment
+        # When partition_count < num_workers, some workers will have empty assignments
+        # and remain idle. This is intentional to avoid duplicate message processing.
         for i, worker_id in enumerate(worker_ids):
             partitions = [p for p in range(partition_count) if p % num_workers == i]
-            if not partitions:
-                partitions = [i % partition_count]
             self._partition_assignments[worker_id] = partitions
 
+        idle_workers = [wid for wid, parts in self._partition_assignments.items() if not parts]
+        if idle_workers:
+            self.logger.warning(
+                f"Partition rebalance: {len(idle_workers)} workers have no partitions "
+                f"(partition_count={partition_count} < num_workers={num_workers}). "
+                f"Consider increasing partition_count or reducing workers."
+            )
         self.logger.debug(f"Partition rebalance: {self._partition_assignments}")
 
     def get_partition_assignment(self, worker_id: str) -> List[int]:
-        """Get the current partition assignment for a worker."""
-        return self._partition_assignments.get(worker_id, [0])
+        """Get the current partition assignment for a worker.
+
+        Returns empty list if worker has no assigned partitions (idle worker).
+        """
+        return self._partition_assignments.get(worker_id, [])
 
     async def _spawn_worker(self) -> str:
         """Spawn a new worker without resource checking.
@@ -450,11 +466,10 @@ class StageMaster:
 
         # Compute initial partition assignment for this new worker
         # This will be updated by rebalance after worker is added
+        # When partition_count < num_workers, some workers will have empty assignments
         num_workers = len(self._workers) + 1
         partition_count = self._partition_count
         assigned_partitions = [p for p in range(partition_count) if p % num_workers == worker_index]
-        if not assigned_partitions:
-            assigned_partitions = [worker_index % partition_count]
 
         # Create worker actor
         resources = {}

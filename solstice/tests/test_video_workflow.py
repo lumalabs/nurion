@@ -40,6 +40,8 @@ logger = logging.getLogger("test")
 
 # S3/R2 bucket for videos
 S3_VIDEO_PATH = "s3://owen-public/videos/raw"
+# Public HTTPS endpoint (no auth required, for CI environments)
+PUBLIC_HTTPS_PATH = "https://pub-8bc1f1d3d1984bdfb056d0bc0bf97c3d.r2.dev/videos/raw"
 
 # Video files available at the public endpoint
 TEST_VIDEOS = [
@@ -59,47 +61,65 @@ TEST_VIDEOS = [
 LOCAL_CACHE_DIR = os.environ.get("VIDEO_CACHE_DIR")
 
 
+def _has_s3_credentials() -> bool:
+    """Check if S3 credentials are available."""
+    # Check environment variables
+    if os.environ.get("AWS_ACCESS_KEY_ID") and os.environ.get("AWS_SECRET_ACCESS_KEY"):
+        return True
+    # Check for credentials file (with safe exists check for sandboxed environments)
+    creds_path = Path.home() / ".aws" / "credentials"
+    try:
+        if creds_path.exists():
+            return True
+    except PermissionError:
+        pass
+    return False
+
+
 def get_video_path(video_filename: str) -> str:
-    """Get video path - local cached file if available, otherwise S3 URL.
+    """Get video path - local cached file if available, otherwise remote URL.
 
-    If VIDEO_CACHE_DIR is set and file exists in cache, returns the local file path.
-    Otherwise returns the S3 URL (requires S3 credentials for access).
+    Priority:
+    1. If VIDEO_CACHE_DIR is set and file exists in cache, returns local file path
+    2. If S3 credentials available, returns S3 URL
+    3. Otherwise, returns public HTTPS URL (no auth required, for CI)
     """
-    s3_url = f"{S3_VIDEO_PATH}/{video_filename}"
+    if LOCAL_CACHE_DIR:
+        # Local cache mode - check if file exists
+        cache_dir = Path(LOCAL_CACHE_DIR).expanduser()
+        local_path = cache_dir / video_filename
 
-    if not LOCAL_CACHE_DIR:
-        # Remote mode: return S3 URL
-        return s3_url
+        if local_path.exists():
+            logger.debug(f"Using cached: {local_path}")
+            return str(local_path)
 
-    # Local cache mode - check if file exists
-    cache_dir = Path(LOCAL_CACHE_DIR).expanduser()
-    local_path = cache_dir / video_filename
+    # Use S3 URL if credentials available, otherwise public HTTPS
+    if _has_s3_credentials():
+        url = f"{S3_VIDEO_PATH}/{video_filename}"
+        logger.debug(f"Using S3 URL: {url}")
+    else:
+        url = f"{PUBLIC_HTTPS_PATH}/{video_filename}"
+        logger.debug(f"Using public HTTPS URL (no S3 credentials): {url}")
 
-    if local_path.exists():
-        logger.debug(f"Using cached: {local_path}")
-        return str(local_path)
-
-    # File not cached, return S3 URL
-    logger.info(f"Video not cached: {video_filename}, using S3 URL")
-    return s3_url
+    return url
 
 
 def create_test_lance_table(table_path: str) -> None:
     """Create a local Lance table with video paths for testing.
 
-    Uses local cached files if VIDEO_CACHE_DIR is set, otherwise uses S3 URLs.
+    Uses local cached files if VIDEO_CACHE_DIR is set, otherwise uses remote URLs.
+    In CI environments without S3 credentials, uses public HTTPS URLs.
     """
     records = []
     for i, video in enumerate(TEST_VIDEOS):
         video_path = get_video_path(video)
         slug = video.rsplit(".", 1)[0]
-        s3_url = f"{S3_VIDEO_PATH}/{video}"
 
         records.append(
             {
                 "global_index": i,
                 "video_uid": slug,
-                "source_url": s3_url,
+                "source_url": video_path,  # Same as video_path (S3 or HTTPS based on credentials)
                 "video_path": video_path,
                 "subset": "train" if i < 8 else "validation",
             }
