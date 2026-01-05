@@ -28,7 +28,7 @@ from typing import Dict, List, Optional
 
 import pyarrow as pa
 
-from solstice.core.job import Job
+from solstice.core.job import Job, JobConfig
 from solstice.core.stage import Stage
 from solstice.core.operator import Operator, OperatorConfig
 from solstice.core.models import Split, SplitPayload
@@ -219,7 +219,10 @@ TestSinkConfig.operator_class = TestSinkOperator
 @pytest.fixture
 def simple_job():
     """Create a simple single-stage job."""
-    job = Job(job_id="test_simple")
+    job = Job(
+        job_id="test_simple",
+        config=JobConfig(queue_type=QueueType.TANSU),
+    )
 
     source_stage = Stage(
         stage_id="source",
@@ -234,7 +237,10 @@ def simple_job():
 @pytest.fixture
 def two_stage_job():
     """Create a two-stage job (source -> transform)."""
-    job = Job(job_id="test_two_stage")
+    job = Job(
+        job_id="test_two_stage",
+        config=JobConfig(queue_type=QueueType.TANSU),
+    )
 
     source_stage = Stage(
         stage_id="source",
@@ -265,7 +271,7 @@ class TestRayJobRunner:
     @pytest.mark.asyncio
     async def test_initialization(self, simple_job, ray_cluster):
         """Test runner initialization."""
-        runner = RayJobRunner(simple_job, queue_type=QueueType.TANSU)
+        runner = RayJobRunner(simple_job)
 
         assert not runner.is_initialized
         assert not runner.is_running
@@ -278,7 +284,7 @@ class TestRayJobRunner:
     @pytest.mark.asyncio
     async def test_get_status(self, simple_job, ray_cluster):
         """Test getting pipeline status."""
-        runner = RayJobRunner(simple_job, queue_type=QueueType.TANSU)
+        runner = RayJobRunner(simple_job)
         await runner.initialize()
 
         status = runner.get_status()
@@ -292,7 +298,7 @@ class TestRayJobRunner:
     @pytest.mark.asyncio
     async def test_stop_before_run(self, simple_job, ray_cluster):
         """Test stopping before running."""
-        runner = RayJobRunner(simple_job, queue_type=QueueType.TANSU)
+        runner = RayJobRunner(simple_job)
         await runner.initialize()
         await runner.stop()  # Should not raise
 
@@ -305,7 +311,10 @@ class TestPipelineExecution:
     @pytest.mark.asyncio
     async def test_single_stage_messages(self, ray_cluster):
         """Test that single stage produces messages to queue."""
-        job = Job(job_id="test_single_stage_msg")
+        job = Job(
+            job_id="test_single_stage_msg",
+            config=JobConfig(queue_type=QueueType.TANSU),
+        )
 
         source_stage = Stage(
             stage_id="source",
@@ -314,7 +323,7 @@ class TestPipelineExecution:
         )
         job.add_stage(source_stage)
 
-        runner = RayJobRunner(job, queue_type=QueueType.TANSU)
+        runner = RayJobRunner(job)
         await runner.initialize()
 
         # Start the source
@@ -343,7 +352,7 @@ class TestQueueCommunication:
     @pytest.mark.asyncio
     async def test_upstream_downstream_connection(self, two_stage_job, ray_cluster):
         """Test that downstream stage connects to upstream queue."""
-        runner = RayJobRunner(two_stage_job, queue_type=QueueType.TANSU)
+        runner = RayJobRunner(two_stage_job)
         await runner.initialize()
 
         transform_master = runner._masters["transform"]
@@ -417,7 +426,10 @@ class TestIntegration:
     @pytest.mark.timeout(30)
     async def test_source_produces_to_queue(self, ray_cluster):
         """Test that source stage produces data to its output queue."""
-        job = Job(job_id="test_source_queue")
+        job = Job(
+            job_id="test_source_queue",
+            config=JobConfig(queue_type=QueueType.TANSU),
+        )
 
         source_stage = Stage(
             stage_id="source",
@@ -426,7 +438,7 @@ class TestIntegration:
         )
         job.add_stage(source_stage)
 
-        runner = RayJobRunner(job, queue_type=QueueType.TANSU)
+        runner = RayJobRunner(job)
         await runner.initialize()
 
         source_master = runner._masters["source"]
@@ -499,7 +511,10 @@ class TestMultiStagePipeline:
     @pytest.mark.asyncio
     async def test_two_stage_queue_topology(self, ray_cluster):
         """Test that two-stage pipeline has correct queue topology."""
-        job = Job(job_id="test_topology")
+        job = Job(
+            job_id="test_topology",
+            config=JobConfig(queue_type=QueueType.TANSU),
+        )
 
         source_stage = Stage(
             stage_id="source",
@@ -515,7 +530,7 @@ class TestMultiStagePipeline:
         )
         job.add_stage(transform_stage, upstream_stages=["source"])
 
-        runner = RayJobRunner(job, queue_type=QueueType.TANSU)
+        runner = RayJobRunner(job)
         await runner.initialize()
 
         # Verify topology
@@ -541,7 +556,10 @@ class TestMultiStagePipeline:
     @pytest.mark.asyncio
     async def test_parallel_workers_in_stage(self, ray_cluster):
         """Test that stage can have multiple parallel workers."""
-        job = Job(job_id="test_parallel")
+        job = Job(
+            job_id="test_parallel",
+            config=JobConfig(queue_type=QueueType.TANSU),
+        )
 
         source_stage = Stage(
             stage_id="source",
@@ -557,7 +575,7 @@ class TestMultiStagePipeline:
         )
         job.add_stage(transform_stage, upstream_stages=["source"])
 
-        runner = RayJobRunner(job, queue_type=QueueType.TANSU)
+        runner = RayJobRunner(job)
         await runner.initialize()
 
         transform_master = runner._masters["transform"]
@@ -575,7 +593,10 @@ class TestMultiStagePipeline:
     @pytest.mark.asyncio
     async def test_stage_completion_detection(self, ray_cluster):
         """Test that pipeline detects when all stages complete."""
-        job = Job(job_id="test_completion")
+        job = Job(
+            job_id="test_completion",
+            config=JobConfig(queue_type=QueueType.TANSU),
+        )
 
         # Small job that completes quickly
         source_stage = Stage(
@@ -585,7 +606,7 @@ class TestMultiStagePipeline:
         )
         job.add_stage(source_stage)
 
-        runner = RayJobRunner(job, queue_type=QueueType.TANSU)
+        runner = RayJobRunner(job)
 
         try:
             # Run should complete (or timeout)

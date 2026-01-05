@@ -61,6 +61,14 @@ def _load_s3_config_from_env() -> Optional[Dict[str, Any]]:
     return None
 
 
+def _safe_path_exists(path: Path) -> bool:
+    """Check if path exists, handling PermissionError in sandboxed environments."""
+    try:
+        return path.exists()
+    except PermissionError:
+        return False
+
+
 def _load_s3_config_from_aws(profile: str = "default") -> Optional[Dict[str, Any]]:
     """Load S3 configuration from AWS config files (~/.aws/credentials, ~/.aws/config)."""
     aws_creds_paths = [
@@ -76,7 +84,7 @@ def _load_s3_config_from_aws(profile: str = "default") -> Optional[Dict[str, Any
 
     # Load credentials
     for creds_path in aws_creds_paths:
-        if creds_path.exists():
+        if _safe_path_exists(creds_path):
             config = configparser.ConfigParser()
             config.read(creds_path)
             if profile in config:
@@ -89,7 +97,7 @@ def _load_s3_config_from_aws(profile: str = "default") -> Optional[Dict[str, Any
 
     # Load config (region, endpoint)
     for config_path in aws_config_paths:
-        if config_path.exists():
+        if _safe_path_exists(config_path):
             config = configparser.ConfigParser()
             config.read(config_path)
             # AWS config uses "profile xxx" sections for non-default profiles
@@ -124,7 +132,7 @@ def _load_s3_config_from_rclone(remote_name: str = "s3") -> Optional[Dict[str, A
     ]
 
     for rclone_config in rclone_paths:
-        if rclone_config.exists():
+        if _safe_path_exists(rclone_config):
             config = configparser.ConfigParser()
             config.read(rclone_config)
 
