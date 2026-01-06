@@ -33,154 +33,131 @@ TEMPLATES_DIR = WEBUI_DIR / "templates"
 STATIC_DIR = WEBUI_DIR / "static"
 
 
-@serve.deployment(
-    name="solstice-portal",
-    ray_actor_options={"num_cpus": 0.1, "num_gpus": 0},
-)
-class SolsticePortal:
-    """Global WebUI portal for all Solstice jobs.
+def create_portal_app(storage_path: str) -> FastAPI:
+    """Create the Portal FastAPI application.
 
-    This is a singleton Ray Serve deployment that provides:
-    1. Entry point listing all running and completed jobs
-    2. External links (Ray Dashboard, Grafana, etc.)
-    3. Routing to specific job WebUI instances
-
-    Routes:
-        GET /solstice/              - Portal home (all jobs)
-        GET /solstice/running       - Running jobs list
-        GET /solstice/completed     - Completed jobs list
-        GET /solstice/jobs/{job_id} - Route to specific job
+    This function creates and configures the FastAPI app with all routes.
+    It's called once when the Portal deployment is created.
     """
+    storage = SlateDBStorage(storage_path)
+    logger = create_ray_logger("SolsticePortal")
 
-    def __init__(self, storage_path: str):
-        """Initialize portal.
+    # Templates (required)
+    if not TEMPLATES_DIR.exists():
+        raise RuntimeError(f"Templates directory not found: {TEMPLATES_DIR}")
 
-        Args:
-            storage_path: SlateDB storage path for historical data
-        """
-        self.storage_path = storage_path
-        self.storage = SlateDBStorage(storage_path)
-        self.logger = create_ray_logger("SolsticePortal")
-        # Don't cache registry - get fresh reference each time to handle actor restarts
+    templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+    setup_template_filters(templates)
 
-        # Templates (required)
-        if not TEMPLATES_DIR.exists():
-            raise RuntimeError(f"Templates directory not found: {TEMPLATES_DIR}")
+    # Create app
+    app = FastAPI(title="Solstice Portal")
 
-        self.templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
-        setup_template_filters(self.templates)
+    # Mount static files (required)
+    if not STATIC_DIR.exists():
+        raise RuntimeError(f"Static directory not found: {STATIC_DIR}")
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
-        self.logger.info(f"Portal initialized with storage: {storage_path}")
+    # Store references in app state for route handlers
+    app.state.storage = storage
+    app.state.templates = templates
+    app.state.logger = logger
 
-    async def __call__(self, request: Request):
-        """Handle incoming requests (ASGI interface)."""
-        # FastAPI expects ASGI (scope, receive, send), not just Request
-        # Use the app directly as ASGI handler
-        scope = request.scope
-        receive = request.receive
-        send = request._send
+    # === Routes ===
 
-        await self.app(scope, receive, send)
-
-    @property
-    def app(self) -> FastAPI:
-        """Get or create FastAPI app."""
-        if not hasattr(self, "_app"):
-            self._app = self._create_app()
-        return self._app
-
-    def _create_app(self) -> FastAPI:
-        """Create FastAPI application."""
-        app = FastAPI(title="Solstice Portal")
-
-        # Mount static files (required)
-        if not STATIC_DIR.exists():
-            raise RuntimeError(f"Static directory not found: {STATIC_DIR}")
-        app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
-
-        # === Routes ===
-
-        @app.get("/", response_class=HTMLResponse)
-        async def portal_home(request: Request):
-            """Portal home page - list all jobs."""
-            # Get running jobs (get fresh registry reference each time)
-            running_jobs = []
+    @app.get("/", response_class=HTMLResponse)
+    async def portal_home(request: Request):
+        """Portal home page - list all jobs."""
+        running_jobs = []
+        try:
             registry = get_or_create_registry()
             jobs_dict = ray.get(registry.list_jobs.remote(), timeout=2)
             running_jobs = list(jobs_dict.values())
+        except Exception:
+            pass
 
-            # Get completed jobs (latest 20)
-            completed_jobs = self.storage.list_jobs(status="COMPLETED", limit=20)
+        completed_jobs = []
+        try:
+            completed_jobs = storage.list_jobs(status="COMPLETED", limit=20)
+        except Exception:
+            pass
 
-            # Render template
-            return self.templates.TemplateResponse(
-                "portal.html",
-                {
-                    "request": request,
-                    "running_jobs": running_jobs,
-                    "completed_jobs": completed_jobs,
-                    "ray_dashboard_url": get_ray_dashboard_url(),
-                },
-            )
+        return templates.TemplateResponse(
+            "portal.html",
+            {
+                "request": request,
+                "running_jobs": running_jobs,
+                "completed_jobs": completed_jobs,
+                "ray_dashboard_url": get_ray_dashboard_url(),
+            },
+        )
 
-        @app.get("/running", response_class=HTMLResponse)
-        async def running_jobs_page(request: Request):
-            """Running jobs list page."""
+    @app.get("/running", response_class=HTMLResponse)
+    async def running_jobs_page(request: Request):
+        """Running jobs list page."""
+        running_jobs = []
+        try:
             registry = get_or_create_registry()
             jobs_dict = ray.get(registry.list_jobs.remote(), timeout=2)
             running_jobs = list(jobs_dict.values())
+        except Exception:
+            pass
 
-            return self.templates.TemplateResponse(
-                "running_jobs.html",
-                {
-                    "request": request,
-                    "jobs": running_jobs,
-                },
-            )
+        return templates.TemplateResponse(
+            "running_jobs.html",
+            {
+                "request": request,
+                "jobs": running_jobs,
+            },
+        )
 
-        @app.get("/completed", response_class=HTMLResponse)
-        async def completed_jobs_page(request: Request):
-            """Completed jobs list page."""
-            completed_jobs = self.storage.list_jobs(limit=100)
+    @app.get("/completed", response_class=HTMLResponse)
+    async def completed_jobs_page(request: Request):
+        """Completed jobs list page."""
+        completed_jobs = []
+        try:
+            completed_jobs = storage.list_jobs(limit=100)
+        except Exception:
+            pass
 
-            return self.templates.TemplateResponse(
-                "completed_jobs.html",
-                {
-                    "request": request,
-                    "jobs": completed_jobs,
-                },
-            )
+        return templates.TemplateResponse(
+            "completed_jobs.html",
+            {
+                "request": request,
+                "jobs": completed_jobs,
+            },
+        )
 
-        @app.get("/jobs/{job_id}/", response_class=HTMLResponse)
-        async def job_detail_page(job_id: str, request: Request):
-            """Job detail page.
+    @app.get("/jobs/{job_id}/", response_class=HTMLResponse)
+    async def job_detail_page(job_id: str, request: Request):
+        """Job detail page."""
+        job_info = None
+        stages = []
 
-            For running jobs: query job data via RayJobRunner
-            For completed jobs: read from SlateDB storage
-            """
-            from fastapi import HTTPException
-
-            # Check if job is running
+        # Check if job is running
+        try:
             registry = get_or_create_registry()
             job_info = ray.get(registry.get_job.remote(job_id), timeout=1)
             if job_info:
-                # Running job - get stages from registration
                 stages = job_info.stages if hasattr(job_info, "stages") else []
-                return self.templates.TemplateResponse(
-                    "job_detail.html",
-                    {
-                        "request": request,
-                        "job": job_info,
-                        "stages": stages,
-                        "dag_edges": {},  # TODO: Get from runner
-                    },
-                )
+        except Exception:
+            pass
 
-            # Check historical data
-            job_data = self.storage.get_job_archive(job_id)
+        if job_info:
+            return templates.TemplateResponse(
+                "job_detail.html",
+                {
+                    "request": request,
+                    "job": job_info,
+                    "stages": stages,
+                    "dag_edges": {},
+                },
+            )
+
+        # Check historical data
+        try:
+            job_data = storage.get_job_archive(job_id)
             if job_data:
-                # Historical job - render template
-                return self.templates.TemplateResponse(
+                return templates.TemplateResponse(
                     "job_detail.html",
                     {
                         "request": request,
@@ -189,144 +166,211 @@ class SolsticePortal:
                         "dag_edges": job_data.get("dag_edges", {}),
                     },
                 )
+        except Exception:
+            pass
 
-            raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+        return templates.TemplateResponse(
+            "job_detail.html",
+            {
+                "request": request,
+                "job": {"job_id": job_id, "status": "NOT_FOUND"},
+                "stages": [],
+                "dag_edges": {},
+            },
+        )
 
-        @app.get("/jobs/{job_id}/stages/{stage_id}", response_class=HTMLResponse)
-        async def stage_detail_page(job_id: str, stage_id: str, request: Request):
-            """Stage detail page."""
-            stage_data = None
-            job_info = None
+    @app.get("/jobs/{job_id}/stages/{stage_id}", response_class=HTMLResponse)
+    async def stage_detail_page(job_id: str, stage_id: str, request: Request):
+        """Stage detail page."""
+        stage_data = None
 
-            # 1. Try running job
+        # Try running job
+        try:
+            registry = get_or_create_registry()
+            job_reg = ray.get(registry.get_job.remote(job_id), timeout=1)
+            if job_reg and hasattr(job_reg, "stages"):
+                for s in job_reg.stages:
+                    if hasattr(s, "stage_id") and s.stage_id == stage_id:
+                        stage_data = s
+                        break
+                    elif isinstance(s, dict) and s.get("stage_id") == stage_id:
+                        stage_data = s
+                        break
+        except Exception:
+            pass
+
+        # Try historical data
+        if not stage_data:
             try:
-                registry = get_or_create_registry()
-                job_reg = ray.get(registry.get_job.remote(job_id), timeout=1)
-                if job_reg:
-                    job_info = job_reg
-                    # Find stage in stages list
-                    for s in job_reg.stages or []:
-                        if s.get("stage_id") == stage_id:
-                            stage_data = s
-                            break
-            except Exception:
-                pass
-
-            # 2. Try historical data
-            if not stage_data:
-                job_archive = self.storage.get_job_archive(job_id)
+                job_archive = storage.get_job_archive(job_id)
                 if job_archive:
                     for s in job_archive.get("stages", []):
                         if s.get("stage_id") == stage_id:
                             stage_data = s
-                            stage_data.update(stage_data.get("final_metrics", {}))
                             break
-
-            if not stage_data:
-                stage_data = {"stage_id": stage_id, "worker_count": 0, "output_queue_size": 0}
-
-            return self.templates.TemplateResponse(
-                "stage_detail.html",
-                {
-                    "request": request,
-                    "job_id": job_id,
-                    "job": job_info,
-                    "stage": stage_data,
-                },
-            )
-
-        @app.get("/jobs/{job_id}/workers/{worker_id}", response_class=HTMLResponse)
-        async def worker_detail_page(job_id: str, worker_id: str, request: Request):
-            """Worker detail page."""
-            # Fallback worker data
-            worker_data = {
-                "worker_id": worker_id,
-                "stage_id": "Unknown",
-                "status": "UNKNOWN",
-                "pid": "N/A",
-                "node_id": "N/A",
-            }
-
-            # Try to fetch from API directly if in embedded mode
-            # This is a shortcut for the Portal running in same process/cluster
-            try:
-                # We can't easily call the API handler directly because of dependency injection
-                # But we can try to look up in storage for historical jobs
-                events = self.storage.list_worker_events(job_id, worker_id=worker_id, limit=1)
-                if events:
-                    latest = events[0]
-                    worker_data.update(latest)
             except Exception:
                 pass
 
-            return self.templates.TemplateResponse(
-                "worker_detail.html",
-                {
-                    "request": request,
-                    "job_id": job_id,
-                    "worker": worker_data,
-                },
-            )
+        if not stage_data:
+            stage_data = {"stage_id": stage_id, "status": "NOT_FOUND"}
 
-        @app.get("/jobs/{job_id}/exceptions", response_class=HTMLResponse)
-        async def exceptions_page(job_id: str, request: Request):
-            """Exceptions page."""
-            exceptions = []
-            if self.storage:
-                exceptions = self.storage.list_exceptions(job_id, limit=100)
+        return templates.TemplateResponse(
+            "stage_detail.html",
+            {
+                "request": request,
+                "job_id": job_id,
+                "stage": stage_data,
+            },
+        )
 
-            return self.templates.TemplateResponse(
-                "exceptions.html",
-                {
-                    "request": request,
-                    "job_id": job_id,
-                    "exceptions": exceptions,
-                },
-            )
+    @app.get("/jobs/{job_id}/workers/{worker_id}", response_class=HTMLResponse)
+    async def worker_detail_page(job_id: str, worker_id: str, request: Request):
+        """Worker detail page."""
+        worker_data = {"worker_id": worker_id, "stage_id": "", "status": "UNKNOWN"}
 
-        @app.get("/jobs/{job_id}/checkpoints", response_class=HTMLResponse)
-        async def checkpoints_page(job_id: str, request: Request):
-            """Checkpoints page."""
-            return self.templates.TemplateResponse(
-                "checkpoints.html",
-                {
-                    "request": request,
-                    "job_id": job_id,
-                },
-            )
+        try:
+            events = storage.list_worker_events(job_id, worker_id=worker_id, limit=1)
+            if events:
+                worker_data.update(events[0])
+        except Exception:
+            pass
 
-        @app.get("/jobs/{job_id}/lineage", response_class=HTMLResponse)
-        async def lineage_page(job_id: str, request: Request):
-            """Lineage page."""
-            return self.templates.TemplateResponse(
-                "lineage.html",
-                {
-                    "request": request,
-                    "job_id": job_id,
-                },
-            )
+        return templates.TemplateResponse(
+            "worker_detail.html",
+            {
+                "request": request,
+                "job_id": job_id,
+                "worker": worker_data,
+            },
+        )
 
-        @app.get("/api/jobs")
-        async def api_list_jobs():
-            """API endpoint for listing jobs."""
+    @app.get("/jobs/{job_id}/exceptions", response_class=HTMLResponse)
+    async def exceptions_page(job_id: str, request: Request):
+        """Exceptions page."""
+        exceptions = []
+        try:
+            exceptions = storage.list_exceptions(job_id, limit=100)
+        except Exception:
+            pass
+
+        return templates.TemplateResponse(
+            "exceptions.html",
+            {
+                "request": request,
+                "job_id": job_id,
+                "exceptions": exceptions,
+            },
+        )
+
+    @app.get("/jobs/{job_id}/checkpoints", response_class=HTMLResponse)
+    async def checkpoints_page(job_id: str, request: Request):
+        """Checkpoints page."""
+        return templates.TemplateResponse(
+            "checkpoints.html",
+            {
+                "request": request,
+                "job_id": job_id,
+                "checkpoints": [],
+            },
+        )
+
+    @app.get("/jobs/{job_id}/lineage", response_class=HTMLResponse)
+    async def lineage_page(job_id: str, request: Request):
+        """Lineage page."""
+        return templates.TemplateResponse(
+            "lineage.html",
+            {
+                "request": request,
+                "job_id": job_id,
+                "lineage": [],
+            },
+        )
+
+    @app.get("/api/jobs")
+    async def api_list_jobs():
+        """API endpoint for listing jobs."""
+        running = []
+        try:
             registry = get_or_create_registry()
             jobs_dict = ray.get(registry.list_jobs.remote(), timeout=2)
             running = [j.to_dict() for j in jobs_dict.values()]
+        except Exception:
+            pass
 
-            completed = self.storage.list_jobs(limit=100)
+        completed = []
+        try:
+            completed = storage.list_jobs(limit=100)
+        except Exception:
+            pass
 
-            return {
-                "running": running,
-                "completed": completed,
-                "total": len(running) + len(completed),
-            }
+        return {
+            "running": running,
+            "completed": completed,
+        }
 
-        @app.get("/health")
-        async def health():
-            """Health check."""
-            return {"status": "ok", "service": "portal"}
+    @app.get("/health")
+    async def health():
+        """Health check."""
+        return {"status": "ok", "service": "portal"}
 
-        return app
+    logger.info(f"Portal app created with storage: {storage_path}")
+    return app
+
+
+# Global app instance - will be set when Portal is started
+_portal_app = None
+
+
+@serve.deployment(
+    name="solstice-portal",
+    ray_actor_options={"num_cpus": 0.1, "num_gpus": 0},
+)
+class SolsticePortal:
+    """Global WebUI portal for all Solstice jobs.
+
+    Uses FastAPI app created by create_portal_app().
+    Ray Serve handles ASGI forwarding via @serve.ingress pattern.
+    """
+
+    def __init__(self, storage_path: str):
+        """Initialize portal with FastAPI app."""
+        self.app = create_portal_app(storage_path)
+
+    async def __call__(self, request: Request):
+        """Handle HTTP request by forwarding to FastAPI app."""
+        # Build ASGI scope from Starlette Request
+        scope = request.scope
+        receive = request.receive
+
+        # Create a response collector
+        response_started = False
+        status_code = 200
+        response_headers = []
+        body_parts = []
+
+        async def send(message):
+            nonlocal response_started, status_code, response_headers
+            if message["type"] == "http.response.start":
+                response_started = True
+                status_code = message["status"]
+                response_headers = message.get("headers", [])
+            elif message["type"] == "http.response.body":
+                body_parts.append(message.get("body", b""))
+
+        await self.app(scope, receive, send)
+
+        # Build response - decode headers from bytes to strings
+        from starlette.responses import Response
+
+        body = b"".join(body_parts)
+        # ASGI headers are [(bytes, bytes), ...], convert to {str: str}
+        headers = {
+            k.decode("latin-1") if isinstance(k, bytes) else k: v.decode("latin-1")
+            if isinstance(v, bytes)
+            else v
+            for k, v in response_headers
+        }
+        return Response(content=body, status_code=status_code, headers=headers)
 
 
 def start_portal(storage_path: str, port: int = 8000) -> str:
