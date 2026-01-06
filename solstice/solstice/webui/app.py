@@ -41,58 +41,59 @@ def create_app(
     job_runner: Optional["RayJobRunner"] = None,
 ) -> FastAPI:
     """Create WebUI FastAPI application.
-    
+
     Args:
         mode: Running mode
             - "embedded": Embedded mode, runs with job, can access real-time data
             - "history": History Server mode, read-only historical data
         storage: SlateDB storage instance (required for history mode)
         job_runner: RayJobRunner instance (required for embedded mode)
-    
+
     Returns:
         FastAPI application
-        
+
     Raises:
         ValueError: If required dependencies are missing for the mode
     """
     logger = create_ray_logger("WebUIApp")
-    
+
     # Validate mode-specific requirements
     if mode == "history" and storage is None:
         raise ValueError("History mode requires storage parameter")
     if mode == "embedded" and job_runner is None:
         raise ValueError("Embedded mode requires job_runner parameter")
-    
+
     app = FastAPI(
         title="Solstice Debug UI",
         description="Solstice streaming job debugging interface",
         version="0.1.0",
     )
-    
+
     # Inject state
     app.state.mode = mode
     app.state.storage = storage
     app.state.job_runner = job_runner
-    
+
     logger.info(f"Creating WebUI app in {mode} mode")
-    
+
     # Mount static files (required)
     if not STATIC_DIR.exists():
         raise RuntimeError(f"Static directory not found: {STATIC_DIR}")
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
-    
+
     # Set up templates (required)
     if not TEMPLATES_DIR.exists():
         raise RuntimeError(f"Templates directory not found: {TEMPLATES_DIR}")
     app.state.templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
     setup_template_filters(app.state.templates)
-    
+
     # Register routes based on mode
     if mode == "embedded":
         from solstice.webui.api import realtime
+
         app.include_router(realtime.router, prefix="/api")
         logger.info("Registered real-time API routes")
-    
+
     # Shared routes (both modes)
     from solstice.webui.api import (
         overview,
@@ -104,7 +105,7 @@ def create_app(
         configuration,
         events,
     )
-    
+
     app.include_router(overview.router, prefix="/api")
     app.include_router(jobs.router, prefix="/api")
     app.include_router(stages.router, prefix="/api")
@@ -113,45 +114,46 @@ def create_app(
     app.include_router(lineage.router, prefix="/api")
     app.include_router(configuration.router, prefix="/api")
     app.include_router(events.router, prefix="/api")
-    
+
     logger.info("Registered API routes")
-    
+
     # Health check endpoint
     @app.get("/health")
     async def health_check():
         return {"status": "ok", "mode": mode}
-    
+
     # Root redirect
     @app.get("/")
     async def root():
         from fastapi.responses import RedirectResponse
+
         return RedirectResponse(url="/overview")
-    
+
     return app
 
 
 def get_ray_dashboard_url() -> str:
     """Get Ray Dashboard URL for external links.
-    
+
     Returns:
         Ray Dashboard URL (defaults to http://localhost:8265)
     """
     import ray
-    
+
     # Get from environment or use default
     if ray.is_initialized():
         # Ray Dashboard typically runs on port 8265
         return os.getenv("RAY_DASHBOARD_URL", "http://localhost:8265")
-    
+
     return os.getenv("RAY_DASHBOARD_URL", "http://localhost:8265")
 
 
 def format_duration(seconds: float) -> str:
     """Format duration in human-readable form.
-    
+
     Args:
         seconds: Duration in seconds
-        
+
     Returns:
         Formatted string (e.g., "2h 15m", "45s", "1.2s")
     """
@@ -171,10 +173,10 @@ def format_duration(seconds: float) -> str:
 
 def format_bytes(bytes_value: int) -> str:
     """Format bytes in human-readable form.
-    
+
     Args:
         bytes_value: Size in bytes
-        
+
     Returns:
         Formatted string (e.g., "1.2GB", "45MB")
     """
@@ -187,10 +189,10 @@ def format_bytes(bytes_value: int) -> str:
 
 def format_number(num: int) -> str:
     """Format large numbers with abbreviations.
-    
+
     Args:
         num: Number to format
-        
+
     Returns:
         Formatted string (e.g., "1.2M", "45K")
     """
@@ -206,14 +208,15 @@ def format_number(num: int) -> str:
 
 def format_datetime(timestamp: float) -> str:
     """Format Unix timestamp as human-readable datetime.
-    
+
     Args:
         timestamp: Unix timestamp in seconds
-        
+
     Returns:
         Formatted string (e.g., "2026-01-06 12:53:23")
     """
     from datetime import datetime
+
     try:
         dt = datetime.fromtimestamp(timestamp)
         return dt.strftime("%Y-%m-%d %H:%M:%S")
@@ -228,4 +231,3 @@ def setup_template_filters(templates: Jinja2Templates):
     templates.env.filters["format_bytes"] = format_bytes
     templates.env.filters["format_number"] = format_number
     templates.env.filters["format_datetime"] = format_datetime
-

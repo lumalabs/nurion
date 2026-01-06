@@ -26,26 +26,26 @@ router = APIRouter(tags=["realtime"])
 @router.get("/jobs/{job_id}/sse/metrics")
 async def stream_metrics(job_id: str, request: Request) -> EventSourceResponse:
     """Stream real-time metrics via Server-Sent Events.
-    
+
     Args:
         job_id: Job identifier
-        
+
     Returns:
         SSE event stream
     """
-    
+
     async def event_generator() -> AsyncGenerator[dict, None]:
         """Generate SSE events."""
         runner = request.app.state.job_runner
-        
+
         if not runner or runner.job.job_id != job_id:
             yield {"event": "error", "data": "Job not found"}
             return
-        
+
         while runner.is_running:
             # Get current status
             status = await runner.get_status_async()
-            
+
             # Send metrics
             yield {
                 "event": "metrics",
@@ -53,10 +53,9 @@ async def stream_metrics(job_id: str, request: Request) -> EventSourceResponse:
                     "job_id": job_id,
                     "elapsed_time": status.elapsed_time,
                     "stages": status.stages,
-                }
+                },
             }
-            
-            await asyncio.sleep(2)  # Update every 2 seconds
-    
-    return EventSourceResponse(event_generator())
 
+            await asyncio.sleep(2)  # Update every 2 seconds
+
+    return EventSourceResponse(event_generator())

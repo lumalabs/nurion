@@ -31,39 +31,39 @@ router = APIRouter(tags=["overview"])
 @router.get("/overview")
 async def get_overview(request: Request) -> Dict[str, Any]:
     """Get cluster and job overview."""
-    
+
     # Get Ray cluster resources
     cluster_resources = {}
     if ray.is_initialized():
         cluster_resources = ray.cluster_resources()
-    
+
     # Calculate usage
     total_cpus = cluster_resources.get("CPU", 0)
     used_cpus = total_cpus - ray.available_resources().get("CPU", 0)
-    
+
     total_memory = cluster_resources.get("memory", 0)
     used_memory = total_memory - ray.available_resources().get("memory", 0)
-    
+
     total_gpus = cluster_resources.get("GPU", 0)
     used_gpus = total_gpus - ray.available_resources().get("GPU", 0) if total_gpus > 0 else 0
-    
+
     # Get job statistics
     job_stats = {"running": 0, "completed": 0, "failed": 0}
-    
+
     if request.app.state.mode == "embedded" and request.app.state.job_runner:
         # Embedded mode: current job
         runner = request.app.state.job_runner
         status = runner.get_status()
-        
+
         if status.is_running:
             job_stats["running"] = 1
         elif status.error:
             job_stats["failed"] = 1
         else:
             job_stats["completed"] = 1
-    
+
     # TODO: Query storage for historical job stats
-    
+
     return {
         "cluster": {
             "total_cpus": total_cpus,
@@ -86,4 +86,3 @@ async def get_external_links() -> Dict[str, Optional[str]]:
         "grafana": get_grafana_url(),
         "prometheus": get_ray_prometheus_url(),
     }
-

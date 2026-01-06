@@ -138,7 +138,11 @@ def main(job_id: str, wait_time: int):
                     await asyncio.sleep(wait_time)
                     
             finally:
-                await runner.stop()
+                # Stop with timeout to avoid hanging
+                try:
+                    await asyncio.wait_for(runner.stop(), timeout=30)
+                except asyncio.TimeoutError:
+                    logger.warning("Stop timed out after 30s, forcing exit")
         
         asyncio.run(run())
 

@@ -25,7 +25,7 @@ router = APIRouter(tags=["events"])
 
 def _get_event_collector(request: Request) -> EventCollector:
     """Get or create EventCollector for the current request.
-    
+
     EventCollector is stateless for ingestion, so we create ephemeral instances.
     For running jobs, we could cache the collector in app.state.
     """
@@ -42,19 +42,19 @@ def _get_event_collector(request: Request) -> EventCollector:
 @router.post("/events/ingest")
 async def ingest_ray_event(event: Dict[str, Any], request: Request) -> Dict[str, str]:
     """Ingest Ray Event Export events (CLUSTER-LEVEL endpoint).
-    
+
     This endpoint receives ALL events from the Ray cluster, for ALL jobs.
     Ray Event Export is configured once per cluster, not per job.
-    
+
     **No Conflicts**: Multiple Solstice jobs in the same cluster share this endpoint.
     Events are tagged with job_id and stored separately in SlateDB.
-    
+
     Configure Ray cluster (ONCE) to export events:
         RAY_EVENT_EXPORT_ENABLED=1
         RAY_EVENT_EXPORT_HTTP_URL=http://<host>:<port>/solstice/api/events/ingest
-    
+
     Event format: https://docs.ray.io/en/latest/ray-observability/user-guides/ray-event-export.html
-    
+
     Args:
         event: Ray event data (JSON)
             - eventId: Unique event ID
@@ -63,16 +63,16 @@ async def ingest_ray_event(event: Dict[str, Any], request: Request) -> Dict[str,
             - timestamp: ISO 8601 timestamp
             - severity: INFO, WARNING, ERROR
             - sessionName: Ray session ID
-    
+
     Returns:
         Success status
     """
     if not request.app.state.storage:
         return {"status": "error", "message": "Storage not configured"}
-    
+
     collector = _get_event_collector(request)
     collector.ingest_event(event)
-    
+
     return {"status": "ok", "event_id": event.get("eventId")}
 
 
@@ -85,19 +85,19 @@ async def list_job_events(
     offset: int = Query(0, ge=0),
 ) -> List[Dict[str, Any]]:
     """List Ray events for a job.
-    
+
     Args:
         job_id: Job identifier
         event_types: Optional filter by event type
         limit: Maximum number of events to return
         offset: Number of events to skip
-        
+
     Returns:
         List of Ray events
     """
     if not request.app.state.storage:
         return []
-    
+
     # Use EventCollector for consistent API
     collector = EventCollector(job_id, request.app.state.storage)
     return collector.get_events(
@@ -105,4 +105,3 @@ async def list_job_events(
         limit=limit,
         offset=offset,
     )
-

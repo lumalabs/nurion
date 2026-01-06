@@ -151,10 +151,10 @@ class _RaySplitPayloadStoreActor:
         self._refs.clear()
         self._logger.info(f"Cleared {count} payloads")
         return count
-    
+
     def get_metrics(self) -> dict:
         """Get storage metrics.
-        
+
         Returns:
             Dictionary with storage statistics
         """
@@ -268,10 +268,10 @@ class RaySplitPayloadStore(SplitPayloadStore):
 
     def clear(self) -> int:
         return ray.get(self._actor.clear.remote())
-    
+
     def get_metrics(self) -> dict:
         """Get storage metrics for monitoring.
-        
+
         Returns:
             Dictionary with:
             - total_objects: Current number of stored objects

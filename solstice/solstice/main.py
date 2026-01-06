@@ -238,23 +238,27 @@ def run_job(
 )
 def history_server_cmd(storage_path: str, host: str, port: int, reload: bool):
     """Start History Server for viewing completed jobs.
-    
+
     Example:
         solstice history-server -s s3://my-bucket/solstice-history/ -p 8080
     """
     from solstice.webui.history_server import history_server as hs_func
-    
+
     # Call the actual function (can't use Click command directly)
     import sys
+
     sys.argv = [
         "history-server",
-        "--storage-path", storage_path,
-        "--host", host,
-        "--port", str(port),
+        "--storage-path",
+        storage_path,
+        "--host",
+        host,
+        "--port",
+        str(port),
     ]
     if reload:
         sys.argv.append("--reload")
-    
+
     hs_func.callback(storage_path, host, port, reload)
 
 

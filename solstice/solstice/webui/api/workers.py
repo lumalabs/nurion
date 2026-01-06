@@ -19,7 +19,7 @@ from typing import Any, Dict, List
 
 import ray
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import PlainTextResponse, StreamingResponse
+from fastapi.responses import PlainTextResponse
 
 router = APIRouter(tags=["workers"])
 
@@ -27,9 +27,9 @@ router = APIRouter(tags=["workers"])
 @router.get("/jobs/{job_id}/workers")
 async def list_workers(job_id: str, request: Request) -> List[Dict[str, Any]]:
     """List all workers for a job."""
-    
+
     workers = []
-    
+
     # Embedded mode: get from runner
     if request.app.state.mode == "embedded":
         runner = request.app.state.job_runner
@@ -37,14 +37,16 @@ async def list_workers(job_id: str, request: Request) -> List[Dict[str, Any]]:
             for stage_id, master in runner._masters.items():
                 for worker_id, worker_handle in master._workers.items():
                     worker_status = ray.get(worker_handle.get_status.remote(), timeout=1)
-                    workers.append({
-                        "worker_id": worker_id,
-                        "stage_id": stage_id,
-                        "status": "RUNNING" if worker_status.get("running") else "IDLE",
-                        "processed_count": worker_status.get("processed_count", 0),
-                        "assigned_partitions": worker_status.get("assigned_partitions", []),
-                    })
-    
+                    workers.append(
+                        {
+                            "worker_id": worker_id,
+                            "stage_id": stage_id,
+                            "status": "RUNNING" if worker_status.get("running") else "IDLE",
+                            "processed_count": worker_status.get("processed_count", 0),
+                            "assigned_partitions": worker_status.get("assigned_partitions", []),
+                        }
+                    )
+
     # History mode: get from storage
     elif request.app.state.storage:
         worker_events = request.app.state.storage.list_worker_events(job_id, limit=1000)
@@ -55,7 +57,7 @@ async def list_workers(job_id: str, request: Request) -> List[Dict[str, Any]]:
             if worker_id not in workers_dict:
                 workers_dict[worker_id] = event
         workers = list(workers_dict.values())
-    
+
     return workers
 
 
@@ -66,7 +68,7 @@ async def get_worker_detail(
     request: Request,
 ) -> Dict[str, Any]:
     """Get detailed worker information."""
-    
+
     # Embedded mode: get from runner
     if request.app.state.mode == "embedded":
         runner = request.app.state.job_runner
@@ -76,7 +78,7 @@ async def get_worker_detail(
                 worker_handle = master._workers.get(worker_id)
                 if worker_handle:
                     worker_status = ray.get(worker_handle.get_status.remote(), timeout=1)
-                    
+
                     # Get actor info
                     actor_id = None
                     node_id = None
@@ -86,7 +88,7 @@ async def get_worker_detail(
                         actor_id = actor_info.get("actor_id")
                         node_id = actor_info.get("node_id")
                         pid = actor_info.get("pid")
-                    
+
                     return {
                         "worker_id": worker_id,
                         "stage_id": stage_id,
@@ -98,7 +100,7 @@ async def get_worker_detail(
                         "error_count": worker_status.get("error_count", 0),
                         "assigned_partitions": worker_status.get("assigned_partitions", []),
                     }
-    
+
     raise HTTPException(status_code=404, detail=f"Worker {worker_id} not found")
 
 
@@ -110,25 +112,25 @@ async def get_worker_logs(
     tail: int = Query(100, ge=1, le=10000),
 ) -> PlainTextResponse:
     """Get worker logs.
-    
+
     Args:
         job_id: Job identifier
         worker_id: Worker identifier
         tail: Number of lines to return from the end
-        
+
     Returns:
         Plain text log content
     """
     # Only available in embedded mode
     if request.app.state.mode != "embedded":
         return PlainTextResponse("Logs only available for running jobs")
-    
+
     # Get logs from Ray
     logs = ray.util.state.get_log(
         actor_id=worker_id,
         tail=tail,
     )
-    
+
     if logs:
         return PlainTextResponse(logs)
     else:
@@ -142,22 +144,22 @@ async def get_worker_stacktrace(
     request: Request,
 ) -> PlainTextResponse:
     """Get worker stacktrace using py-spy.
-    
+
     Args:
         job_id: Job identifier
         worker_id: Worker identifier
-        
+
     Returns:
         Plain text stacktrace
     """
     # Only available in embedded mode
     if request.app.state.mode != "embedded":
         return PlainTextResponse("Stacktrace only available for running jobs")
-    
+
     runner = request.app.state.job_runner
     if not runner or runner.job.job_id != job_id:
         raise HTTPException(status_code=404, detail="Job not found")
-    
+
     # Find worker and get PID
     for stage_id, master in runner._masters.items():
         worker_handle = master._workers.get(worker_id)
@@ -166,9 +168,9 @@ async def get_worker_stacktrace(
             actor_info = ray.util.state.get_actor(worker_id)
             if not actor_info or "pid" not in actor_info:
                 return PlainTextResponse("Could not determine worker PID")
-            
+
             pid = actor_info["pid"]
-            
+
             # Use py-spy to dump stacktrace
             try:
                 result = subprocess.run(
@@ -177,7 +179,7 @@ async def get_worker_stacktrace(
                     text=True,
                     timeout=10,
                 )
-                
+
                 if result.returncode == 0:
                     return PlainTextResponse(result.stdout)
                 else:
@@ -185,9 +187,8 @@ async def get_worker_stacktrace(
                         f"py-spy failed: {result.stderr}\n\n"
                         f"Make sure py-spy is installed: pip install py-spy"
                     )
-                    
+
             except subprocess.TimeoutExpired:
                 raise HTTPException(status_code=504, detail="py-spy timeout")
-    
-    raise HTTPException(status_code=404, detail=f"Worker {worker_id} not found")
 
+    raise HTTPException(status_code=404, detail=f"Worker {worker_id} not found")

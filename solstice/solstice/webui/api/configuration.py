@@ -26,7 +26,7 @@ router = APIRouter(tags=["configuration"])
 @router.get("/jobs/{job_id}/configuration")
 async def get_configuration(job_id: str, request: Request) -> Dict[str, Any]:
     """Get job and environment configuration."""
-    
+
     # Embedded mode: get from runner
     if request.app.state.mode == "embedded":
         runner = request.app.state.job_runner
@@ -42,7 +42,7 @@ async def get_configuration(job_id: str, request: Request) -> Dict[str, Any]:
                     "num_gpus": master.config.num_gpus,
                     "memory_mb": master.config.memory_mb,
                 }
-            
+
             # Ray cluster resources
             ray_config = {}
             if ray.is_initialized():
@@ -50,14 +50,14 @@ async def get_configuration(job_id: str, request: Request) -> Dict[str, Any]:
                     "cluster_resources": ray.cluster_resources(),
                     "available_resources": ray.available_resources(),
                 }
-            
+
             # Environment variables
             environment = {
                 "SOLSTICE_LOG_LEVEL": os.getenv("SOLSTICE_LOG_LEVEL", "INFO"),
                 "RAY_PROMETHEUS_HOST": os.getenv("RAY_PROMETHEUS_HOST"),
                 "SOLSTICE_GRAFANA_URL": os.getenv("SOLSTICE_GRAFANA_URL"),
             }
-            
+
             return {
                 "job_config": {
                     "job_id": runner.job.job_id,
@@ -68,12 +68,11 @@ async def get_configuration(job_id: str, request: Request) -> Dict[str, Any]:
                 "ray_config": ray_config,
                 "environment": environment,
             }
-    
+
     # History mode: get from storage
     if request.app.state.storage:
         job_data = request.app.state.storage.get_job_archive(job_id)
         if job_data:
             return job_data.get("config", {})
-    
-    raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
 
+    raise HTTPException(status_code=404, detail=f"Job {job_id} not found")

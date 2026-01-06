@@ -15,4 +15,3 @@
 """API routers for WebUI."""
 
 __all__ = []
-

@@ -26,18 +26,18 @@ if TYPE_CHECKING:
 
 class LineageTracker:
     """Track split lineage and processing history.
-    
+
     Records which worker processed each split and maintains
     parent-child relationships for lineage visualization.
-    
+
     Usage:
         tracker = LineageTracker(job_id, storage)
         tracker.record_split_processed(split, worker_id, processing_time)
     """
-    
+
     def __init__(self, job_id: str, storage: SlateDBStorage):
         """Initialize lineage tracker.
-        
+
         Args:
             job_id: Job identifier
             storage: SlateDB storage instance
@@ -45,7 +45,7 @@ class LineageTracker:
         self.job_id = job_id
         self.storage = storage
         self.logger = create_ray_logger(f"LineageTracker-{job_id}")
-    
+
     def record_split_processed(
         self,
         split: "Split",
@@ -55,7 +55,7 @@ class LineageTracker:
         output_records: int = 0,
     ) -> None:
         """Record that a split was processed.
-        
+
         Args:
             split: Split that was processed
             worker_id: Worker that processed it
@@ -75,15 +75,14 @@ class LineageTracker:
                 "timestamp": time.time(),
                 "data_range": split.data_range,
             }
-            
+
             self.storage.store_split_lineage(
                 self.job_id,
                 split.split_id,
                 lineage_data,
             )
-            
+
             self.logger.debug(f"Recorded lineage for split {split.split_id}")
-            
+
         except Exception as e:
             self.logger.warning(f"Failed to record split lineage: {e}")
-

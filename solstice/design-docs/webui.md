@@ -108,6 +108,73 @@ Ray Serve (port 8000)
 **Cons:**
 - Not real-time
 - No alerting
+- **Single writer only** (see architecture note below)
+
+#### SlateDB Single Writer Architecture
+
+SlateDB only supports **one writer process** at a time. This constraint shapes our architecture:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Embedded Mode: JobWebUI is the ONLY writer                 │
+│                                                             │
+│  JobWebUI (per job)                                         │
+│    └── SlateDBStorage                                       │
+│          └── Writes: metrics snapshots, events, archives    │
+│                                                             │
+│  Portal (Ray Serve)                                         │
+│    └── DO NOT write to SlateDB (read-only mode)             │
+│    └── For running jobs: read from JobRegistry              │
+│    └── For completed jobs: read from SlateDB                │
+└─────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐
+│  History Server Mode: Read-Only Access                      │
+│                                                             │
+│  History Server                                             │
+│    └── SlateDBStorage (read-only)                           │
+│          └── Reads archives written by JobWebUI             │
+│                                                             │
+│  Note: Original writes come from JobWebUI during execution  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Key Design Decisions:**
+
+1. **Portal reads from JobRegistry, not SlateDB** for running jobs
+2. **JobWebUI is the only writer** during job execution
+3. **History Server is read-only** - it only reads archives written by JobWebUI
+4. **Each job has its own SlateDB path** to avoid writer conflicts:
+   ```python
+   storage_path = f"{base_path}/{job_id}/{attempt_id}/"
+   ```
+
+**Attempt Tracking:**
+
+Since the same `job_id` can run multiple times, we track attempts internally:
+- `attempt_id`: UUID generated for each job run
+- Stored in SlateDB, not exposed in UI (user sees `job_id` only)
+- Storage path: `{base_path}/{job_id}/{attempt_id}/`
+- Allows querying historical runs of the same job
+
+**Portal History Access:**
+
+Portal reads historical data by scanning the storage directory:
+```
+{base_path}/
+├── job_a/
+│   ├── abc123/   ← attempt 1 (SlateDB instance)
+│   └── def456/   ← attempt 2 (SlateDB instance)
+└── job_b/
+    └── ghi789/   ← attempt 1
+```
+
+For each historical query, Portal:
+1. Lists job directories in base_path
+2. Opens the most recent attempt's SlateDB (read-only)
+3. Queries and returns data
+
+This avoids writer conflicts while supporting multi-attempt history
 
 ### Hybrid Strategy
 
@@ -175,8 +242,10 @@ Archives complete job state when job finishes.
 ### Design Principles
 
 - **Simple & Professional**: No flashy animations
-- **High Information Density**: Compact layout, small fonts
+- **High Information Density**: Compact spacing, readable fonts
 - **Large Dataset Friendly**: Pagination, fixed headers, virtual scrolling
+- **Stateless API Design**: Minimize `ray.get()` calls in API handlers
+- **Single Writer per Storage**: SlateDB only supports one writer process
 
 ### Performance Optimizations
 
@@ -190,6 +259,55 @@ Archives complete job state when job finishes.
 | Page freezing | Fixed container heights, internal scrolling |
 
 ## API Design
+
+### Core Principles
+
+**1. Stateless API Design:**
+
+API handlers should be stateless and avoid caching references to Ray actors:
+
+```python
+# ❌ BAD: Caching actor reference in __init__
+class Portal:
+    def __init__(self):
+        self.registry = get_or_create_registry()  # May become stale
+    
+    async def list_jobs(self):
+        return ray.get(self.registry.list_jobs.remote())  # May fail
+
+# ✅ GOOD: Get fresh reference each time
+class Portal:
+    async def list_jobs(self):
+        registry = get_or_create_registry()  # Always fresh
+        return ray.get(registry.list_jobs.remote())
+```
+
+**2. Minimize `ray.get()` Calls:**
+
+`ray.get()` is blocking and unpredictable - the target actor may be busy.
+Prefer pushing data to storage rather than pulling from actors.
+
+```python
+# ❌ BAD: Multiple ray.get calls in API handler
+async def get_stage(job_id, stage_id):
+    runner = ray.get(registry.get_runner.remote(job_id))
+    stages = ray.get(runner.get_stages.remote())  # Blocking!
+    return stages[stage_id]
+
+# ✅ GOOD: Data pushed to Registry, read from there
+async def get_stage(job_id, stage_id):
+    registry = get_or_create_registry()
+    job = ray.get(registry.get_job.remote(job_id), timeout=2)
+    return next((s for s in job.stages if s['stage_id'] == stage_id), None)
+```
+
+**3. Short Timeouts:**
+
+Always use timeouts when calling Ray actors to prevent hangs:
+
+```python
+ray.get(registry.list_jobs.remote(), timeout=2)  # 2 second timeout
+```
 
 ### Standard Patterns
 

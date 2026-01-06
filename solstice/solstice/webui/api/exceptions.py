@@ -16,7 +16,7 @@
 
 from typing import Any, Dict, List
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Query, Request
 
 router = APIRouter(tags=["exceptions"])
 
@@ -29,17 +29,16 @@ async def list_exceptions(
     offset: int = Query(0, ge=0),
 ) -> List[Dict[str, Any]]:
     """List exceptions for a job.
-    
+
     Args:
         job_id: Job identifier
         limit: Maximum number of exceptions to return
         offset: Number of exceptions to skip (for pagination)
-        
+
     Returns:
         List of exception information
     """
     if request.app.state.storage:
         return request.app.state.storage.list_exceptions(job_id, limit=limit, offset=offset)
-    
-    return []
 
+    return []

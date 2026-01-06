@@ -1,7 +1,13 @@
-/* Solstice WebUI Custom Styles */
+/* Solstice WebUI - Compact, High-Density Styles */
 
-/* === Variables === */
+/* === Override Pico defaults for compact layout === */
 :root {
+  --pico-font-size: 14px;
+  --pico-line-height: 1.5;
+  --pico-spacing: 0.5rem;
+  --pico-block-spacing-vertical: 0.5rem;
+  --pico-block-spacing-horizontal: 0.75rem;
+  
   /* Status colors */
   --status-running: #22c55e;
   --status-completed: #3b82f6;
@@ -9,21 +15,94 @@
   --status-pending: #f59e0b;
 }
 
-/* === Layout === */
-.container {
-  max-width: 1400px;
-  padding: 0.75rem 1rem;
+body {
+  font-size: 14px;
+  line-height: 1.5;
+  padding: 0;
+  margin: 0;
+}
+
+/* === Navigation - Compact === */
+nav {
+  padding: 0.4rem 1rem;
+  border-bottom: 1px solid var(--pico-muted-border-color);
+  margin-bottom: 0.5rem;
+}
+
+nav ul {
+  margin: 0;
+  padding: 0;
+}
+
+nav li {
+  padding: 0 0.5rem;
+}
+
+nav a, nav strong {
+  font-size: 0.85rem;
+}
+
+/* === Main Content === */
+main {
+  padding: 0 1rem;
+  max-width: 1600px;
+  margin: 0 auto;
+}
+
+/* === Article/Card - Compact === */
+article {
+  padding: 0.75rem;
+  margin: 0;
+  border-radius: 4px;
+}
+
+article header {
+  padding-bottom: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+article.compact {
+  padding: 0.5rem;
+}
+
+/* === Section spacing === */
+section {
+  margin-bottom: 0.75rem;
+}
+
+/* === Headings - Compact === */
+h1 {
+  font-size: 1.25rem;
+  margin: 0 0 0.25rem 0;
+  line-height: 1.3;
+}
+
+h2 {
+  font-size: 1rem;
+  margin: 0.75rem 0 0.4rem 0;
+  color: var(--pico-muted-color);
+  font-weight: 600;
+}
+
+h3 {
+  font-size: 0.9rem;
+  margin: 0.5rem 0 0.25rem 0;
+}
+
+p {
+  margin: 0.25rem 0;
 }
 
 /* === Status Badges === */
 .badge {
   display: inline-block;
   padding: 0.15rem 0.4rem;
-  border-radius: 4px;
-  font-size: 0.65rem;
+  border-radius: 3px;
+  font-size: 0.7rem;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.03em;
+  letter-spacing: 0.02em;
+  vertical-align: middle;
 }
 
 .badge-running {
@@ -31,7 +110,7 @@
   color: #166534;
 }
 
-.badge-completed {
+.badge-completed, .badge-finished {
   background: #dbeafe;
   color: #1e40af;
 }
@@ -46,19 +125,19 @@
   color: #92400e;
 }
 
-/* === Metrics Grid === */
+/* === Metrics Grid - Compact === */
 .metrics-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-  gap: 0.5rem;
-  margin-bottom: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
+  gap: 0.4rem;
+  margin-bottom: 0.5rem;
 }
 
 .metric-card {
   background: var(--pico-card-background-color);
   border: 1px solid var(--pico-muted-border-color);
-  border-radius: 8px;
-  padding: 0.5rem 0.75rem;
+  border-radius: 4px;
+  padding: 0.4rem 0.5rem;
   text-align: center;
 }
 
@@ -66,123 +145,80 @@
   font-size: 1.25rem;
   font-weight: 700;
   color: var(--pico-primary);
+  line-height: 1.2;
 }
 
 .metric-label {
   font-size: 0.7rem;
   color: var(--pico-muted-color);
   text-transform: uppercase;
-  letter-spacing: 0.03em;
-  margin-top: 0.25rem;
+  letter-spacing: 0.02em;
+  margin-top: 0.15rem;
 }
 
-/* === Progress Bar === */
-.progress-bar {
-  background: var(--pico-secondary-background);
-  border-radius: 4px;
-  height: 1.25rem;
-  overflow: hidden;
-  margin: 0.5rem 0;
+/* === Tables - Compact === */
+table {
+  font-size: 0.875rem;
+  margin: 0;
+  border-collapse: collapse;
+  width: 100%;
 }
 
-.progress-fill {
-  background: var(--pico-primary);
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: white;
-  font-size: 0.7rem;
-  font-weight: 600;
-  transition: width 0.3s ease;
-}
-
-/* === Tables === */
-.table-container {
-  background: var(--pico-card-background-color);
-  border: 1px solid var(--pico-muted-border-color);
-  border-radius: 4px;
-  margin-bottom: 1rem;
-}
-
-.table-toolbar {
-  display: flex;
-  gap: 0.5rem;
-  padding: 0.5rem;
+th, td {
+  padding: 0.35rem 0.5rem;
   border-bottom: 1px solid var(--pico-muted-border-color);
-  align-items: center;
-}
-
-.table-info {
-  margin-left: auto;
-  font-size: 0.75rem;
-  color: var(--pico-muted-color);
-}
-
-.table-scroll {
-  overflow: auto;
-  max-height: 600px;
-  -webkit-overflow-scrolling: touch;
-  will-change: scroll-position;
-}
-
-.table-container table {
-  margin-bottom: 0;
-  font-size: 0.8rem;
-  table-layout: fixed;
-}
-
-.table-container th,
-.table-container td {
-  padding: 0.4rem 0.6rem;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.table-container th {
+th {
+  background: #f1f5f9;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #475569;
   position: sticky;
   top: 0;
-  background: var(--pico-secondary-background);
   z-index: 10;
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
 }
 
-/* Sticky first column */
-.sticky-col {
-  position: sticky;
-  left: 0;
-  background: var(--pico-card-background-color);
-  z-index: 5;
-  box-shadow: 2px 0 4px rgba(0, 0, 0, 0.05);
+[data-theme="dark"] th {
+  background: #334155;
+  color: #94a3b8;
 }
 
-th.sticky-col {
-  z-index: 15;
+tbody tr:hover {
   background: var(--pico-secondary-background);
 }
 
-/* Table pagination */
-.table-pagination {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  gap: 1rem;
-  padding: 0.5rem;
-  border-top: 1px solid var(--pico-muted-border-color);
+.table-container {
+  background: var(--pico-card-background-color);
+  border: 1px solid var(--pico-muted-border-color);
+  border-radius: 4px;
+  overflow: auto;
+  max-height: 400px;
+}
+
+/* === Buttons === */
+button, [role="button"] {
+  padding: 0.3rem 0.6rem;
   font-size: 0.8rem;
 }
 
-.table-pagination button {
-  padding: 0.25rem 0.75rem;
+button.small, [role="button"].small, a.small {
+  padding: 0.2rem 0.4rem;
   font-size: 0.75rem;
+}
+
+button.outline, [role="button"].outline {
+  border-width: 1px;
 }
 
 /* === Typography === */
 .monospace {
-  font-family: 'Fira Code', 'Consolas', 'Monaco', monospace;
+  font-family: 'Consolas', 'Monaco', 'Menlo', monospace;
   font-size: 0.75rem;
 }
 
@@ -196,114 +232,77 @@ th.sticky-col {
   font-size: 0.75rem;
 }
 
-/* === Compact spacing === */
-h1 {
-  font-size: 1.25rem;
-  margin-bottom: 0.5rem;
-}
-
-h2 {
-  font-size: 1rem;
-  margin-top: 1.5rem;
-  margin-bottom: 0.75rem;
-}
-
-h3 {
-  font-size: 0.875rem;
-  margin-bottom: 0.5rem;
-}
-
-article header {
-  margin-bottom: 1rem;
-}
-
-section {
-  margin-bottom: 2rem;
-}
-
-/* === Buttons === */
-button.small, a[role="button"].small {
-  padding: 0.25rem 0.5rem;
-  font-size: 0.75rem;
-}
-
-/* === Log Viewer === */
-.log-viewer {
-  background: #0f172a;
-  color: #e2e8f0;
-  font-family: 'Fira Code', 'Consolas', monospace;
-  font-size: 0.75rem;
-  border-radius: 4px;
-  margin: 1rem 0;
-}
-
-.log-toolbar {
+/* === Nav tabs === */
+nav ul {
+  list-style: none;
   display: flex;
-  gap: 0.5rem;
-  padding: 0.5rem;
-  border-bottom: 1px solid #334155;
-  background: #1e293b;
+  gap: 0.25rem;
+  flex-wrap: wrap;
 }
 
-.log-content {
-  height: 400px;
-  overflow-y: auto;
-  padding: 0.5rem;
-  contain: strict;
+nav[style*="margin-bottom"] ul {
+  gap: 0.3rem;
 }
 
-.log-line {
-  padding: 0.1rem 0;
+/* === Footer === */
+footer {
+  padding: 0.5rem 1rem;
+  border-top: 1px solid var(--pico-muted-border-color);
+  font-size: 0.7rem;
+  color: var(--pico-muted-color);
+  margin-top: 1rem;
 }
 
-.log-ERROR {
-  color: #f87171;
+/* === Links in tables === */
+td a {
+  color: var(--pico-primary);
+  text-decoration: none;
 }
 
-.log-WARN {
-  color: #fbbf24;
+td a:hover {
+  text-decoration: underline;
 }
 
-.log-INFO {
-  color: #60a5fa;
+/* === Breadcrumb === */
+nav[aria-label="breadcrumb"] ul {
+  display: flex;
+  gap: 0;
+  padding: 0;
+  margin: 0;
 }
 
-/* === DAG Container === */
-.dag-container {
-  background: var(--pico-card-background-color);
-  border: 1px solid var(--pico-muted-border-color);
-  border-radius: 8px;
-  padding: 1rem;
-  min-height: 300px;
-  margin: 1rem 0;
+nav[aria-label="breadcrumb"] li {
+  padding: 0;
 }
 
-/* === Utility Classes === */
-.text-center {
-  text-align: center;
+nav[aria-label="breadcrumb"] li::after {
+  content: " / ";
+  color: var(--pico-muted-color);
+  margin: 0 0.25rem;
 }
 
-.text-right {
-  text-align: right;
+nav[aria-label="breadcrumb"] li:last-child::after {
+  content: "";
 }
 
+/* === External links section === */
+section h3 + div {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+/* === Utility === */
 .text-muted {
   color: var(--pico-muted-color);
 }
 
-.mb-1 {
-  margin-bottom: 0.5rem;
-}
+.mb-0 { margin-bottom: 0; }
+.mb-1 { margin-bottom: 0.25rem; }
+.mt-1 { margin-top: 0.25rem; }
 
-.mb-2 {
-  margin-bottom: 1rem;
+/* === Empty state === */
+em {
+  color: var(--pico-muted-color);
+  font-size: 0.8rem;
 }
-
-.mt-1 {
-  margin-top: 0.5rem;
-}
-
-.mt-2 {
-  margin-top: 1rem;
-}
-

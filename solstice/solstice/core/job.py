@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 @dataclass
 class WebUIConfig:
     """Configuration for WebUI debugging interface.
-    
+
     Attributes:
         enabled: Whether to enable WebUI
         storage_path: SlateDB storage path (local or s3://)
@@ -39,7 +39,7 @@ class WebUIConfig:
         archive_on_completion: Whether to archive job data when complete
         port: Ray Serve port (default 8000)
     """
-    
+
     enabled: bool = False
     storage_path: str = "/tmp/solstice-webui/"
     prometheus_enabled: bool = True

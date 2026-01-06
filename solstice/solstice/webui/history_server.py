@@ -48,11 +48,11 @@ from solstice.webui.storage import SlateDBStorage
 )
 def history_server(storage_path: str, host: str, port: int, reload: bool):
     """Start Solstice History Server for viewing completed jobs.
-    
+
     The History Server provides read-only access to archived job data
     stored in SlateDB. It uses the same WebUI interface as the embedded
     mode but reads data from historical archives instead of live jobs.
-    
+
     Example:
         solstice history-server -s s3://my-bucket/solstice-history/ -p 8080
         solstice history-server -s /tmp/solstice-webui/ --reload
@@ -66,7 +66,7 @@ def history_server(storage_path: str, host: str, port: int, reload: bool):
     click.echo()
     click.echo("Press Ctrl+C to stop")
     click.echo()
-    
+
     # Initialize storage
     try:
         storage = SlateDBStorage(storage_path)
@@ -74,14 +74,14 @@ def history_server(storage_path: str, host: str, port: int, reload: bool):
     except Exception as e:
         click.echo(f"✗ Failed to initialize storage: {e}", err=True)
         raise click.Abort()
-    
+
     # Create app in history mode
     app = create_app(
         mode="history",
         storage=storage,
         job_runner=None,
     )
-    
+
     # Run server
     uvicorn.run(
         app,
@@ -94,4 +94,3 @@ def history_server(storage_path: str, host: str, port: int, reload: bool):
 
 if __name__ == "__main__":
     history_server()
-

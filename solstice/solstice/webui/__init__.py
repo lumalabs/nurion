@@ -15,4 +15,3 @@
 """Solstice WebUI for debugging and monitoring."""
 
 __all__ = []
-

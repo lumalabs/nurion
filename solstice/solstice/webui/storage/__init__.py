@@ -18,4 +18,3 @@ from solstice.webui.storage.base import StorageBackend
 from solstice.webui.storage.slatedb_storage import SlateDBStorage
 
 __all__ = ["StorageBackend", "SlateDBStorage"]
-

@@ -3,23 +3,31 @@
 {% block title %}Job {{ job.job_id }}{% endblock %}
 
 {% block content %}
-<article>
+<article class="compact">
     <header>
-        <h1>Job: {{ job.job_id }}</h1>
-        <span class="badge badge-{{ job.status|lower }}">{{ job.status }}</span>
+        <nav aria-label="breadcrumb" style="font-size: 0.75rem;">
+            <ul>
+                <li><a href="/solstice/">Jobs</a></li>
+                <li>{{ job.job_id }}</li>
+            </ul>
+        </nav>
+        <div style="display: flex; align-items: center; gap: 0.5rem;">
+            <h1>{{ job.job_id }}</h1>
+            <span class="badge badge-{{ job.status|lower }}">{{ job.status }}</span>
+        </div>
     </header>
     
     <!-- Tabs -->
-    <nav style="margin-bottom: 1rem;">
+    <nav style="margin-bottom: 0.5rem;">
         <ul>
-            <li><a href="/solstice/jobs/{{ job.job_id }}/" role="button" class="outline">Overview</a></li>
-            <li><a href="/solstice/jobs/{{ job.job_id }}/exceptions" role="button" class="outline">Exceptions</a></li>
-            <li><a href="/solstice/jobs/{{ job.job_id }}/checkpoints" role="button" class="outline">Checkpoints</a></li>
-            <li><a href="/solstice/jobs/{{ job.job_id }}/lineage" role="button" class="outline">Lineage</a></li>
+            <li><a href="/solstice/jobs/{{ job.job_id }}/" role="button" class="small outline">Overview</a></li>
+            <li><a href="/solstice/jobs/{{ job.job_id }}/exceptions" role="button" class="small outline">Exceptions</a></li>
+            <li><a href="/solstice/jobs/{{ job.job_id }}/checkpoints" role="button" class="small outline">Checkpoints</a></li>
+            <li><a href="/solstice/jobs/{{ job.job_id }}/lineage" role="button" class="small outline">Lineage</a></li>
         </ul>
     </nav>
     
-    <!-- Job Info -->
+    <!-- Job Metrics -->
     <section>
         <div class="metrics-grid">
             <div class="metric-card">
@@ -34,46 +42,53 @@
                 <div class="metric-value">{{ (job.last_update - job.start_time)|format_duration }}</div>
                 <div class="metric-label">Duration</div>
             </div>
+            <div class="metric-card">
+                <div class="metric-value">{{ job.start_time|format_datetime }}</div>
+                <div class="metric-label">Started</div>
+            </div>
         </div>
     </section>
     
-    <!-- Stages List -->
+    <!-- Stages Table -->
     <section>
         <h2>Stages</h2>
-        
         {% if stages %}
         <div class="table-container">
             <table>
                 <thead>
                     <tr>
-                        <th>Stage ID</th>
-                        <th>Workers</th>
-                        <th>Queue Size</th>
-                        <th>Status</th>
-                        <th>Actions</th>
+                        <th style="width: 30%;">Stage ID</th>
+                        <th style="width: 12%;">Workers</th>
+                        <th style="width: 12%;">Queue</th>
+                        <th style="width: 12%;">In</th>
+                        <th style="width: 12%;">Out</th>
+                        <th style="width: 12%;">Status</th>
+                        <th style="width: 10%;">Action</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for stage in stages %}
                     <tr>
-                        <td class="monospace">{{ stage.stage_id }}</td>
+                        <td class="monospace">
+                            <a href="/solstice/jobs/{{ job.job_id }}/stages/{{ stage.stage_id }}">{{ stage.stage_id }}</a>
+                        </td>
                         <td class="number">{{ stage.worker_count }}</td>
-                        <td class="number">{{ stage.output_queue_size }}</td>
+                        <td class="number">{{ stage.output_queue_size|format_number }}</td>
+                        <td class="number">{{ stage.input_count|default(0)|format_number }}</td>
+                        <td class="number">{{ stage.output_count|default(0)|format_number }}</td>
                         <td>
                             {% if stage.is_running %}
-                            <span class="badge badge-running">RUNNING</span>
+                            <span class="badge badge-running">RUN</span>
                             {% elif stage.is_finished %}
-                            <span class="badge badge-completed">FINISHED</span>
+                            <span class="badge badge-completed">DONE</span>
                             {% elif stage.failed %}
-                            <span class="badge badge-failed">FAILED</span>
+                            <span class="badge badge-failed">FAIL</span>
                             {% else %}
-                            <span class="badge badge-pending">PENDING</span>
+                            <span class="badge badge-pending">WAIT</span>
                             {% endif %}
                         </td>
                         <td>
-                            <a href="/solstice/jobs/{{ job.job_id }}/stages/{{ stage.stage_id }}" role="button" class="outline small">
-                                Details
-                            </a>
+                            <a href="/solstice/jobs/{{ job.job_id }}/stages/{{ stage.stage_id }}" class="small">View</a>
                         </td>
                     </tr>
                     {% endfor %}
@@ -81,33 +96,16 @@
             </table>
         </div>
         {% else %}
-        <p><em>No stage information available</em></p>
+        <p><em>No stage information available (data collection starting...)</em></p>
         {% endif %}
     </section>
     
-    <!-- DAG Visualization -->
-    {% if dag_edges %}
+    <!-- External Links -->
     <section>
-        <h2>Stage DAG</h2>
-        <div class="dag-container">
-            <p><em>DAG visualization coming soon</em></p>
-            <details>
-                <summary>View DAG structure (JSON)</summary>
-                <pre style="font-size: 0.75rem;">{{ dag_edges|tojson(indent=2) }}</pre>
-            </details>
-        </div>
-    </section>
-    {% endif %}
-    
-    <!-- Links -->
-    <section>
-        <h3>External Links</h3>
-        <div style="display: flex; gap: 0.5rem;">
-            <a href="http://localhost:8265" target="_blank" rel="noopener" role="button" class="outline small">
-                Ray Dashboard ↗
-            </a>
+        <h3>Links</h3>
+        <div style="display: flex; gap: 0.3rem;">
+            <a href="http://localhost:8265" target="_blank" rel="noopener" role="button" class="outline small">Ray ↗</a>
         </div>
     </section>
 </article>
 {% endblock %}
-

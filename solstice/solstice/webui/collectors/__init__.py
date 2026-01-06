@@ -15,4 +15,3 @@
 """Data collectors for WebUI."""
 
 __all__ = []
-

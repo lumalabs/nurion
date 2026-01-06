@@ -24,16 +24,16 @@ router = APIRouter(tags=["lineage"])
 @router.get("/jobs/{job_id}/lineage")
 async def get_lineage_graph(job_id: str, request: Request) -> Dict[str, Any]:
     """Get complete lineage graph for a job.
-    
+
     Args:
         job_id: Job identifier
-        
+
     Returns:
         Graph data with nodes and edges
     """
     if request.app.state.storage:
         return request.app.state.storage.get_lineage_graph(job_id)
-    
+
     return {"nodes": [], "edges": []}
 
 
@@ -44,11 +44,11 @@ async def get_split_lineage(
     request: Request,
 ) -> Dict[str, Any]:
     """Get lineage for a specific split.
-    
+
     Args:
         job_id: Job identifier
         split_id: Split identifier
-        
+
     Returns:
         Lineage information
     """
@@ -56,6 +56,5 @@ async def get_split_lineage(
         lineage = request.app.state.storage.get_split_lineage(job_id, split_id)
         if lineage:
             return lineage
-    
-    raise HTTPException(status_code=404, detail=f"Split {split_id} not found")
 
+    raise HTTPException(status_code=404, detail=f"Split {split_id} not found")
