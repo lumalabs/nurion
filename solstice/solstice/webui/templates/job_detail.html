@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+
+{% block title %}Job {{ job.job_id }}{% endblock %}
+
+{% block content %}
+<article>
+    <header>
+        <h1>Job: {{ job.job_id }}</h1>
+        <span class="badge badge-{{ job.status|lower }}">{{ job.status }}</span>
+    </header>
+    
+    <!-- Tabs -->
+    <nav style="margin-bottom: 1rem;">
+        <ul>
+            <li><a href="/solstice/jobs/{{ job.job_id }}/" role="button" class="outline">Overview</a></li>
+            <li><a href="/solstice/jobs/{{ job.job_id }}/exceptions" role="button" class="outline">Exceptions</a></li>
+            <li><a href="/solstice/jobs/{{ job.job_id }}/checkpoints" role="button" class="outline">Checkpoints</a></li>
+            <li><a href="/solstice/jobs/{{ job.job_id }}/lineage" role="button" class="outline">Lineage</a></li>
+        </ul>
+    </nav>
+    
+    <!-- Job Info -->
+    <section>
+        <div class="metrics-grid">
+            <div class="metric-card">
+                <div class="metric-value">{{ job.stage_count }}</div>
+                <div class="metric-label">Stages</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-value">{{ job.worker_count }}</div>
+                <div class="metric-label">Workers</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-value">{{ (job.last_update - job.start_time)|format_duration }}</div>
+                <div class="metric-label">Duration</div>
+            </div>
+        </div>
+    </section>
+    
+    <!-- Stages List -->
+    <section>
+        <h2>Stages</h2>
+        
+        {% if stages %}
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Stage ID</th>
+                        <th>Workers</th>
+                        <th>Queue Size</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for stage in stages %}
+                    <tr>
+                        <td class="monospace">{{ stage.stage_id }}</td>
+                        <td class="number">{{ stage.worker_count }}</td>
+                        <td class="number">{{ stage.output_queue_size }}</td>
+                        <td>
+                            {% if stage.is_running %}
+                            <span class="badge badge-running">RUNNING</span>
+                            {% elif stage.is_finished %}
+                            <span class="badge badge-completed">FINISHED</span>
+                            {% elif stage.failed %}
+                            <span class="badge badge-failed">FAILED</span>
+                            {% else %}
+                            <span class="badge badge-pending">PENDING</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <a href="/solstice/jobs/{{ job.job_id }}/stages/{{ stage.stage_id }}" role="button" class="outline small">
+                                Details
+                            </a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p><em>No stage information available</em></p>
+        {% endif %}
+    </section>
+    
+    <!-- DAG Visualization -->
+    {% if dag_edges %}
+    <section>
+        <h2>Stage DAG</h2>
+        <div class="dag-container">
+            <p><em>DAG visualization coming soon</em></p>
+            <details>
+                <summary>View DAG structure (JSON)</summary>
+                <pre style="font-size: 0.75rem;">{{ dag_edges|tojson(indent=2) }}</pre>
+            </details>
+        </div>
+    </section>
+    {% endif %}
+    
+    <!-- Links -->
+    <section>
+        <h3>External Links</h3>
+        <div style="display: flex; gap: 0.5rem;">
+            <a href="http://localhost:8265" target="_blank" rel="noopener" role="button" class="outline small">
+                Ray Dashboard ↗
+            </a>
+        </div>
+    </section>
+</article>
+{% endblock %}
+

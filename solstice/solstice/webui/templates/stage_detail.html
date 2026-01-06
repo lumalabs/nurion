@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+
+{% block title %}Stage {{ stage.stage_id }}{% endblock %}
+
+{% block content %}
+<article>
+    <header>
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div>
+                <nav aria-label="breadcrumb">
+                    <ul>
+                        <li><a href="/solstice/jobs/{{ job_id }}/">{{ job_id }}</a></li>
+                        <li>Stage: {{ stage.stage_id }}</li>
+                    </ul>
+                </nav>
+                <div style="margin-top: 0.5rem;">
+                    <span class="badge badge-{{ stage.is_running|yesno('running,completed') }}">
+                        {{ stage.is_running|yesno('RUNNING,STOPPED') }}
+                    </span>
+                    <span class="badge" style="background: var(--pico-secondary-background);">
+                        {{ stage.operator_type }}
+                    </span>
+                </div>
+            </div>
+            
+            {% if stage.backpressure_active %}
+            <span class="badge" style="background: #fef3c7; color: #92400e; font-size: 0.8rem; padding: 0.5rem;">
+                ⚠️ Backpressure Active
+            </span>
+            {% endif %}
+        </div>
+    </header>
+    
+    <!-- Metrics Cards -->
+    <section>
+        <div class="metrics-grid">
+            <div class="metric-card">
+                <div class="metric-value">{{ stage.worker_count }}</div>
+                <div class="metric-label">Workers ({{ stage.min_parallelism }}-{{ stage.max_parallelism }})</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-value">{{ stage.output_queue_size|format_number }}</div>
+                <div class="metric-label">Queue Size</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-value">{{ stage.input_records|default(0)|format_number }}</div>
+                <div class="metric-label">Input Records</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-value">{{ stage.output_records|default(0)|format_number }}</div>
+                <div class="metric-label">Output Records</div>
+            </div>
+        </div>
+    </section>
+    
+    <!-- Charts -->
+    <section>
+        <h2>Throughput</h2>
+        <div class="chart-container" style="height: 300px; background: var(--pico-card-background-color); border: 1px solid var(--pico-muted-border-color); border-radius: 8px; padding: 1rem;">
+            <canvas id="throughputChart"></canvas>
+        </div>
+    </section>
+    
+    <!-- Partitions -->
+    <section>
+        <h2>Partitions</h2>
+        {% if stage.partition_metrics %}
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Partition</th>
+                        <th>Lag</th>
+                        <th>Latest Offset</th>
+                        <th>Committed Offset</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for p in stage.partition_metrics %}
+                    <tr>
+                        <td>{{ p.partition_id }}</td>
+                        <td class="number">{{ p.lag|format_number }}</td>
+                        <td class="number">{{ p.latest_offset|format_number }}</td>
+                        <td class="number">{{ p.committed_offset|format_number }}</td>
+                        <td>
+                            {% if p.lag > 1000 %}
+                            <span class="badge badge-failed">HIGH LAG</span>
+                            {% else %}
+                            <span class="badge badge-running">OK</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p><em>No partition metrics available</em></p>
+        {% endif %}
+    </section>
+    
+    <!-- Workers -->
+    <section>
+        <h2>Workers</h2>
+        <div class="table-container" hx-get="/solstice/api/jobs/{{ job_id }}/workers?stage_id={{ stage.stage_id }}" hx-trigger="load">
+            <p class="text-center p-2">Loading workers...</p>
+        </div>
+    </section>
+
+</article>
+
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    // Initialize throughput chart
+    document.addEventListener('DOMContentLoaded', function() {
+        const ctx = document.getElementById('throughputChart').getContext('2d');
+        new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: [], // Time
+                datasets: [{
+                    label: 'Input (rec/s)',
+                    borderColor: '#2563eb',
+                    data: []
+                }, {
+                    label: 'Output (rec/s)',
+                    borderColor: '#16a34a',
+                    data: []
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: { beginAtZero: true }
+                }
+            }
+        });
+    });
+</script>
+{% endblock %}
+

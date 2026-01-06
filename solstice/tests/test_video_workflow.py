@@ -132,6 +132,7 @@ def test_video_slice_workflow_with_ray(ray_cluster):
         assert ds.count_rows() == 10, f"Expected 10 rows, got {ds.count_rows()}"
 
         from workflows.video_slice_workflow import create_job
+        from solstice.core.job import WebUIConfig
 
         filter_modulo = 4  # Keep every 4th slice
 
@@ -157,6 +158,14 @@ def test_video_slice_workflow_with_ray(ray_cluster):
                 "worker_memory_mb": 256,  # 256MB per worker
             },
         )
+        
+        # Enable WebUI for testing
+        job.config.webui = WebUIConfig(
+            enabled=True,
+            storage_path=os.path.join(tmp_dir, "webui-storage"),
+            prometheus_enabled=False,  # Disable Prometheus for test
+            port=8000,
+        )
 
         # Ray already initialized by ray_cluster fixture with correct excludes
         # Job config (queue_type, tansu_storage_url) is set in the workflow
@@ -164,6 +173,12 @@ def test_video_slice_workflow_with_ray(ray_cluster):
 
         async def run_pipeline():
             try:
+                logger.info("=" * 80)
+                if runner.webui_port:
+                    logger.info(f"WebUI available at: http://localhost:{runner.webui_port}{runner.webui_path}")
+                    logger.info(f"Portal: http://localhost:{runner.webui_port}/solstice/")
+                logger.info("=" * 80)
+                
                 await runner.run(timeout=600)
             finally:
                 await runner.stop()
