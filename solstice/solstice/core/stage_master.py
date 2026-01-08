@@ -843,15 +843,17 @@ class StageMaster:
             msg = stage_completed_message(
                 job_id=self.job_id,
                 stage_id=self.stage_id,
-                total_input_records=self._get_total_input_records(),
-                total_output_records=self._get_total_output_records(),
             )
             await self._state_producer.produce(msg)
         except Exception as e:
             self.logger.debug(f"Failed to emit stage completed: {e}")
 
     async def _emit_stage_metrics(self) -> None:
-        """Emit STAGE_METRICS event with aggregated worker data."""
+        """Emit STAGE_METRICS event with stage-level data.
+
+        Note: input_records and output_records are aggregated from WORKER_METRICS
+        by the state manager, not sent here.
+        """
         if not self._state_producer:
             return
 
@@ -868,24 +870,10 @@ class StageMaster:
                 job_id=self.job_id,
                 stage_id=self.stage_id,
                 worker_count=len(self._workers),
-                input_records=self._get_total_input_records(),
-                output_records=self._get_total_output_records(),
-                input_throughput=0.0,  # TODO: Calculate
-                output_throughput=0.0,  # TODO: Calculate
             )
-            await self._state_producer.produce_rate_limited(msg)
+            await self._state_producer.produce(msg)
         except Exception as e:
             self.logger.debug(f"Failed to emit stage metrics: {e}")
-
-    def _get_total_input_records(self) -> int:
-        """Get total input records from all workers."""
-        # TODO: Aggregate from worker metrics
-        return 0
-
-    def _get_total_output_records(self) -> int:
-        """Get total output records from all workers."""
-        # TODO: Aggregate from worker metrics
-        return 0
 
     async def cleanup_queue(self) -> None:
         """Clean up the output queue. Called by runner after all consumers are done."""
@@ -1513,8 +1501,7 @@ class StageWorker:
                 assigned_partitions=self.assigned_partitions,
                 is_running=self._running,
             )
-            # Use rate-limited produce
-            await self._state_producer.produce_rate_limited(msg)
+            await self._state_producer.produce(msg)
         except Exception as e:
             self.logger.debug(f"Failed to emit worker metrics: {e}")
 

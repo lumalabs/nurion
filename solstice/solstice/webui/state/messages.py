@@ -199,18 +199,13 @@ def stage_started_message(
 def stage_completed_message(
     job_id: str,
     stage_id: str,
-    total_input_records: int = 0,
-    total_output_records: int = 0,
 ) -> StateMessage:
     """Create a STAGE_COMPLETED message."""
     return StateMessage(
         message_type=StateMessageType.STAGE_COMPLETED,
         job_id=job_id,
         source_id=stage_id,
-        payload={
-            "total_input_records": total_input_records,
-            "total_output_records": total_output_records,
-        },
+        payload={},
     )
 
 
@@ -218,28 +213,18 @@ def stage_metrics_message(
     job_id: str,
     stage_id: str,
     worker_count: int,
-    input_records: int,
-    output_records: int,
-    input_throughput: float = 0.0,
-    output_throughput: float = 0.0,
-    queue_lag: int = 0,
-    backpressure_active: bool = False,
-    partition_metrics: Optional[Dict[int, Any]] = None,
 ) -> StateMessage:
-    """Create a STAGE_METRICS message."""
+    """Create a STAGE_METRICS message.
+
+    Note: input_records and output_records are aggregated from WORKER_METRICS
+    by the state manager, not sent by stage master.
+    """
     return StateMessage(
         message_type=StateMessageType.STAGE_METRICS,
         job_id=job_id,
         source_id=stage_id,
         payload={
             "worker_count": worker_count,
-            "input_records": input_records,
-            "output_records": output_records,
-            "input_throughput": input_throughput,
-            "output_throughput": output_throughput,
-            "queue_lag": queue_lag,
-            "backpressure_active": backpressure_active,
-            "partition_metrics": partition_metrics or {},
         },
     )
 

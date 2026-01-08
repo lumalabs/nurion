@@ -427,14 +427,8 @@ class JobStateManager:
 
                 state = self._stage_states[stage_id]
                 state.worker_count = msg.payload.get("worker_count", 0)
-                state.input_records = msg.payload.get("input_records", 0)
-                state.output_records = msg.payload.get("output_records", 0)
-                state.input_throughput = msg.payload.get("input_throughput", 0.0)
-                state.output_throughput = msg.payload.get("output_throughput", 0.0)
-                state.queue_lag = msg.payload.get("queue_lag", 0)
-                state.backpressure_active = msg.payload.get("backpressure_active", False)
-                state.partition_metrics = msg.payload.get("partition_metrics", {})
                 state.last_update = now
+                # Note: input_records/output_records are aggregated from WORKER_METRICS
 
             case StateMessageType.WORKER_STARTED:
                 worker_id = msg.source_id
