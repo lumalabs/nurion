@@ -235,13 +235,13 @@ class JobStorage:
         """Store split lineage data."""
         key = f"lineage:{split_id}"
         self.db.put(key.encode(), json.dumps(lineage_data).encode())
-        
+
         # Also create index by stage for efficient stage-scoped queries
         stage_id = lineage_data.get("stage_id", "")
         if stage_id:
             index_key = f"lineage_by_stage:{stage_id}:{split_id}"
             self.db.put(index_key.encode(), split_id.encode())
-        
+
         self.logger.debug(f"Stored lineage for split {split_id}")
 
     def store_split_lineage_with_children(
@@ -250,7 +250,7 @@ class JobStorage:
         lineage_data: Dict[str, Any],
     ) -> None:
         """Store split lineage data and update parent→child indexes atomically.
-        
+
         All writes are batched and flushed together to ensure consistency.
         SlateDB ensures atomicity of the flush operation.
         """
@@ -258,21 +258,21 @@ class JobStorage:
         # Main lineage record
         main_key = f"lineage:{split_id}"
         self.db.put(main_key.encode(), json.dumps(lineage_data).encode())
-        
+
         # Stage index
         stage_id = lineage_data.get("stage_id", "")
         if stage_id:
             index_key = f"lineage_by_stage:{stage_id}:{split_id}"
             self.db.put(index_key.encode(), split_id.encode())
-        
+
         # Parent→child reverse indexes
         for parent_id in lineage_data.get("parent_split_ids", []):
             parent_index_key = f"lineage_by_parent:{parent_id}:{split_id}"
             self.db.put(parent_index_key.encode(), split_id.encode())
-        
+
         # Flush all writes atomically
         self.db.flush()
-        
+
         self.logger.debug(f"Stored lineage with indexes for split {split_id}")
 
     def get_split_lineage(self, split_id: str) -> Optional[Dict[str, Any]]:

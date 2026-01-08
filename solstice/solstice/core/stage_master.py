@@ -74,7 +74,6 @@ from solstice.core.split_payload_store import SplitPayloadStore
 
 if TYPE_CHECKING:
     from solstice.core.stage import Stage
-    from solstice.core.models import Split
 
 
 @dataclass
@@ -954,57 +953,6 @@ class StageMaster:
             backpressure_active=self._backpressure_active,
         )
 
-    async def collect_metrics(self):
-        """Collect comprehensive stage metrics including partition-level information."""
-        from solstice.core.models import StageMetrics
-
-        # Check backpressure status
-        await self._check_backpressure()
-
-        # Get partition metrics and detect skew
-        partition_metrics = await self.get_partition_metrics()
-        skew_detected, skew_ratio, partition_lags = await self._detect_partition_skew()
-
-        # Aggregate metrics from all workers
-        total_input_records = 0
-        total_output_records = 0
-        total_processing_time = 0.0
-
-        if self._workers:
-            # Collect metrics from all workers in parallel
-            # Use ray.get with timeout to avoid blocking indefinitely
-            import ray
-
-            try:
-                for worker in self._workers.values():
-                    try:
-                        # Use ray.get with a short timeout
-                        wm = ray.get(worker.get_metrics.remote(), timeout=1.0)
-                        total_input_records += wm.input_records
-                        total_output_records += wm.output_records
-                        total_processing_time += wm.processing_time
-                    except Exception:
-                        # Worker might be busy or method not available
-                        continue
-            except Exception as e:
-                self.logger.debug(f"Failed to collect worker metrics: {e}")
-
-        return StageMetrics(
-            stage_id=self.stage_id,
-            worker_count=len(self._workers),
-            input_records=total_input_records,
-            output_records=total_output_records,
-            total_processing_time=total_processing_time,
-            pending_splits=0,  # Not applicable in queue-based model
-            inflight_results=0,  # Not applicable in queue-based model
-            output_buffer_size=0,  # Not applicable in queue-based model
-            backpressure_active=self._backpressure_active,
-            uptime_secs=time.time() - (self._start_time or time.time()),
-            partition_metrics=partition_metrics,
-            skew_detected=skew_detected,
-            skew_ratio=skew_ratio,
-        )
-
     async def get_input_queue_lag(self) -> int:
         """Get the input queue lag (messages pending to be processed).
 
@@ -1029,7 +977,7 @@ class StageMaster:
 
         return total_lag
 
-    async def _detect_partition_skew(
+    async def detect_partition_skew(
         self, skew_threshold: float = 2.0
     ) -> tuple[bool, float, Dict[int, int]]:
         """Detect partition-level skew in the input queue.
@@ -1810,9 +1758,11 @@ class StageWorker:
         output_bytes = 0
         if payload:
             # Estimate size from Arrow table
-            input_bytes = payload.data.nbytes if hasattr(payload.data, 'nbytes') else 0
+            input_bytes = payload.data.nbytes if hasattr(payload.data, "nbytes") else 0
         if output_payload:
-            output_bytes = output_payload.data.nbytes if hasattr(output_payload.data, 'nbytes') else 0
+            output_bytes = (
+                output_payload.data.nbytes if hasattr(output_payload.data, "nbytes") else 0
+            )
 
         payload_key = ""
         if output_payload:
@@ -1843,7 +1793,7 @@ class StageWorker:
             # The output split ID that downstream stages will use as parent
             # This must match the split_id in output_message
             output_split_id = f"{self.stage_id}_{message.split_id}"
-            
+
             # For source operators: no parents
             # For other operators: input message's split_id is the parent
             if is_source_message:
@@ -1933,7 +1883,7 @@ class StageWorker:
 
     def _should_track_lineage(self) -> bool:
         """Check if this split should be tracked based on sample rate.
-        
+
         - rate=0.0: never track (disabled)
         - rate=1.0: always track (full)
         - rate=0.x: probabilistic sampling
@@ -1944,6 +1894,7 @@ class StageWorker:
         if rate >= 1.0:
             return True
         import random
+
         return random.random() < rate
 
     async def _emit_split_lineage(

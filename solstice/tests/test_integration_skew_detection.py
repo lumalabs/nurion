@@ -440,24 +440,25 @@ class TestSkewMetricsCollection:
         await master.start()
 
         try:
-            metrics = await master.collect_metrics()
-
-            assert hasattr(metrics, "partition_metrics")
-            assert hasattr(metrics, "skew_detected")
-            assert hasattr(metrics, "skew_ratio")
+            partition_metrics = await master.get_partition_metrics()
+            skew_detected, skew_ratio, _ = await master.detect_partition_skew()
 
             # Verify partition metrics structure
-            assert isinstance(metrics.partition_metrics, dict)
-            for partition_id, pm in metrics.partition_metrics.items():
+            assert isinstance(partition_metrics, dict)
+            for partition_id, pm in partition_metrics.items():
                 assert isinstance(pm, PartitionMetrics)
                 assert pm.partition_id == partition_id
                 assert pm.lag >= 0
+
+            # Verify skew detection returns expected types
+            assert isinstance(skew_detected, bool)
+            assert isinstance(skew_ratio, float)
         finally:
             await master.stop()
 
     @pytest.mark.asyncio
-    async def test_metrics_serialization(self, payload_store, tansu_backend):
-        """Test that metrics can be serialized to dict."""
+    async def test_partition_metrics_serialization(self, payload_store, tansu_backend):
+        """Test that partition metrics can be serialized to dict."""
         config = StageConfig(max_workers=4, partition_count=4)
         stage = Stage(
             stage_id="test_stage",
@@ -488,17 +489,19 @@ class TestSkewMetricsCollection:
         await master.start()
 
         try:
-            metrics = await master.collect_metrics()
-            metrics_dict = metrics.to_dict()
+            partition_metrics = await master.get_partition_metrics()
 
-            assert "partition_metrics" in metrics_dict
-            assert "skew_detected" in metrics_dict
-            assert "skew_ratio" in metrics_dict
-
-            # Verify partition_metrics is a dict of dicts
-            assert isinstance(metrics_dict["partition_metrics"], dict)
-            for pid, pm_dict in metrics_dict["partition_metrics"].items():
-                assert isinstance(pm_dict, dict)
+            # Verify partition_metrics is a dict of PartitionMetrics
+            assert isinstance(partition_metrics, dict)
+            for pid, pm in partition_metrics.items():
+                assert isinstance(pm, PartitionMetrics)
+                # Verify PartitionMetrics can be converted to dict
+                pm_dict = {
+                    "partition_id": pm.partition_id,
+                    "lag": pm.lag,
+                    "latest_offset": pm.latest_offset,
+                    "committed_offset": pm.committed_offset,
+                }
                 assert "partition_id" in pm_dict
                 assert "lag" in pm_dict
         finally:

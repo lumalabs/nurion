@@ -58,9 +58,7 @@ async def list_stage_splits(
         List of split lineage records (sorted by timestamp, newest first)
     """
     if request.app.state.storage:
-        return request.app.state.storage.list_splits_by_stage(
-            job_id, stage_id, limit, offset
-        )
+        return request.app.state.storage.list_splits_by_stage(job_id, stage_id, limit, offset)
 
     return []
 

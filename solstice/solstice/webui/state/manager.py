@@ -198,7 +198,7 @@ class JobStateManager:
         job_id: str,
         queue_client: "QueueClient",
         state_topic: str,
-        storage: Optional["JobStorage"] = None,
+        storage: "JobStorage",
         window_size_s: float = 1.0,
         max_lag_s: float = 3.0,
         snapshot_interval_s: float = 30.0,
@@ -209,7 +209,7 @@ class JobStateManager:
             job_id: Job identifier
             queue_client: Tansu queue client for consuming
             state_topic: Topic name to consume from
-            storage: Optional SlateDB storage for snapshots
+            storage: SlateDB storage for snapshots
             window_size_s: Time window size for aggregation
             max_lag_s: Maximum wait time for late arrivals
             snapshot_interval_s: Interval for SlateDB snapshots
@@ -264,8 +264,7 @@ class JobStateManager:
             self._consume_task = None
 
         # Final snapshot
-        if self.storage:
-            await self._snapshot_to_storage()
+        await self._snapshot_to_storage()
 
         self.logger.info("JobStateManager stopped")
 
@@ -353,8 +352,7 @@ class JobStateManager:
                 # Periodic snapshot
                 now = time.time()
                 if now - self._last_snapshot_time >= self.snapshot_interval_s:
-                    if self.storage:
-                        await self._snapshot_to_storage()
+                    await self._snapshot_to_storage()
                     self._last_snapshot_time = now
 
             except asyncio.CancelledError:
@@ -462,7 +460,9 @@ class JobStateManager:
                     # Use final metrics from WORKER_STOPPED (more accurate than rate-limited WORKER_METRICS)
                     state.input_records = msg.payload.get("input_records", state.input_records)
                     state.output_records = msg.payload.get("output_records", state.output_records)
-                    state.processing_time = msg.payload.get("processing_time", state.processing_time)
+                    state.processing_time = msg.payload.get(
+                        "processing_time", state.processing_time
+                    )
                     state.last_update = now
 
                     # Update stage metrics with final worker values
@@ -547,7 +547,7 @@ class JobStateManager:
                         "status": "completed",
                         "timestamp": msg.timestamp,
                     }
-                    
+
                     # Store lineage record with parent→child index atomically
                     self.storage.store_split_lineage_with_children(split_id, lineage_data)
 
@@ -633,9 +633,6 @@ class JobStateManager:
         Stores job state, stage metrics, and worker history.
         This enables Portal to read all job info from storage.
         """
-        if not self.storage:
-            return
-
         try:
             now = time.time()
 

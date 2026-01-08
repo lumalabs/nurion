@@ -384,7 +384,7 @@ def split_processed_message(
     payload_storage_path: Optional[str] = None,
 ) -> StateMessage:
     """Create a SPLIT_PROCESSED message for lineage tracking.
-    
+
     Args:
         job_id: Job identifier
         stage_id: Stage identifier

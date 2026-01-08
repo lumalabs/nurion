@@ -257,6 +257,7 @@ def create_webui_app(
 
     # Include lineage API router
     from solstice.webui.api.lineage import router as lineage_router
+
     app.include_router(lineage_router, prefix="/api")
 
     @app.get("/api/jobs")

@@ -69,7 +69,7 @@ class JobStorageWriter(Protocol):
         lineage_data: Dict[str, Any],
     ) -> None:
         """Store split lineage data and update parent→child indexes atomically.
-        
+
         This ensures consistency between lineage records and reverse indexes.
         All writes happen in a single transaction/batch.
         """
@@ -176,7 +176,7 @@ class JobStorageReader(Protocol):
 
     def get_lineage_overview(self, job_id: str) -> Dict[str, Any]:
         """Get stage-level lineage overview with aggregated statistics.
-        
+
         Returns:
             Dict with:
             - 'stages': list of {stage_id, splits_count, total_rows, total_bytes}
@@ -192,7 +192,7 @@ class JobStorageReader(Protocol):
         split_id: str,
     ) -> Dict[str, Any]:
         """Get complete lineage trace for a split (both upstream and downstream).
-        
+
         Returns:
             Dict with:
             - 'splits': list of split details ordered by stage
