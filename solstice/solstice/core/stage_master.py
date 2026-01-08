@@ -1598,6 +1598,12 @@ class StageWorker:
 
             # Safety check: ensure we have partitions
             if not active_partitions:
+                # If upstream is finished and we have no partitions, we're done
+                if self._upstream_finished:
+                    self.logger.info(
+                        f"Worker {self.worker_id} finished: no partitions and upstream done"
+                    )
+                    break
                 await asyncio.sleep(0.5)
                 continue
 
