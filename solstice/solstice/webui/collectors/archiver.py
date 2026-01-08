@@ -113,10 +113,19 @@ class JobArchiver:
                             f"Using stored metrics for {stage_id}: in={input_records}, out={output_records}"
                         )
 
+                # Determine stage status
+                if stage_status.failed:
+                    stage_final_status = "FAILED"
+                elif stage_status.is_finished:
+                    stage_final_status = "COMPLETED"
+                else:
+                    stage_final_status = "RUNNING"  # Should not happen during archive
+
                 stages.append(
                     {
                         "stage_id": stage_id,
                         "operator_type": type(master.stage.operator_config).__name__,
+                        "status": stage_final_status,  # Add explicit status field
                         "min_parallelism": master.config.min_workers,
                         "max_parallelism": master.config.max_workers,
                         "final_worker_count": stage_status.worker_count,

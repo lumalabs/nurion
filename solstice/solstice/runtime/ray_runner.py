@@ -242,6 +242,7 @@ class RayJobRunner:
             num_cpus=worker_res.get("num_cpus", 1.0),
             num_gpus=worker_res.get("num_gpus", 0.0),
             memory_mb=int(worker_res.get("memory", 0) / (1024**2)),
+            lineage_sample_rate=self.job.config.webui.lineage_sample_rate,
         )
 
     def _stage_info(self, stage: "Stage") -> Dict[str, Any]:
