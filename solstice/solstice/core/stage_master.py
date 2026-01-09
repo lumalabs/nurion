@@ -66,7 +66,6 @@ from solstice.queue import (
     QueueClient,
     MemoryBroker,
     MemoryClient,
-    TansuBrokerManager,
     TansuQueueClient,
 )
 from solstice.utils.logging import create_ray_logger
@@ -129,6 +128,10 @@ class StageConfig:
     upstream_endpoint: Optional["QueueEndpoint"] = None
     upstream_topic: Optional[str] = None
 
+    # Shared broker endpoint (set by runner, required for TANSU queue type)
+    # All stages connect to this single broker instead of creating their own
+    shared_broker_endpoint: Optional["QueueEndpoint"] = None
+
     # State push connection (for WebUI metrics)
     state_endpoint: Optional["QueueEndpoint"] = None
     state_topic: Optional[str] = None
@@ -152,12 +155,23 @@ class StageConfig:
         }
 
 
+class MessageType:
+    """Message types for inter-stage communication."""
+
+    DATA = "data"  # Normal data message
+    EOF = "eof"  # End-of-stream marker - no more messages after this
+
+
 @dataclass
 class QueueMessage:
     """Message format for inter-stage communication.
 
     The actual data payload is stored in SplitPayloadStore,
     only the reference key is passed through the queue.
+
+    Message types:
+    - DATA: Normal data message with payload
+    - EOF: End-of-stream marker, signals no more messages in this partition
     """
 
     message_id: str
@@ -165,6 +179,7 @@ class QueueMessage:
     payload_key: str  # Key to lookup SplitPayload in SplitPayloadStore
     metadata: Dict[str, Any] = field(default_factory=dict)
     timestamp: float = field(default_factory=time.time)
+    message_type: str = MessageType.DATA  # DATA or EOF
 
     def to_bytes(self) -> bytes:
         return json.dumps(
@@ -174,13 +189,32 @@ class QueueMessage:
                 "payload_key": self.payload_key,
                 "metadata": self.metadata,
                 "timestamp": self.timestamp,
+                "message_type": self.message_type,
             }
         ).encode()
 
     @classmethod
     def from_bytes(cls, data: bytes) -> "QueueMessage":
         d = json.loads(data.decode())
+        # Handle backward compatibility - old messages without message_type
+        if "message_type" not in d:
+            d["message_type"] = MessageType.DATA
         return cls(**d)
+
+    def is_eof(self) -> bool:
+        """Check if this is an end-of-stream marker."""
+        return self.message_type == MessageType.EOF
+
+    @classmethod
+    def create_eof(cls, partition: int) -> "QueueMessage":
+        """Create an EOF marker message for a partition."""
+        return cls(
+            message_id=f"eof_partition_{partition}",
+            split_id="",
+            payload_key="",
+            message_type=MessageType.EOF,
+            metadata={"partition": partition},
+        )
 
 
 @dataclass
@@ -189,7 +223,7 @@ class StageStatus:
 
     stage_id: str
     worker_count: int
-    output_queue_size: int
+    output_queue_size: int  # Real-time progress indicator (records in output queue)
     is_running: bool
     is_finished: bool
     failed: bool = False
@@ -276,8 +310,8 @@ class StageMaster:
         # SplitPayloadStore - shared across all stages
         self.payload_store = payload_store
 
-        # Output queue (managed by master)
-        self._output_broker: Optional[TansuBrokerManager | MemoryBroker] = None
+        # Output queue (managed by master, only for Memory queue type)
+        self._output_broker: Optional[MemoryBroker] = None
         self._output_queue = None  # MemoryClient or TansuQueueClient
         self._output_topic = f"{job_id}_{self.stage_id}_output"
 
@@ -293,6 +327,9 @@ class StageMaster:
         self._partition_assignments: Dict[str, List[int]] = {}
         self._partition_count: Optional[int] = None  # Cached after output queue creation
         self._upstream_partition_count: Optional[int] = None  # Cached upstream partition count
+
+        # Target worker count (used during startup for correct partition assignment)
+        self._target_worker_count: int = self.config.min_workers
 
         # State
         self._running = False
@@ -390,38 +427,41 @@ class StageMaster:
         return self._upstream_partition_count
 
     async def _create_queue(self) -> QueueClient:
-        """Create the appropriate queue backend with dynamic partition count."""
-        # Compute partition count
+        """Connect to shared broker and create output topic.
+
+        All stages use the same shared broker managed by RayJobRunner.
+        This reduces resource usage and improves stability.
+        """
         partition_count = self._compute_partition_count()
 
-        # MEMORY - only for single-process testing; clamp partition count
-        if self.config.queue_type != QueueType.TANSU and partition_count > 1:
-            self.logger.warning(
-                f"Memory backend doesn't support multiple partitions. "
-                f"Using 1 partition instead of {partition_count}"
-            )
-            partition_count = 1
-
         if self.config.queue_type == QueueType.TANSU:
-            # Tansu: Start broker + create client
-            self._output_broker = TansuBrokerManager(
-                storage_url=self.config.tansu_storage_url or "memory://tansu/",
-            )
-            await self._output_broker.start()
+            # TANSU: Connect to shared broker (required)
+            endpoint = self.config.shared_broker_endpoint
+            if not endpoint:
+                raise RuntimeError(
+                    f"Stage {self.stage_id}: shared_broker_endpoint is required for TANSU queue type"
+                )
 
-            broker_url = self._output_broker.get_broker_url()
-            host, port_str = broker_url.split(":")
+            broker_url = f"{endpoint.host}:{endpoint.port}"
             queue = TansuQueueClient(broker_url)
             await queue.start()
 
             self._output_endpoint = QueueEndpoint(
                 queue_type=self.config.queue_type,
-                host=host,
-                port=int(port_str),
-                storage_url=self.config.tansu_storage_url or "memory://tansu/",
+                host=endpoint.host,
+                port=endpoint.port,
+                storage_url=endpoint.storage_url,
             )
+            self.logger.info(f"Connected to shared broker at {broker_url}")
         else:
-            # Memory: Start broker + create client
+            # MEMORY: Create local broker (for testing only)
+            if partition_count > 1:
+                self.logger.warning(
+                    f"Memory backend doesn't support multiple partitions. "
+                    f"Using 1 partition instead of {partition_count}"
+                )
+                partition_count = 1
+
             self._output_broker = MemoryBroker()
             await self._output_broker.start()
 
@@ -434,11 +474,6 @@ class StageMaster:
                 port=0,
                 storage_url=self._output_broker.get_broker_url(),
             )
-
-        self.logger.info(
-            f"Created {self.config.queue_type} backend on {self._output_endpoint.host}:{self._output_endpoint.port} "
-            f"with {partition_count} partition(s)"
-        )
 
         await queue.create_topic(self._output_topic, partitions=partition_count)
         self.logger.info(f"Created topic {self._output_topic} with {partition_count} partition(s)")
@@ -459,6 +494,9 @@ class StageMaster:
         self._start_time = time.time()
         self._running = True
 
+        # Store target worker count for correct partition assignment
+        self._target_worker_count = self.config.min_workers
+
         # Create output queue
         self._output_queue = await self._create_queue()
 
@@ -466,12 +504,6 @@ class StageMaster:
         for i in range(self.config.min_workers):
             # is_min_worker=True means failure will raise RuntimeError
             await self._spawn_worker_with_resource_check(is_min_worker=True)
-
-        # Rebalance partitions after all workers are spawned
-        # This ensures all workers have consistent, non-overlapping assignments
-        if self._workers:
-            self._rebalance_partitions()
-            await self._notify_workers_partition_update()
 
         # Initialize state producer and emit stage started event
         await self._init_state_producer()
@@ -531,6 +563,9 @@ class StageMaster:
         """Spawn a new worker without resource checking.
 
         Returns the worker_id of the spawned worker.
+
+        Uses _target_worker_count (set during start()) to compute correct partition
+        assignments from the beginning, avoiding the need for rebalancing.
         """
         worker_index = len(self._workers)
         worker_id = f"{self.stage_id}_w{worker_index}_{uuid.uuid4().hex[:6]}"
@@ -539,21 +574,18 @@ class StageMaster:
         if self._partition_count is None:
             self._partition_count = self._compute_partition_count()
 
-        # Get partition count for worker assignment:
-        # - For non-source stages: use upstream topic's partition count
-        # - For source stages: use output partition count (workers don't consume from upstream)
+        # Get partition count for worker assignment
         if self.upstream_endpoint and self.upstream_topic:
-            # Non-source stage: partitions based on upstream topic
             partition_count = await self._get_upstream_partition_count()
         else:
-            # Source stage: no upstream to consume from
             partition_count = self._partition_count
 
-        # Compute initial partition assignment for this new worker
-        # This will be updated by rebalance after worker is added
-        # When partition_count < num_workers, some workers will have empty assignments
-        num_workers = len(self._workers) + 1
+        # Use target worker count for correct partition assignment
+        # This ensures all partitions are correctly distributed even when
+        # workers are spawned one at a time during start()
+        num_workers = getattr(self, '_target_worker_count', len(self._workers) + 1)
         assigned_partitions = [p for p in range(partition_count) if p % num_workers == worker_index]
+        self._partition_assignments[worker_id] = assigned_partitions
 
         # Create worker actor
         resources = {}
@@ -585,7 +617,6 @@ class StageMaster:
         )
 
         self._workers[worker_id] = worker
-        self._partition_assignments[worker_id] = assigned_partitions
 
         # Start worker run loop
         task = worker.run.remote()
@@ -737,6 +768,10 @@ class StageMaster:
 
                 await asyncio.sleep(0.1)
 
+            # Send EOF markers to all output partitions
+            # This signals downstream stages that no more data will come
+            await self._send_eof_markers()
+
             # Emit stage completed event
             await self._emit_stage_completed()
 
@@ -832,6 +867,34 @@ class StageMaster:
         except Exception as e:
             self.logger.debug(f"Failed to emit stage started: {e}")
 
+    async def _send_eof_markers(self) -> None:
+        """Send EOF markers to all output partitions.
+
+        This signals downstream stages that no more data will come from this stage.
+        Each partition gets an EOF message, and downstream workers track which
+        partitions have received EOF to determine when to stop.
+        """
+        if not self._output_queue:
+            return
+
+        partition_count = self._partition_count or 1
+
+        for partition in range(partition_count):
+            try:
+                eof_message = QueueMessage.create_eof(partition)
+                await self._output_queue.produce(
+                    self._output_topic,
+                    eof_message.to_bytes(),
+                    partition=partition,
+                )
+                self.logger.debug(f"Sent EOF marker to partition {partition}")
+            except Exception as e:
+                self.logger.warning(f"Failed to send EOF to partition {partition}: {e}")
+
+        self.logger.info(
+            f"Stage {self.stage_id} sent EOF markers to {partition_count} partitions"
+        )
+
     async def _emit_stage_completed(self) -> None:
         """Emit STAGE_COMPLETED event."""
         if not self._state_producer:
@@ -909,11 +972,14 @@ class StageMaster:
         return self._output_topic
 
     def get_status(self) -> StageStatus:
-        """Get current stage status."""
+        """Get current stage status.
+
+        For real-time progress, use output_queue_size from get_status_async().
+        """
         return StageStatus(
             stage_id=self.stage_id,
             worker_count=len(self._workers),
-            output_queue_size=0,  # Use async get_status_async for queue size
+            output_queue_size=0,  # Use get_status_async() for queue size
             is_running=self._running,
             is_finished=self._finished,
             failed=self._failed,
@@ -922,7 +988,11 @@ class StageMaster:
         )
 
     async def get_status_async(self) -> StageStatus:
-        """Get current stage status with queue metrics."""
+        """Get current stage status with queue metrics.
+
+        output_queue_size is the real-time progress indicator,
+        representing records successfully written to the output queue.
+        """
         output_size = 0
         if self._output_queue:
             try:
@@ -1547,11 +1617,16 @@ class StageWorker:
         """Process messages from upstream queue from all assigned partitions.
 
         Completion criteria:
-        - When upstream is finished AND we've consumed all messages from all assigned partitions
-        - Exit immediately when both conditions are met
+        - When EOF markers have been received for ALL assigned partitions
+        - EOF markers are sent by upstream stage when it completes
+
+        This is more reliable than polling-based completion detection because:
+        1. No race conditions - EOF is guaranteed to come after all data
+        2. No need for offset queries - just track EOF receipt
+        3. Faster completion - no need for multiple empty polls
         """
-        consecutive_empty = 0
         last_committed_offsets: Dict[int, int] = {}  # Track offsets per partition
+        eof_received: set = set()  # Track which partitions have received EOF
         current_partition_idx = 0  # Round-robin index for partition polling
         active_partitions = list(self.assigned_partitions)  # Local copy
 
@@ -1575,7 +1650,6 @@ class StageWorker:
                 removed = old_partitions - new_partitions
                 for p in removed:
                     if p in last_committed_offsets:
-                        # Commit final offset before removing
                         try:
                             await self.upstream_queue.commit_offset(
                                 self.consumer_group,
@@ -1588,17 +1662,14 @@ class StageWorker:
                                 f"Failed to commit offset for removed partition {p}: {e}"
                             )
                         del last_committed_offsets[p]
+                    eof_received.discard(p)
 
                 self.logger.info(
                     f"Worker {self.worker_id} switched to partitions {active_partitions}"
                 )
 
-                # Reset empty poll counter since we have new partitions
-                consecutive_empty = 0
-
             # Safety check: ensure we have partitions
             if not active_partitions:
-                # If upstream is finished and we have no partitions, we're done
                 if self._upstream_finished:
                     self.logger.info(
                         f"Worker {self.worker_id} finished: no partitions and upstream done"
@@ -1607,55 +1678,59 @@ class StageWorker:
                 await asyncio.sleep(0.5)
                 continue
 
-            # Round-robin across assigned partitions
-            partition = active_partitions[current_partition_idx]
-            current_partition_idx = (current_partition_idx + 1) % len(active_partitions)
+            # Check if all partitions have received EOF
+            if eof_received >= set(active_partitions):
+                self.logger.info(
+                    f"Worker {self.worker_id} finished: received EOF from all "
+                    f"{len(active_partitions)} partitions"
+                )
+                break
+
+            # Round-robin across assigned partitions (skip EOF'd partitions)
+            partitions_to_poll = [p for p in active_partitions if p not in eof_received]
+            if not partitions_to_poll:
+                # All partitions have EOF, exit
+                break
+
+            partition = partitions_to_poll[current_partition_idx % len(partitions_to_poll)]
+            current_partition_idx = (current_partition_idx + 1) % len(partitions_to_poll)
 
             # Fetch batch from current partition
+            # IMPORTANT: Must use consumer_group to share offset state with commit_offset
             records = await self.upstream_queue.fetch(
                 self.upstream_topic,
-                # offset=None to use consumer's current position (auto-managed)
                 max_records=self.config.batch_size,
-                timeout_ms=1000,  # Shorter timeout for faster completion detection
+                timeout_ms=1000,
                 partition=partition,
+                group_id=self.consumer_group,
             )
 
-            # Debug: Check queue status periodically
-            if consecutive_empty == 0 or consecutive_empty % 10 == 0:
-                self.logger.debug(
-                    f"Fetch from partition {partition} got {len(records)} records, "
-                    f"empty polls: {consecutive_empty}, upstream_finished: {self._upstream_finished}"
-                )
-
             if not records:
-                consecutive_empty += 1
-
-                # Check if we should stop: upstream finished AND queue exhausted
-                # Need consecutive empty polls across ALL partitions
-                if self._upstream_finished:
-                    # Require more empty polls when handling multiple partitions
-                    min_empty_polls = 50 * len(active_partitions)
-                    if consecutive_empty >= min_empty_polls:
-                        self.logger.info(
-                            f"Worker {self.worker_id} finished: upstream done, "
-                            f"no new data for {consecutive_empty} polls across {len(active_partitions)} partitions"
-                        )
-                        break
-
-                # Don't wait too long if upstream is finished
-                if self._upstream_finished:
-                    await asyncio.sleep(0.05)  # Quick check
-                else:
-                    await asyncio.sleep(0.1)
+                await asyncio.sleep(0.05)
                 continue
 
-            consecutive_empty = 0
+            # Debug: Log first batch fetched
+            if self._processed_count == 0 and records:
+                self.logger.info(
+                    f"Worker {self.worker_id} first fetch: {len(records)} records, "
+                    f"offset range [{records[0].offset}-{records[-1].offset}]"
+                )
 
-            # Process each record and track offsets per partition
-            # Note: 'partition' variable is from the round-robin loop above
+            # Process each record
             for record in records:
                 try:
                     message = QueueMessage.from_bytes(record.value)
+
+                    # Check for EOF marker
+                    if message.is_eof():
+                        eof_received.add(partition)
+                        self.logger.info(
+                            f"Worker {self.worker_id} received EOF for partition {partition} "
+                            f"({len(eof_received)}/{len(active_partitions)} complete)"
+                        )
+                        # Don't process EOF as a regular message
+                        continue
+
                     await self._process_message(message, partition_id=partition)
                     self._processed_count += 1
                 except Exception as e:
@@ -1666,7 +1741,6 @@ class StageWorker:
                     )
                     self.logger.debug(f"Traceback: {traceback.format_exc()}")
                     self._error_count += 1
-                    # Continue processing - don't block on single errors
 
                 # Track the highest offset for this partition
                 current_offset = record.offset + 1
@@ -1675,7 +1749,7 @@ class StageWorker:
                     current_offset,
                 )
 
-            # Commit offset periodically for all assigned partitions
+            # Commit offset periodically
             if time.time() - self._last_commit_time > self.config.commit_interval_ms / 1000:
                 for p, offset in last_committed_offsets.items():
                     await self.upstream_queue.commit_offset(

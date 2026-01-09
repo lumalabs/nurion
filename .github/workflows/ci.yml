@@ -211,7 +211,7 @@ jobs:
         SOLSTICE_TEST_VIDEO_LIMIT: "20"
       run: |
         cd solstice
-        uv run pytest tests/ -v --tb=short -m "not integration"
+        uv run pytest tests/ -v --tb=short -m "not integration and not chaos"
     
     - name: Print Ray logs on failure
       if: failure()
@@ -374,6 +374,67 @@ jobs:
       run: |
         cd aether
         docker compose down -v
+
+  test-solstice-chaos:
+    name: Solstice Chaos Tests
+    runs-on: ubuntu-latest
+    # Chaos tests are experimental and may be flaky - doesn't block PR merge
+    continue-on-error: true
+    
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Get changed files
+      id: changed-files
+      uses: tj-actions/changed-files@v45
+      with:
+        files: |
+          solstice/**
+    
+    - name: Skip if no Solstice changes
+      if: steps.changed-files.outputs.any_changed == 'false' && github.event_name == 'pull_request'
+      run: echo "No Solstice files changed, skipping..."
+    
+    - name: Set up Rust
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      uses: dtolnay/rust-toolchain@stable
+    
+    - name: Install uv
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      uses: astral-sh/setup-uv@v4
+      with:
+        version: "latest"
+    
+    - name: Set up Python 3.12
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      run: uv python install 3.12
+      
+    - name: Install dependencies
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      run: |
+        cd solstice
+        uv sync --dev --python 3.12
+    
+    - name: Run chaos tests
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      run: |
+        cd solstice
+        uv run pytest tests/ -v --tb=short -m "chaos" --timeout=600
+    
+    - name: Print Ray logs on failure
+      if: failure()
+      run: |
+        echo "=== Ray Session Logs ==="
+        if [ -d /tmp/ray ]; then
+          find /tmp/ray -name "*.log" -type f 2>/dev/null | head -20 | while read f; do
+            echo "=== $f ==="
+            tail -200 "$f" 2>/dev/null || true
+          done
+        else
+          echo "No Ray logs found in /tmp/ray"
+        fi
 
   test-solstice-video-workflow:
     name: Solstice Video Workflow Test
