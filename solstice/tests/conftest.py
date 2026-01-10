@@ -475,8 +475,9 @@ def ray_cluster():
         pass
     ray.shutdown()
     # Wait for Ray to fully shutdown before next test
+    # aiokafka background threads may still be reconnecting
     import time
-    time.sleep(0.5)
+    time.sleep(2.0)
 
 
 @pytest_asyncio.fixture

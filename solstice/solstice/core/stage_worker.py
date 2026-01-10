@@ -319,6 +319,8 @@ class StageWorker:
 
     def get_status(self) -> Dict[str, Any]:
         """Get current worker status. Used for health checks and monitoring."""
+        import os
+
         return {
             "worker_id": self.worker_id,
             "stage_id": self.stage_id,
@@ -327,6 +329,7 @@ class StageWorker:
             "error_count": self._error_count,
             "upstream_finished": self._upstream_finished,
             "assigned_partitions": self.assigned_partitions,
+            "pid": os.getpid(),
         }
 
     async def _process_from_upstream(self) -> None:
@@ -449,12 +452,15 @@ class StageWorker:
                             f"({len(eof_received)}/{len(active_partitions)} complete)"
                         )
                         # Commit offset for EOF marker immediately
+                        eof_offset = record.offset + 1
                         await self.upstream_queue.commit_offset(
                             self.consumer_group,
                             self.upstream_topic,
-                            record.offset + 1,
+                            eof_offset,
                             partition=partition,
                         )
+                        # Update last_committed_offsets to prevent final commit from rolling back
+                        last_committed_offsets[partition] = eof_offset
                         continue
 
                     await self._process_message(message, partition_id=partition)
