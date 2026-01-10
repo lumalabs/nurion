@@ -432,7 +432,11 @@ class StageWorker:
                     f"offset range [{records[0].offset}-{records[-1].offset}]"
                 )
 
-            # Process each record
+            # Process each record with frequent commits for exactly-once semantics.
+            # Commit every N messages (config.commit_batch_size) to balance performance vs duplicate risk.
+            commit_batch_size = self.config.commit_batch_size
+            messages_since_commit = 0
+
             for record in records:
                 try:
                     message = QueueMessage.from_bytes(record.value)
@@ -444,11 +448,18 @@ class StageWorker:
                             f"Worker {self.worker_id} received EOF for partition {partition} "
                             f"({len(eof_received)}/{len(active_partitions)} complete)"
                         )
-                        # Don't process EOF as a regular message
+                        # Commit offset for EOF marker immediately
+                        await self.upstream_queue.commit_offset(
+                            self.consumer_group,
+                            self.upstream_topic,
+                            record.offset + 1,
+                            partition=partition,
+                        )
                         continue
 
                     await self._process_message(message, partition_id=partition)
                     self._processed_count += 1
+
                 except Exception as e:
                     import traceback
 
@@ -458,15 +469,23 @@ class StageWorker:
                     self.logger.debug(f"Traceback: {traceback.format_exc()}")
                     self._error_count += 1
 
-                # Track the highest offset for this partition
+                # Track offset for this partition
                 current_offset = record.offset + 1
-                last_committed_offsets[partition] = max(
-                    last_committed_offsets.get(partition, 0),
-                    current_offset,
-                )
+                last_committed_offsets[partition] = current_offset
+                messages_since_commit += 1
 
-            # Commit offset periodically
-            if time.time() - self._last_commit_time > self.config.commit_interval_ms / 1000:
+                # Commit frequently to minimize duplicate window
+                if messages_since_commit >= commit_batch_size:
+                    await self.upstream_queue.commit_offset(
+                        self.consumer_group,
+                        self.upstream_topic,
+                        current_offset,
+                        partition=partition,
+                    )
+                    messages_since_commit = 0
+
+            # Final commit for any remaining messages in this batch
+            if messages_since_commit > 0:
                 for p, offset in last_committed_offsets.items():
                     await self.upstream_queue.commit_offset(
                         self.consumer_group,
@@ -474,7 +493,7 @@ class StageWorker:
                         offset,
                         partition=p,
                     )
-                self._last_commit_time = time.time()
+            self._last_commit_time = time.time()
 
         # Final commit for all assigned partitions
         if self.upstream_queue and last_committed_offsets:

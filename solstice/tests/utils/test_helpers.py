@@ -208,9 +208,10 @@ async def scale_stage_workers(
     current = len(master._workers)
 
     if target_count > current:
-        # Scale up
+        # Scale up using worker manager
+        partition_count = master._partition_count
         for _ in range(target_count - current):
-            await master._spawn_worker()
+            await master._worker_manager.spawn_worker(partition_count=partition_count)
     elif target_count < current:
         # Scale down
         workers_to_remove = current - target_count
