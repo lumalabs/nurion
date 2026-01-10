@@ -143,9 +143,7 @@ jobs:
       with:
         version: "latest"
         enable-cache: true
-        cache-dependency-glob: |
-          aether/uv.lock
-          solstice/uv.lock
+        cache-dependency-glob: "uv.lock"
     
     - name: Set up Python 3.13
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
@@ -215,7 +213,7 @@ jobs:
       with:
         version: "latest"
         enable-cache: true
-        cache-dependency-glob: "aether/uv.lock"
+        cache-dependency-glob: "uv.lock"
     
     - name: Set up Python 3.13
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
@@ -288,7 +286,7 @@ jobs:
       with:
         version: "latest"
         enable-cache: true
-        cache-dependency-glob: "solstice/uv.lock"
+        cache-dependency-glob: "uv.lock"
     
     - name: Set up Python 3.12
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
@@ -413,7 +411,7 @@ jobs:
       with:
         version: "latest"
         enable-cache: true
-        cache-dependency-glob: "solstice/uv.lock"
+        cache-dependency-glob: "uv.lock"
     
     - name: Set up Python 3.12
       run: uv python install 3.12
@@ -505,7 +503,7 @@ jobs:
       with:
         version: "latest"
         enable-cache: true
-        cache-dependency-glob: "solstice/uv.lock"
+        cache-dependency-glob: "uv.lock"
     
     - name: Set up Python 3.12
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
@@ -596,7 +594,7 @@ jobs:
       with:
         version: "latest"
         enable-cache: true
-        cache-dependency-glob: "solstice/uv.lock"
+        cache-dependency-glob: "uv.lock"
     
     - name: Set up Python 3.12
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
