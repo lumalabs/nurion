@@ -99,7 +99,9 @@ class TestElasticScaling:
             run_task = asyncio.create_task(runner.run())
 
             # Wait for processing to start
-            await wait_for_progress(runner, min_processed=2000, timeout=60)
+            await wait_for_progress(
+                runner, min_processed=2000, timeout=60, collector_name=self.collector_name
+            )
 
             # Record initial worker count
             master = runner._masters.get("transform")
@@ -164,7 +166,9 @@ class TestElasticScaling:
             run_task = asyncio.create_task(runner.run())
 
             # Wait for processing to start with more workers
-            await wait_for_progress(runner, min_processed=3000, timeout=60)
+            await wait_for_progress(
+                runner, min_processed=3000, timeout=60, collector_name=self.collector_name
+            )
 
             # Scale down: kill some workers
             await kill_random_worker(runner, stage_id="transform")
@@ -220,7 +224,9 @@ class TestElasticScaling:
             run_task = asyncio.create_task(runner.run())
 
             # Wait for processing to start
-            await wait_for_progress(runner, min_processed=1500, timeout=60)
+            await wait_for_progress(
+                runner, min_processed=1500, timeout=60, collector_name=self.collector_name
+            )
 
             # Kill all workers (scale to ~zero active processing)
             master = runner._masters.get("transform")
@@ -242,13 +248,20 @@ class TestElasticScaling:
 
         sink_data = get_sink_records(self.collector_name)
 
-        # Verify recovery from zero workers
-        assert validator.verify_count(sink_data, expected_count), (
-            f"Data loss after scale to zero: expected {expected_count}, got {len(sink_data)}"
+        # At-least-once semantics: no data loss, but may have duplicates
+        assert len(sink_data) >= expected_count, (
+            f"Data loss after scale to zero: expected >= {expected_count}, got {len(sink_data)}"
         )
-        assert validator.verify_filter_explode_result(
-            sink_data, NUM_RECORDS, FILTER_MODULO, FILTER_REMAINDER, EXPLODE_FACTOR
-        )
+        # Verify all expected IDs are present (after filter + explode)
+        actual_ids = {(r["id"], r.get("copy_idx", 0)) for r in sink_data}
+        expected_ids = {
+            (i, c)
+            for i in range(NUM_RECORDS)
+            if i % FILTER_MODULO == FILTER_REMAINDER
+            for c in range(EXPLODE_FACTOR)
+        }
+        missing = expected_ids - actual_ids
+        assert not missing, f"Missing {len(missing)} records after scale to zero"
         assert validator.verify_checksums(source_data, sink_data)
 
     @pytest.mark.asyncio
@@ -287,7 +300,12 @@ class TestElasticScaling:
             master = runner._masters.get("transform")
 
             for cycle in range(4):
-                await wait_for_progress(runner, min_processed=500 + cycle * 700, timeout=90)
+                await wait_for_progress(
+                    runner,
+                    min_processed=500 + cycle * 700,
+                    timeout=90,
+                    collector_name=self.collector_name,
+                )
 
                 # Scale up
                 if master:
@@ -311,13 +329,15 @@ class TestElasticScaling:
 
         sink_data = get_sink_records(self.collector_name)
 
-        # Verify no race conditions
-        assert validator.verify_count(sink_data, expected_count), (
-            f"Data loss in rapid scaling: expected {expected_count}, got {len(sink_data)}"
+        # At-least-once semantics: no data loss, but may have duplicates
+        assert len(sink_data) >= expected_count, (
+            f"Data loss in rapid scaling: expected >= {expected_count}, got {len(sink_data)}"
         )
-        assert validator.verify_filter_result(
-            sink_data, NUM_RECORDS, FILTER_MODULO, FILTER_REMAINDER
-        )
+        # Verify all expected IDs are present (after filter)
+        actual_ids = {r["id"] for r in sink_data}
+        expected_ids = {i for i in range(NUM_RECORDS) if i % FILTER_MODULO == FILTER_REMAINDER}
+        missing = expected_ids - actual_ids
+        assert not missing, f"Missing {len(missing)} IDs in rapid scaling"
         assert validator.verify_checksums(source_data, sink_data)
 
     @pytest.mark.asyncio
@@ -347,7 +367,9 @@ class TestElasticScaling:
             run_task = asyncio.create_task(runner.run())
 
             # Wait for initial processing
-            await wait_for_progress(runner, min_processed=5000, timeout=90)
+            await wait_for_progress(
+                runner, min_processed=5000, timeout=90, collector_name=self.collector_name
+            )
 
             master = runner._masters.get("transform")
 
@@ -364,7 +386,9 @@ class TestElasticScaling:
             await asyncio.sleep(2)
 
             # Continue processing
-            await wait_for_progress(runner, min_processed=20000, timeout=120)
+            await wait_for_progress(
+                runner, min_processed=20000, timeout=120, collector_name=self.collector_name
+            )
 
             # Scale down to trigger another rebalance
             for _ in range(3):

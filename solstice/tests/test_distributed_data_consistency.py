@@ -543,7 +543,9 @@ class TestFaultScenarioConsistency:
             run_task = asyncio.create_task(runner.run())
 
             # Wait for processing to start
-            await wait_for_progress(runner, min_processed=2000, timeout=60)
+            await wait_for_progress(
+                runner, min_processed=2000, timeout=60, collector_name=self.collector_name
+            )
 
             # Kill a random worker
             killed = await kill_random_worker(runner, stage_id="transform")
@@ -593,7 +595,9 @@ class TestFaultScenarioConsistency:
             run_task = asyncio.create_task(runner.run())
 
             # Wait for processing to start
-            await wait_for_progress(runner, min_processed=2000, timeout=60)
+            await wait_for_progress(
+                runner, min_processed=2000, timeout=60, collector_name=self.collector_name
+            )
 
             # Scale up: spawn additional workers
             master = runner._masters.get("transform")
@@ -606,7 +610,9 @@ class TestFaultScenarioConsistency:
 
             # Wait then scale down
             await asyncio.sleep(1)
-            await wait_for_progress(runner, min_processed=10000, timeout=120)
+            await wait_for_progress(
+                runner, min_processed=10000, timeout=120, collector_name=self.collector_name
+            )
             await kill_random_worker(runner, stage_id="transform")
 
             # Wait for completion

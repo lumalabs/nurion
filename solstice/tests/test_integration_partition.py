@@ -25,7 +25,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from solstice.core.stage_master import StageMaster, StageConfig
+from solstice.core.stage_master import StageMaster, StageConfig, QueueEndpoint
 from solstice.core.stage import Stage
 from solstice.core.operator import OperatorConfig, Operator
 from solstice.queue import QueueType
@@ -72,7 +72,9 @@ class TestQueueCreationWithPartitions:
     """Tests for queue creation with dynamic partitions."""
 
     @pytest.mark.asyncio
-    async def test_tansu_queue_created_with_correct_partitions(self, payload_store, ray_cluster):
+    async def test_tansu_queue_created_with_correct_partitions(
+        self, payload_store, ray_cluster, tansu_backend
+    ):
         """Test that Tansu backend creates queue with correct partition count.
 
         This test REQUIRES Tansu to be installed with dynostore feature enabled.
@@ -88,7 +90,13 @@ class TestQueueCreationWithPartitions:
         config = StageConfig(
             queue_type=QueueType.TANSU,
             max_workers=4,
-            tansu_storage_url="memory://tansu/",  # Use memory storage (requires dynostore feature)
+            tansu_storage_url="memory://tansu/",
+            shared_broker_endpoint=QueueEndpoint(
+                queue_type=QueueType.TANSU,
+                host="localhost",
+                port=tansu_backend.port,
+                storage_url="memory://tansu/",
+            ),
         )
         stage = Stage(
             stage_id="test_stage",
@@ -122,13 +130,19 @@ class TestPartitionRebalance:
     """Tests for partition rebalance when workers change."""
 
     @pytest.mark.asyncio
-    async def test_rebalance_on_worker_add(self, payload_store, ray_cluster):
+    async def test_rebalance_on_worker_add(self, payload_store, ray_cluster, tansu_backend):
         """Test that adding workers triggers rebalance."""
         config = StageConfig(
             queue_type=QueueType.TANSU,
             max_workers=4,
             min_workers=2,
             tansu_storage_url="memory://tansu/",
+            shared_broker_endpoint=QueueEndpoint(
+                queue_type=QueueType.TANSU,
+                host="localhost",
+                port=tansu_backend.port,
+                storage_url="memory://tansu/",
+            ),
         )
         stage = Stage(
             stage_id="test_stage",
@@ -160,13 +174,19 @@ class TestPartitionRebalance:
         await master.stop()
 
     @pytest.mark.asyncio
-    async def test_rebalance_on_worker_remove(self, payload_store, ray_cluster):
+    async def test_rebalance_on_worker_remove(self, payload_store, ray_cluster, tansu_backend):
         """Test that removing workers triggers rebalance."""
         config = StageConfig(
             queue_type=QueueType.TANSU,
             max_workers=4,
             min_workers=1,
             tansu_storage_url="memory://tansu/",
+            shared_broker_endpoint=QueueEndpoint(
+                queue_type=QueueType.TANSU,
+                host="localhost",
+                port=tansu_backend.port,
+                storage_url="memory://tansu/",
+            ),
         )
         stage = Stage(
             stage_id="test_stage",

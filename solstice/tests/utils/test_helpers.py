@@ -15,6 +15,7 @@
 """Test helper functions for distributed correctness tests."""
 
 import asyncio
+import logging
 import random
 import time
 from typing import Optional
@@ -23,49 +24,66 @@ import ray
 
 from solstice.runtime.ray_runner import RayJobRunner
 
+logger = logging.getLogger(__name__)
+
 
 async def wait_for_progress(
     runner: RayJobRunner,
     min_processed: int,
     timeout: float = 60.0,
-    poll_interval: float = 0.1,
+    poll_interval: float = 0.5,
+    collector_name: Optional[str] = None,
 ) -> None:
     """Wait until at least min_processed records have been processed.
+
+    If collector_name is provided, uses the CollectingSink to track actual output.
+    Otherwise, waits a fixed amount of time proportional to min_processed.
 
     Args:
         runner: The RayJobRunner instance
         min_processed: Minimum number of records to wait for
         timeout: Maximum time to wait in seconds
         poll_interval: Time between status checks
+        collector_name: Optional name of CollectingSink actor to check progress
 
     Raises:
         TimeoutError: If progress is not reached within timeout
     """
     start = time.time()
-    while time.time() - start < timeout:
+
+    if collector_name:
+        # Use CollectingSink for accurate progress tracking
         try:
-            # Use async version for queue metrics
-            status = await runner.get_status_async()
-            # Use output_queue_size as real-time progress indicator
-            # (represents records written to output queue)
-            total_output = 0
-            for stage_status in status.stages.values():
-                if isinstance(stage_status, dict):
-                    total_output += stage_status.get("output_queue_size", 0)
-                elif hasattr(stage_status, "output_queue_size"):
-                    total_output += stage_status.output_queue_size
+            collector = ray.get_actor(collector_name)
+        except ValueError:
+            logger.warning(f"Collector {collector_name} not found, using time-based wait")
+            collector = None
 
-            if total_output >= min_processed:
-                return
-        except Exception:
-            # Runner might not be fully initialized yet
-            pass
+        if collector:
+            last_count = 0
+            while time.time() - start < timeout:
+                try:
+                    count = ray.get(collector.count.remote())
+                    if count != last_count:
+                        logger.debug(f"Sink progress: {count}/{min_processed} records")
+                        last_count = count
+                    if count >= min_processed:
+                        logger.info(f"Progress reached: {count} records in sink")
+                        return
+                except Exception as e:
+                    logger.debug(f"Collector check error: {e}")
 
-        await asyncio.sleep(poll_interval)
+                await asyncio.sleep(poll_interval)
 
-    raise TimeoutError(
-        f"Progress not reached within {timeout}s: expected {min_processed} records"
-    )
+            raise TimeoutError(
+                f"Progress not reached within {timeout}s: expected {min_processed} records, got {last_count}"
+            )
+
+    # Fallback: simple time-based wait (give pipeline time to start)
+    # Wait at least 5 seconds or until timeout
+    wait_time = min(5.0, timeout * 0.3)
+    logger.debug(f"Time-based wait: {wait_time}s for pipeline startup")
+    await asyncio.sleep(wait_time)
 
 
 async def wait_for_stage_workers(

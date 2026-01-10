@@ -232,9 +232,25 @@ class SourceMaster(StageMaster):
         self.upstream_endpoint = self._source_endpoint
         self.upstream_topic = self._source_topic
 
+        # Update partition manager with source queue info
+        self._partition_manager._upstream_endpoint = self._source_endpoint
+        self._partition_manager._upstream_topic = self._source_topic
+
+        # Initialize managers (must be called after output queue is created)
+        self._init_managers()
+
+        # Update worker manager with source queue info (workers consume from source queue)
+        self._worker_manager.set_target_worker_count(self.config.min_workers)
+        self._worker_manager.set_upstream_config(
+            self._source_endpoint, self._source_topic
+        )
+
+        # Get partition count for worker assignment
+        partition_count = await self._partition_manager.get_upstream_partition_count()
+
         # Spawn workers
         for i in range(self.config.min_workers):
-            await self._spawn_worker()
+            await self._worker_manager.spawn_worker(partition_count=partition_count)
 
         self.logger.info(
             f"Source {self.stage_id} started: {self._splits_produced} splits, "

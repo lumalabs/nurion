@@ -72,7 +72,6 @@ from typing import Callable, Dict, Iterator, Optional, TYPE_CHECKING
 from solstice.core.models import Split
 from solstice.core.operator import OperatorConfig
 from solstice.core.stage_master import StageMaster, StageConfig
-from solstice.queue import QueueType
 from solstice.utils.logging import create_ray_logger
 
 if TYPE_CHECKING:
@@ -135,6 +134,7 @@ class SparkSourceV2Master(StageMaster):
         job_id: str,
         stage: "Stage",
         payload_store: "SplitPayloadStore",
+        config: StageConfig,
         **kwargs,
     ):
         # Get config from stage.operator_config
@@ -144,11 +144,11 @@ class SparkSourceV2Master(StageMaster):
                 f"SparkSourceV2Master requires SparkSourceV2Config, got {type(operator_cfg)}"
             )
 
-        # Create stage config for queue setup
-        # upstream_endpoint/topic are None for source stages
+        # Override worker settings for V2 (JVM writes directly, no workers needed)
         stage_config = StageConfig(
-            queue_type=QueueType.TANSU,
-            min_workers=0,  # No workers needed - JVM writes directly
+            queue_type=config.queue_type,
+            shared_broker_endpoint=config.shared_broker_endpoint,
+            min_workers=0,
             max_workers=0,
             upstream_endpoint=None,
             upstream_topic=None,

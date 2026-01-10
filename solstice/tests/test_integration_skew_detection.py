@@ -80,7 +80,11 @@ class TestPartitionLagCalculation:
     @pytest.mark.asyncio
     async def test_lag_calculation_single_partition(self, payload_store, tansu_backend):
         """Test lag calculation for a single partition."""
-        config = StageConfig(max_workers=1, partition_count=1)
+        config = StageConfig(
+            queue_type=QueueType.MEMORY,  # Use MEMORY for these tests
+            max_workers=1,
+            partition_count=1,
+        )
         stage = Stage(
             stage_id="test_stage",
             operator_config=_TestOperatorConfig(),
@@ -154,7 +158,11 @@ class TestPartitionLagCalculation:
     @pytest.mark.asyncio
     async def test_lag_calculation_multiple_partitions(self, payload_store, tansu_backend):
         """Test lag calculation for multiple partitions."""
-        config = StageConfig(max_workers=4, partition_count=4)
+        config = StageConfig(
+            queue_type=QueueType.MEMORY,  # Use MEMORY for these tests
+            max_workers=4,
+            partition_count=4,
+        )
         stage = Stage(
             stage_id="test_stage",
             operator_config=_TestOperatorConfig(),
@@ -232,7 +240,11 @@ class TestPartitionLagCalculation:
     @pytest.mark.asyncio
     async def test_lag_calculation_missing_committed_offset(self, payload_store, tansu_backend):
         """Test lag calculation when committed offset is missing (defaults to 0)."""
-        config = StageConfig(max_workers=1, partition_count=1)
+        config = StageConfig(
+            queue_type=QueueType.MEMORY,  # Use MEMORY for these tests
+            max_workers=1,
+            partition_count=1,
+        )
         stage = Stage(
             stage_id="test_stage",
             operator_config=_TestOperatorConfig(),
@@ -277,7 +289,11 @@ class TestPartitionLagCalculation:
     @pytest.mark.asyncio
     async def test_lag_calculation_no_data(self, payload_store, tansu_backend):
         """Test lag calculation when partition has no data."""
-        config = StageConfig(max_workers=1, partition_count=1)
+        config = StageConfig(
+            queue_type=QueueType.MEMORY,  # Use MEMORY for these tests
+            max_workers=1,
+            partition_count=1,
+        )
         stage = Stage(
             stage_id="test_stage",
             operator_config=_TestOperatorConfig(),
@@ -316,7 +332,11 @@ class TestSkewDetectionAlgorithm:
     @pytest.mark.asyncio
     async def test_no_skew_when_no_lag(self, payload_store, tansu_backend):
         """Test that no skew is detected when there's no lag (empty topic)."""
-        config = StageConfig(max_workers=4, partition_count=4)
+        config = StageConfig(
+            queue_type=QueueType.MEMORY,  # Use MEMORY for these tests
+            max_workers=4,
+            partition_count=4,
+        )
         stage = Stage(
             stage_id="test_stage",
             operator_config=_TestOperatorConfig(),
@@ -363,7 +383,11 @@ class TestSkewDetectionAlgorithm:
         import asyncio
         from aiokafka import AIOKafkaConsumer, TopicPartition
 
-        config = StageConfig(max_workers=4, partition_count=4)
+        config = StageConfig(
+            queue_type=QueueType.MEMORY,  # Use MEMORY for these tests
+            max_workers=4,
+            partition_count=4,
+        )
         stage = Stage(
             stage_id="test_stage",
             operator_config=_TestOperatorConfig(),
@@ -449,7 +473,11 @@ class TestSkewMetricsCollection:
     @pytest.mark.asyncio
     async def test_metrics_for_all_partitions(self, payload_store, tansu_backend):
         """Test that partition metrics are collected for all partitions."""
-        config = StageConfig(max_workers=4, partition_count=4)
+        config = StageConfig(
+            queue_type=QueueType.MEMORY,  # Use MEMORY for these tests
+            max_workers=4,
+            partition_count=4,
+        )
         stage = Stage(
             stage_id="test_stage",
             operator_config=_TestOperatorConfig(),
@@ -524,7 +552,11 @@ class TestSkewMetricsCollection:
         import asyncio
         from aiokafka import AIOKafkaConsumer, TopicPartition
 
-        config = StageConfig(max_workers=1, partition_count=1)
+        config = StageConfig(
+            queue_type=QueueType.MEMORY,  # Use MEMORY for these tests
+            max_workers=1,
+            partition_count=1,
+        )
         stage = Stage(
             stage_id="test_stage",
             operator_config=_TestOperatorConfig(),

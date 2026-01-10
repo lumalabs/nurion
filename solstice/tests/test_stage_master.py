@@ -113,9 +113,9 @@ def mock_stage():
 
 @pytest.fixture
 def stage_config():
-    """Provide default stage config using TANSU backend for distributed tests."""
+    """Provide default stage config using MEMORY backend for unit tests."""
     return StageConfig(
-        queue_type=QueueType.TANSU,
+        queue_type=QueueType.MEMORY,
         min_workers=1,
         max_workers=2,
         batch_size=10,

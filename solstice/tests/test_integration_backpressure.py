@@ -87,6 +87,12 @@ class TestBackpressureDetection:
             queue_type=QueueType.TANSU,
             max_workers=4,
             tansu_storage_url="memory://tansu/",
+            shared_broker_endpoint=QueueEndpoint(
+                queue_type=QueueType.TANSU,
+                host="localhost",
+                port=tansu_backend.port,
+                storage_url="memory://tansu/",
+            ),
         )
         stage = Stage(
             stage_id="test_stage",
@@ -146,6 +152,12 @@ class TestBackpressureDetection:
             queue_type=QueueType.TANSU,
             max_workers=4,
             tansu_storage_url="memory://tansu/",
+            shared_broker_endpoint=QueueEndpoint(
+                queue_type=QueueType.TANSU,
+                host="localhost",
+                port=tansu_backend.port,
+                storage_url="memory://tansu/",
+            ),
         )
         stage = Stage(
             stage_id="test_stage",
@@ -201,6 +213,12 @@ class TestBackpressureDetection:
             queue_type=QueueType.TANSU,
             max_workers=4,
             tansu_storage_url="memory://tansu/",
+            shared_broker_endpoint=QueueEndpoint(
+                queue_type=QueueType.TANSU,
+                host="localhost",
+                port=tansu_backend.port,
+                storage_url="memory://tansu/",
+            ),
         )
         stage = Stage(
             stage_id="test_stage",
@@ -342,9 +360,8 @@ class TestSourceRateControl:
         """Test that source pauses when downstream has backpressure."""
         # Create downstream stage with backpressure
         downstream_config = StageConfig(
-            queue_type=QueueType.TANSU,
+            queue_type=QueueType.MEMORY,
             max_workers=2,
-            tansu_storage_url="memory://tansu/",
         )
         downstream_stage = Stage(
             stage_id="downstream",
@@ -393,9 +410,8 @@ class TestSourceRateControl:
         """Test that source continues when there's no backpressure."""
         # Create downstream stage without backpressure
         downstream_config = StageConfig(
-            queue_type=QueueType.TANSU,
+            queue_type=QueueType.MEMORY,
             max_workers=2,
-            tansu_storage_url="memory://tansu/",
         )
         downstream_stage = Stage(
             stage_id="downstream",
@@ -444,9 +460,8 @@ class TestBackpressurePropagation:
     async def test_propagation_when_active(self, payload_store, ray_cluster):
         """Test that backpressure signal is propagated when active."""
         config = StageConfig(
-            queue_type=QueueType.TANSU,
+            queue_type=QueueType.MEMORY,
             max_workers=4,
-            tansu_storage_url="memory://tansu/",
         )
         stage = Stage(
             stage_id="test_stage",
@@ -476,9 +491,8 @@ class TestBackpressurePropagation:
     async def test_no_propagation_when_not_active(self, payload_store, ray_cluster):
         """Test that no propagation occurs when backpressure is not active."""
         config = StageConfig(
-            queue_type=QueueType.TANSU,
+            queue_type=QueueType.MEMORY,
             max_workers=4,
-            tansu_storage_url="memory://tansu/",
         )
         stage = Stage(
             stage_id="test_stage",
