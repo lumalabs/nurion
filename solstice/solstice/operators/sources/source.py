@@ -201,7 +201,9 @@ class SourceMaster(StageMaster):
             )
 
             await client.create_topic(self._source_topic)
-            self.logger.info(f"Connected to shared broker at {broker_url} for source {self.stage_id}")
+            self.logger.info(
+                f"Connected to shared broker at {broker_url} for source {self.stage_id}"
+            )
             return client
 
     async def start(self) -> None:
@@ -241,9 +243,7 @@ class SourceMaster(StageMaster):
 
         # Update worker manager with source queue info (workers consume from source queue)
         self._worker_manager.set_target_worker_count(self.config.min_workers)
-        self._worker_manager.set_upstream_config(
-            self._source_endpoint, self._source_topic
-        )
+        self._worker_manager.set_upstream_config(self._source_endpoint, self._source_topic)
 
         # Get partition count for worker assignment
         partition_count = await self._partition_manager.get_upstream_partition_count()

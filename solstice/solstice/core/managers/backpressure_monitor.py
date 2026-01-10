@@ -142,9 +142,7 @@ class BackpressureMonitor:
             return 0
 
         try:
-            partition_offsets = await queue.get_all_partition_offsets(
-                self._upstream_topic
-            )
+            partition_offsets = await queue.get_all_partition_offsets(self._upstream_topic)
             total_lag = 0
             for partition_id, latest_offset in partition_offsets.items():
                 committed = await queue.get_committed_offset(
@@ -171,9 +169,7 @@ class BackpressureMonitor:
             return {}
 
         try:
-            partition_offsets = await queue.get_all_partition_offsets(
-                self._upstream_topic
-            )
+            partition_offsets = await queue.get_all_partition_offsets(self._upstream_topic)
             metrics: Dict[int, PartitionMetrics] = {}
 
             for partition_id, latest_offset in partition_offsets.items():
@@ -211,9 +207,7 @@ class BackpressureMonitor:
             if queue is None:
                 return SkewInfo(is_skewed=False, skew_ratio=0.0, partition_lags={})
 
-            partition_offsets = await queue.get_all_partition_offsets(
-                self._upstream_topic
-            )
+            partition_offsets = await queue.get_all_partition_offsets(self._upstream_topic)
             partition_lags: Dict[int, int] = {}
 
             for partition_id, latest_offset in partition_offsets.items():
@@ -231,9 +225,7 @@ class BackpressureMonitor:
             max_lag = max(lags)
 
             if avg_lag == 0:
-                return SkewInfo(
-                    is_skewed=False, skew_ratio=0.0, partition_lags=partition_lags
-                )
+                return SkewInfo(is_skewed=False, skew_ratio=0.0, partition_lags=partition_lags)
 
             skew_ratio = max_lag / avg_lag
             is_skewed = skew_ratio > threshold
@@ -296,9 +288,7 @@ class BackpressureMonitor:
         # Deactivate with hysteresis (only when well below threshold)
         if self._backpressure_active:
             if input_lag < self._config.backpressure_threshold_lag * 0.7:
-                self._logger.info(
-                    f"Backpressure deactivated for {self._stage_id}: lag={input_lag}"
-                )
+                self._logger.info(f"Backpressure deactivated for {self._stage_id}: lag={input_lag}")
                 self._backpressure_active = False
 
         return self._backpressure_active
@@ -332,9 +322,7 @@ class BackpressureMonitor:
             try:
                 status = await stage_ref.get_status_async()
                 if status.backpressure_active:
-                    self._logger.debug(
-                        f"Backpressure detected from downstream stage {stage_id}"
-                    )
+                    self._logger.debug(f"Backpressure detected from downstream stage {stage_id}")
                     return True
 
                 if status.output_queue_size > self._config.backpressure_threshold_queue_size * 0.8:
@@ -380,9 +368,7 @@ class BackpressureMonitor:
         # Rebalance partitions among remaining workers
         if removed > 0:
             partition_count = await self._partition_manager.get_upstream_partition_count()
-            self._partition_manager.rebalance(
-                self._worker_manager.worker_ids, partition_count
-            )
+            self._partition_manager.rebalance(self._worker_manager.worker_ids, partition_count)
             await self._worker_manager.notify_all_partition_update()
 
         self._logger.info(

@@ -215,12 +215,8 @@ class SparkSourceV2Master(StageMaster):
         """
         import raydp
 
-        # Check backpressure before starting write
-        if await self._check_backpressure_before_produce():
-            self.logger.warning(
-                f"Backpressure detected before Spark write for {self.stage_id}. "
-                f"Proceeding anyway (current implementation doesn't support streaming write)."
-            )
+        # Note: Backpressure checking is not supported in V2 batch write.
+        # For true backpressure support, JVM-side streaming write is needed.
 
         # Initialize Spark
         spark_configs = {
@@ -274,13 +270,6 @@ class SparkSourceV2Master(StageMaster):
         )
 
         self.logger.info(f"JVM write completed: {count} splits to output_queue")
-
-        # Check backpressure after write
-        if await self._check_backpressure_before_produce():
-            self.logger.warning(
-                f"Backpressure detected after Spark write for {self.stage_id}. "
-                f"Downstream may be overwhelmed."
-            )
 
         return count
 

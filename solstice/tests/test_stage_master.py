@@ -32,6 +32,7 @@ from solstice.core.stage_master import (
     StageConfig,
     QueueType,
     QueueMessage,
+    QueueEndpoint,
 )
 from solstice.core.operator import OperatorConfig, Operator
 
@@ -192,14 +193,21 @@ class TestStageConfig:
         assert config.batch_size == 100
 
     def test_tansu_config(self):
-        """Test Tansu-specific config."""
+        """Test Tansu-specific config with shared broker endpoint."""
+        endpoint = QueueEndpoint(
+            queue_type=QueueType.TANSU,
+            host="localhost",
+            port=9092,
+            storage_url="s3://my-bucket/",
+        )
         config = StageConfig(
             queue_type=QueueType.TANSU,
-            tansu_storage_url="s3://my-bucket/",
+            shared_broker_endpoint=endpoint,
         )
 
         assert config.queue_type == QueueType.TANSU
-        assert config.tansu_storage_url == "s3://my-bucket/"
+        assert config.shared_broker_endpoint is not None
+        assert config.shared_broker_endpoint.storage_url == "s3://my-bucket/"
 
     def test_to_dict(self):
         """Test config serialization."""

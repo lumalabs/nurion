@@ -25,7 +25,6 @@ Responsibilities:
 from __future__ import annotations
 
 import asyncio
-import logging
 import time
 import uuid
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
@@ -35,6 +34,7 @@ import ray
 from solstice.core.stage_config import StageConfig, QueueEndpoint
 from solstice.core.stage_worker import StageWorker
 from solstice.core.managers.partition_manager import PartitionManager
+from solstice.utils.logging import create_ray_logger
 
 if TYPE_CHECKING:
     from solstice.core.stage import Stage
@@ -60,7 +60,6 @@ class WorkerManager:
         output_endpoint: Optional[QueueEndpoint],
         output_topic: str,
         consumer_group: str,
-        logger: logging.Logger,
         state_endpoint: Optional[QueueEndpoint] = None,
         state_topic: Optional[str] = None,
         lineage_sample_rate: float = 0.0,
@@ -74,7 +73,7 @@ class WorkerManager:
         self._output_endpoint = output_endpoint
         self._output_topic = output_topic
         self._consumer_group = consumer_group
-        self._logger = logger
+        self._logger = create_ray_logger(f"WorkerMgr-{stage.stage_id}")
         self._state_endpoint = state_endpoint
         self._state_topic = state_topic
         self._lineage_sample_rate = lineage_sample_rate
@@ -116,9 +115,7 @@ class WorkerManager:
         """Set output endpoint (called after queue creation)."""
         self._output_endpoint = endpoint
 
-    def set_upstream_config(
-        self, endpoint: Optional[QueueEndpoint], topic: Optional[str]
-    ) -> None:
+    def set_upstream_config(self, endpoint: Optional[QueueEndpoint], topic: Optional[str]) -> None:
         """Set upstream queue configuration.
 
         Used by SourceMaster to point workers at the source queue.
@@ -216,14 +213,10 @@ class WorkerManager:
         task = worker.run.remote()
         self._worker_tasks[worker_id] = task
 
-        self._logger.info(
-            f"Spawned worker {worker_id} with partitions {assigned_partitions}"
-        )
+        self._logger.info(f"Spawned worker {worker_id} with partitions {assigned_partitions}")
         return worker_id
 
-    async def _check_worker_ready(
-        self, worker_id: str, timeout: float
-    ) -> bool:
+    async def _check_worker_ready(self, worker_id: str, timeout: float) -> bool:
         """Check if a worker is ready (actor has started and is responsive).
 
         Args:
@@ -264,9 +257,7 @@ class WorkerManager:
         if worker is not None:
             try:
                 ray.kill(worker)
-                self._logger.info(
-                    f"Cancelled worker {worker_id} due to resource constraints"
-                )
+                self._logger.info(f"Cancelled worker {worker_id} due to resource constraints")
             except Exception as e:
                 self._logger.debug(f"Error killing worker {worker_id}: {e}")
 
@@ -312,9 +303,7 @@ class WorkerManager:
         self._workers.clear()
         self._worker_tasks.clear()
 
-    async def wait_for_completion(
-        self, timeout: float = 1.0
-    ) -> Tuple[List[str], List[str]]:
+    async def wait_for_completion(self, timeout: float = 1.0) -> Tuple[List[str], List[str]]:
         """Wait for any worker to complete (event-driven, non-polling).
 
         Uses ray.wait() to efficiently wait for ANY task to complete.
@@ -333,9 +322,7 @@ class WorkerManager:
         task_to_worker = {task: wid for wid, task in self._worker_tasks.items()}
 
         # Use ray.wait in a thread to avoid blocking the async event loop
-        ready, _ = await asyncio.to_thread(
-            ray.wait, task_list, num_returns=1, timeout=timeout
-        )
+        ready, _ = await asyncio.to_thread(ray.wait, task_list, num_returns=1, timeout=timeout)
 
         if not ready:
             return [], []
@@ -387,13 +374,9 @@ class WorkerManager:
                     f"Notified recovered worker {worker_id}: upstream already finished"
                 )
             except Exception as e:
-                self._logger.warning(
-                    f"Failed to notify {worker_id} of upstream completion: {e}"
-                )
+                self._logger.warning(f"Failed to notify {worker_id} of upstream completion: {e}")
 
-    async def update_worker_partitions(
-        self, worker_id: str, partitions: List[int]
-    ) -> bool:
+    async def update_worker_partitions(self, worker_id: str, partitions: List[int]) -> bool:
         """Update a worker's partition assignment.
 
         Args:
@@ -415,9 +398,7 @@ class WorkerManager:
             )
             return True
         except Exception as e:
-            self._logger.warning(
-                f"Failed to update partitions for {worker_id}: {e}"
-            )
+            self._logger.warning(f"Failed to update partitions for {worker_id}: {e}")
             return False
 
     async def notify_all_partition_update(self) -> None:

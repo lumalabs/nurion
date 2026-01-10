@@ -24,11 +24,11 @@ Responsibilities:
 
 from __future__ import annotations
 
-import logging
 from typing import Dict, List, Optional
 
 from solstice.queue import QueueType, TansuQueueClient
 from solstice.core.stage_config import StageConfig, QueueEndpoint
+from solstice.utils.logging import create_ray_logger
 
 
 class PartitionManager:
@@ -43,15 +43,16 @@ class PartitionManager:
 
     def __init__(
         self,
+        stage_id: str,
         config: StageConfig,
         upstream_endpoint: Optional[QueueEndpoint],
         upstream_topic: Optional[str],
-        logger: logging.Logger,
     ):
+        self._stage_id = stage_id
         self._config = config
         self._upstream_endpoint = upstream_endpoint
         self._upstream_topic = upstream_topic
-        self._logger = logger
+        self._logger = create_ray_logger(f"PartitionMgr-{stage_id}")
 
         # Partition state
         self._partition_count: Optional[int] = None
@@ -166,10 +167,7 @@ class PartitionManager:
         Returns:
             List of partition IDs assigned to this worker
         """
-        return [
-            p for p in range(partition_count)
-            if p % target_worker_count == worker_index
-        ]
+        return [p for p in range(partition_count) if p % target_worker_count == worker_index]
 
     def assign_worker(
         self,
@@ -220,24 +218,35 @@ class PartitionManager:
             partitions = self._assignments.pop(worker_id, [])
             orphaned.extend(partitions)
             if partitions:
-                self._logger.debug(
-                    f"Collected orphaned partitions {partitions} from {worker_id}"
-                )
+                self._logger.debug(f"Collected orphaned partitions {partitions} from {worker_id}")
         return sorted(set(orphaned))
 
-    def assign_orphaned_partition(
-        self, worker_id: str, partition: int
-    ) -> None:
+    def assign_orphaned_partition(self, worker_id: str, partition: int) -> bool:
         """Assign a single orphaned partition to a worker.
+
+        A partition can only be assigned to ONE worker. If the partition
+        is already assigned to another worker, this method returns False.
 
         Args:
             worker_id: ID of the worker to receive the partition
             partition: Partition ID to assign
+
+        Returns:
+            True if assigned successfully, False if partition already assigned
         """
+        # Check if partition is already assigned to another worker
+        for wid, partitions in self._assignments.items():
+            if wid != worker_id and partition in partitions:
+                self._logger.warning(
+                    f"Partition {partition} already assigned to {wid}, cannot assign to {worker_id}"
+                )
+                return False
+
         current = self._assignments.get(worker_id, [])
         if partition not in current:
             current.append(partition)
             self._assignments[worker_id] = sorted(current)
+        return True
 
     def rebalance(self, worker_ids: List[str], partition_count: int) -> None:
         """Recompute partition assignments for all workers.
@@ -268,6 +277,21 @@ class PartitionManager:
                 f"Consider increasing partition_count or reducing workers."
             )
         self._logger.debug(f"Partition rebalance: {self._assignments}")
+
+    def validate_no_duplicate_assignments(self) -> bool:
+        """Validate that no partition is assigned to multiple workers.
+
+        Returns:
+            True if valid (no duplicates), False if duplicates found
+        """
+        seen: Dict[int, str] = {}
+        for worker_id, partitions in self._assignments.items():
+            for p in partitions:
+                if p in seen:
+                    self._logger.error(f"Partition {p} assigned to both {seen[p]} and {worker_id}")
+                    return False
+                seen[p] = worker_id
+        return True
 
     async def stop(self) -> None:
         """Clean up resources."""

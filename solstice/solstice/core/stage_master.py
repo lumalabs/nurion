@@ -157,10 +157,10 @@ class StageMaster:
 
         # Initialize managers (will be fully configured in start())
         self._partition_manager = PartitionManager(
+            stage_id=self.stage_id,
             config=config,
             upstream_endpoint=config.upstream_endpoint,
             upstream_topic=config.upstream_topic,
-            logger=self.logger,
         )
 
         # Worker and recovery managers created after output queue is ready
@@ -214,9 +214,7 @@ class StageMaster:
             )
 
         await queue.create_topic(self._output_topic, partitions=partition_count)
-        self.logger.info(
-            f"Created topic {self._output_topic} with {partition_count} partition(s)"
-        )
+        self.logger.info(f"Created topic {self._output_topic} with {partition_count} partition(s)")
         return queue
 
     def _init_managers(self) -> None:
@@ -230,17 +228,16 @@ class StageMaster:
             output_endpoint=self._output_endpoint,
             output_topic=self._output_topic,
             consumer_group=self._consumer_group,
-            logger=self.logger,
             state_endpoint=self.state_endpoint,
             state_topic=self.state_topic,
             lineage_sample_rate=self._lineage_sample_rate,
         )
 
         self._recovery_manager = RecoveryManager(
+            stage_id=self.stage_id,
             partition_manager=self._partition_manager,
             worker_manager=self._worker_manager,
             policy=FailurePolicy(),
-            logger=self.logger,
         )
 
         self._backpressure_monitor = BackpressureMonitor(
@@ -261,7 +258,6 @@ class StageMaster:
 
         self.logger.info(f"Starting stage {self.stage_id}")
         self._start_time = time.time()
-        self._running = True
 
         # Create output queue
         self._output_queue = await self._create_queue()
@@ -293,6 +289,9 @@ class StageMaster:
         await self._init_state_producer()
         await self._emit_stage_started()
 
+        # Mark as running only after all initialization succeeds
+        self._running = True
+
         self.logger.info(
             f"Stage {self.stage_id} started with {self._worker_manager.worker_count} workers"
         )
@@ -317,9 +316,7 @@ class StageMaster:
                     break
 
                 # Event-driven wait for any worker to complete
-                completed, failed = await self._worker_manager.wait_for_completion(
-                    timeout=1.0
-                )
+                completed, failed = await self._worker_manager.wait_for_completion(timeout=1.0)
 
                 # Clean up completed/failed workers from tracking
                 self._worker_manager.cleanup_workers(completed + failed)
@@ -412,9 +409,7 @@ class StageMaster:
             except Exception as e:
                 self.logger.warning(f"Failed to send EOF to partition {partition}: {e}")
 
-        self.logger.info(
-            f"Stage {self.stage_id} sent EOF markers to {partition_count} partitions"
-        )
+        self.logger.info(f"Stage {self.stage_id} sent EOF markers to {partition_count} partitions")
 
     # =========================================================================
     # State/Metrics Methods
@@ -440,9 +435,7 @@ class StageMaster:
             self.logger.warning(f"Failed to init state producer: {e}")
             self._state_producer = None
 
-    async def _create_queue_from_endpoint(
-        self, endpoint: QueueEndpoint
-    ) -> "QueueClient":
+    async def _create_queue_from_endpoint(self, endpoint: QueueEndpoint) -> "QueueClient":
         """Create a queue client from an endpoint."""
         if endpoint.queue_type == QueueType.TANSU:
             broker_url = f"{endpoint.host}:{endpoint.port}"
@@ -539,7 +532,9 @@ class StageMaster:
             is_finished=self._finished,
             failed=self._failed,
             failure_message=self._failure_message,
-            backpressure_active=self._backpressure_monitor.is_backpressure_active if self._backpressure_monitor else False,
+            backpressure_active=self._backpressure_monitor.is_backpressure_active
+            if self._backpressure_monitor
+            else False,
         )
 
     async def get_status_async(self) -> StageStatus:
@@ -547,9 +542,7 @@ class StageMaster:
         output_size = 0
         if self._output_queue:
             try:
-                output_size = await self._output_queue.get_latest_offset(
-                    self._output_topic
-                )
+                output_size = await self._output_queue.get_latest_offset(self._output_topic)
             except Exception:
                 pass
 
@@ -561,35 +554,16 @@ class StageMaster:
             is_finished=self._finished,
             failed=self._failed,
             failure_message=self._failure_message,
-            backpressure_active=self._backpressure_monitor.is_backpressure_active if self._backpressure_monitor else False,
+            backpressure_active=self._backpressure_monitor.is_backpressure_active
+            if self._backpressure_monitor
+            else False,
         )
 
     async def get_input_queue_lag(self) -> int:
-        """Get input queue lag (for WebUI)."""
+        """Get input queue lag (for autoscaler)."""
         if self._backpressure_monitor:
             return await self._backpressure_monitor.get_input_lag()
-        return 0
-
-    async def detect_partition_skew(
-        self, skew_threshold: float = 2.0
-    ) -> tuple[bool, float, Dict[int, int]]:
-        """Detect partition-level skew (for WebUI)."""
-        if self._backpressure_monitor:
-            result = await self._backpressure_monitor.detect_skew(skew_threshold)
-            return result.is_skewed, result.skew_ratio, result.partition_lags
-        return False, 0.0, {}
-
-    async def get_partition_metrics(self) -> Dict[int, Any]:
-        """Get metrics for all partitions (for WebUI)."""
-        if self._backpressure_monitor:
-            return await self._backpressure_monitor.get_partition_metrics()
-        return {}
-
-    def get_backpressure_signal(self):
-        """Get backpressure signal for propagation."""
-        if self._backpressure_monitor:
-            return self._backpressure_monitor.get_backpressure_signal()
-        return None
+            return 0
 
     def set_downstream_stage_refs(self, downstream_refs: Dict[str, Any]) -> None:
         """Set downstream stage references for backpressure propagation."""
@@ -601,7 +575,7 @@ class StageMaster:
         """Gracefully remove workers."""
         if self._backpressure_monitor:
             return await self._backpressure_monitor.scale_down(count)
-        return 0
+            return 0
 
     async def cleanup_queue(self) -> None:
         """Clean up output queue (called by runner after all consumers done)."""
@@ -631,17 +605,3 @@ class StageMaster:
     def _partition_count(self) -> int:
         """Access partition count (backward compatibility)."""
         return self._partition_manager.partition_count
-
-    @property
-    def _backpressure_active(self) -> bool:
-        """Access backpressure state (backward compatibility)."""
-        if self._backpressure_monitor:
-            return self._backpressure_monitor.is_backpressure_active
-        return False
-
-    async def _spawn_worker(self) -> str:
-        """Spawn a worker (backward compatibility for tests)."""
-        if self._worker_manager:
-            partition_count = await self._partition_manager.get_upstream_partition_count()
-            return await self._worker_manager.spawn_worker(partition_count=partition_count)
-        raise RuntimeError("WorkerManager not initialized")

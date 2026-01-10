@@ -24,13 +24,13 @@ Responsibilities:
 from __future__ import annotations
 
 import asyncio
-import logging
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 from solstice.core.stage_config import FailurePolicy, FailureTracker
 from solstice.core.managers.partition_manager import PartitionManager
 from solstice.core.managers.worker_manager import WorkerManager
+from solstice.utils.logging import create_ray_logger
 
 
 @dataclass
@@ -58,26 +58,27 @@ class RecoveryManager:
 
     def __init__(
         self,
+        stage_id: str,
         partition_manager: PartitionManager,
         worker_manager: WorkerManager,
         policy: Optional[FailurePolicy] = None,
-        logger: Optional[logging.Logger] = None,
     ):
+        self._stage_id = stage_id
         self._partition_manager = partition_manager
         self._worker_manager = worker_manager
         self._policy = policy or FailurePolicy()
-        self._logger = logger or logging.getLogger(__name__)
+        self._logger = create_ray_logger(f"RecoveryMgr-{stage_id}")
         self._tracker = FailureTracker(self._policy, self._logger)
 
     @property
     def failure_count(self) -> int:
         """Get total failure count in current window."""
-        return len(self._tracker._recent_failures)
+        return len(self._tracker._failure_timestamps)
 
     @property
     def is_in_recovery(self) -> bool:
         """Check if currently in recovery mode (backoff active)."""
-        return self._tracker._consecutive_failures > 0
+        return self._tracker._recovery_attempt > 0
 
     def record_failures(self, count: int, current_worker_count: int) -> None:
         """Record worker failures.
@@ -131,9 +132,7 @@ class RecoveryManager:
         failure_count = len(failed_worker_ids)
 
         # Collect orphaned partitions
-        orphaned_partitions = self._partition_manager.collect_orphaned_partitions(
-            failed_worker_ids
-        )
+        orphaned_partitions = self._partition_manager.collect_orphaned_partitions(failed_worker_ids)
 
         self._logger.info(
             f"Recovering {failure_count} failed workers (backoff: {delay:.1f}s), "
@@ -188,9 +187,7 @@ class RecoveryManager:
             await asyncio.sleep(delay)
 
         # Check if we should give up
-        should_give_up, reason = self.should_give_up(
-            self._worker_manager.worker_count
-        )
+        should_give_up, reason = self.should_give_up(self._worker_manager.worker_count)
 
         return RecoveryResult(
             spawned_count=spawned,

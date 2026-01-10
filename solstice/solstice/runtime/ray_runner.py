@@ -293,7 +293,6 @@ class RayJobRunner:
         worker_res = stage.worker_resources or {}
         return StageConfig(
             queue_type=self.queue_type,
-            tansu_storage_url=self.tansu_storage_url,
             min_workers=stage.min_parallelism,
             max_workers=stage.max_parallelism,
             num_cpus=worker_res.get("num_cpus", 1.0),

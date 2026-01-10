@@ -44,7 +44,6 @@ class StageConfig:
             - MEMORY: In-process only (single-worker testing)
             - RAY: Shared via Ray actor (distributed testing)
             - TANSU: Persistent broker (production)
-        tansu_storage_url: Storage URL for Tansu backend (memory://, s3://)
         max_workers: Maximum number of workers
         min_workers: Minimum number of workers
         batch_size: Number of messages to fetch per batch
@@ -60,7 +59,6 @@ class StageConfig:
     """
 
     queue_type: QueueType = QueueType.TANSU  # Default to Tansu for persistence
-    tansu_storage_url: str = "memory://"
 
     max_workers: int = 4
     min_workers: int = 1
@@ -102,7 +100,6 @@ class StageConfig:
     def to_dict(self) -> Dict[str, Any]:
         return {
             "queue_type": self.queue_type.value,
-            "tansu_storage_url": self.tansu_storage_url,
             "max_workers": self.max_workers,
             "min_workers": self.min_workers,
             "batch_size": self.batch_size,
