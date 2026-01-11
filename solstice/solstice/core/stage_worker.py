@@ -349,6 +349,11 @@ class StageWorker:
         current_partition_idx = 0  # Round-robin index for partition polling
         active_partitions = list(self.assigned_partitions)  # Local copy
 
+        # Track consecutive empty fetches per partition
+        # Used to detect end-of-partition after recovery when EOF was already consumed
+        empty_fetch_count: Dict[int, int] = {p: 0 for p in active_partitions}
+        MAX_EMPTY_FETCHES_WHEN_UPSTREAM_DONE = 10
+
         self.logger.info(
             f"Worker {self.worker_id} starting to consume from {self.upstream_topic} "
             f"partitions {active_partitions} with consumer group {self.consumer_group}"
@@ -425,8 +430,31 @@ class StageWorker:
             )
 
             if not records:
-                await asyncio.sleep(0.05)
+                # Track empty fetches to detect end-of-partition after recovery
+                # When worker recovers from a crash, it may resume at an offset past the EOF
+                # (because EOF was processed but worker crashed before completion)
+                if partition not in empty_fetch_count:
+                    empty_fetch_count[partition] = 0
+                empty_fetch_count[partition] += 1
+
+                # If upstream is finished and we've had many consecutive empty fetches,
+                # assume this partition is done (EOF was already consumed before recovery)
+                if (
+                    self._upstream_finished
+                    and empty_fetch_count[partition] >= MAX_EMPTY_FETCHES_WHEN_UPSTREAM_DONE
+                ):
+                    eof_received.add(partition)
+                    self.logger.info(
+                        f"Worker {self.worker_id} marking partition {partition} as done "
+                        f"(upstream finished, {empty_fetch_count[partition]} empty fetches, "
+                        f"likely resumed past EOF)"
+                    )
+                else:
+                    await asyncio.sleep(0.05)
                 continue
+
+            # Reset empty fetch count on successful fetch
+            empty_fetch_count[partition] = 0
 
             # Debug: Log first batch fetched
             if self._processed_count == 0 and records:

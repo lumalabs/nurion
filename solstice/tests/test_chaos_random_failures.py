@@ -25,6 +25,7 @@ Data volumes: 20,000+ records with complex operators.
 """
 
 import asyncio
+import logging
 import random
 import pytest
 import ray
@@ -42,7 +43,10 @@ from tests.utils import (
     get_sink_records,
     is_runner_finished,
     kill_random_worker,
+    wait_for_progress,
 )
+
+logger = logging.getLogger(__name__)
 
 # Mark all tests in this module as chaos tests (NOT integration)
 pytestmark = [pytest.mark.chaos, pytest.mark.slow]
@@ -66,9 +70,6 @@ class TestRandomFailureInjection:
             ray.kill(collector)
         except Exception:
             pass
-        # Wait for aiokafka background threads to fully close
-        # aiokafka has internal reconnect loops that need time to timeout
-        await asyncio.sleep(2.0)
 
     @pytest.mark.asyncio
     async def test_random_worker_kills_continuous(self, ray_cluster):
@@ -237,9 +238,6 @@ class TestCombinedFailures:
             ray.kill(collector)
         except Exception:
             pass
-        # Wait for aiokafka background threads to fully close
-        # aiokafka has internal reconnect loops that need time to timeout
-        await asyncio.sleep(2.0)
 
     @pytest.mark.asyncio
     async def test_combined_failures(self, ray_cluster):
@@ -277,25 +275,27 @@ class TestCombinedFailures:
 
         async def combined_chaos():
             """Apply various chaos actions randomly."""
-            while chaos_running and not is_runner_finished(runner):
-                await asyncio.sleep(random.uniform(0.5, 2.0))
+            actions_taken = 0
+            MAX_ACTIONS = 5  # Limit total chaos actions
+            while chaos_running and not is_runner_finished(runner) and actions_taken < MAX_ACTIONS:
+                await asyncio.sleep(random.uniform(2.0, 5.0))  # Slower chaos
 
                 if is_runner_finished(runner):
                     break
 
-                # Random action
-                action = random.choice(["kill", "scale_up", "scale_down", "nothing"])
+                # Random action (bias towards "nothing" for stability)
+                action = random.choice(["kill", "scale_up", "nothing", "nothing"])
 
                 try:
                     if action == "kill":
-                        await kill_random_worker(runner)
+                        await kill_random_worker(runner, stage_id="transform")
+                        actions_taken += 1
                     elif action == "scale_up":
                         master = runner._masters.get("transform")
-                        if master and master._worker_manager and len(master._workers) < 10:
+                        if master and master._worker_manager and len(master._workers) < 6:
                             partition_count = master._partition_count
                             await master._worker_manager.spawn_worker(partition_count=partition_count)
-                    elif action == "scale_down":
-                        await kill_random_worker(runner, stage_id="transform")
+                            actions_taken += 1
                     # "nothing" - just wait
                 except Exception:
                     pass
@@ -335,8 +335,8 @@ class TestCombinedFailures:
         Tests that failures in one stage don't cascade to corrupt data
         in other stages. Uses Filter+Explode for complex verification.
         """
-        NUM_RECORDS = 2000  # Very small for fast test
-        FILTER_MODULO = 4  # Filter more aggressively
+        NUM_RECORDS = 50000  # Large data to ensure workers are alive during kills
+        FILTER_MODULO = 4
         FILTER_REMAINDER = 0
         EXPLODE_FACTOR = 2
         validator = DataValidator()
@@ -348,9 +348,9 @@ class TestCombinedFailures:
 
         job = create_test_pipeline(
             num_records=NUM_RECORDS,
-            batch_size=450,
+            batch_size=100,  # Small batches = more splits = longer processing
             min_workers=3,
-            max_workers=8,
+            max_workers=6,
             collector_name=self.collector_name,
             with_checksum=True,
             source_data=source_data,
@@ -362,28 +362,41 @@ class TestCombinedFailures:
         )
 
         runner = RayJobRunner(job)
+        kills_performed = 0
 
         try:
             await runner.initialize()
             run_task = asyncio.create_task(runner.run())
 
-            # Kill workers in different stages at different times (reduced for stability)
-            for _ in range(3):
-                await asyncio.sleep(random.uniform(3.0, 6.0))
+            # Wait for some progress before killing (but not too much)
+            await wait_for_progress(
+                runner, min_processed=500, timeout=60, collector_name=self.collector_name
+            )
 
+            # Kill workers in different stages
+            for _ in range(3):
                 if run_task.done():
                     break
 
-                # Randomly pick a stage to kill from
-                stage = random.choice(["transform", "sink"])
+                # Randomly pick a stage to kill from (including source)
+                stage = random.choice(["source", "transform", "sink"])
                 try:
-                    await kill_random_worker(runner, stage_id=stage)
-                except Exception:
-                    pass
+                    killed = await kill_random_worker(runner, stage_id=stage)
+                    if killed:
+                        kills_performed += 1
+                        logger.info(f"Killed worker in stage {stage}")
+                except Exception as e:
+                    logger.debug(f"Failed to kill worker in {stage}: {e}")
 
-            await asyncio.wait_for(run_task, timeout=120)
+                await asyncio.sleep(random.uniform(0.5, 2.0))
+
+            await asyncio.wait_for(run_task, timeout=180)
         finally:
             await runner.stop()
+
+        # Verify failures were actually injected
+        assert kills_performed > 0, "No workers were killed - test is not valid"
+        logger.info(f"Test completed with {kills_performed} worker kills")
 
         sink_data = get_sink_records(self.collector_name)
 

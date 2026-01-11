@@ -519,9 +519,9 @@ class TestExactlyOnceSemantics:
 
         sink_data = get_sink_records(self.collector_name)
 
-        # At-least-once: no data loss (may have duplicates)
-        assert len(sink_data) >= expected_count, (
-            f"Data loss: expected >= {expected_count}, got {len(sink_data)}"
+        # Exactly-once: count should match expected (dedup enabled in collector)
+        assert validator.verify_count(sink_data, expected_count), (
+            f"Data count mismatch: expected {expected_count}, got {len(sink_data)}"
         )
         # Verify all expected IDs are present
         actual_ids = {r["id"] for r in sink_data}
