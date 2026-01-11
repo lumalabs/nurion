@@ -559,30 +559,6 @@ class RayJobRunner:
             error=self._error,
         )
 
-    async def get_status_async(self) -> JobStatus:
-        """Get current pipeline status with queue metrics."""
-        stages = {}
-        for stage_id, master in self._masters.items():
-            status = await master.get_status_async()
-            stages[stage_id] = {
-                "worker_count": status.worker_count,
-                "output_queue_size": status.output_queue_size,
-                "is_running": status.is_running,
-                "is_finished": status.is_finished,
-                "failed": status.failed,
-            }
-
-        elapsed = time.time() - self._start_time if self._start_time else 0
-
-        return JobStatus(
-            job_id=self.job.job_id,
-            is_running=self._running,
-            stages=stages,
-            start_time=self._start_time,
-            elapsed_time=elapsed,
-            error=self._error,
-        )
-
     @property
     def is_running(self) -> bool:
         return self._running

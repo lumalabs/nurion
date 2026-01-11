@@ -128,7 +128,7 @@ class TestPartitionSkewScenario:
             partition_count=3,
             shared_broker_endpoint=QueueEndpoint(
                 queue_type=QueueType.TANSU,
-                host="localhost",
+                host="127.0.0.1",
                 port=tansu_backend.port,
                 storage_url="memory://tansu/",
             ),
@@ -146,11 +146,11 @@ class TestPartitionSkewScenario:
         )
 
         topic = "test_topic"
-        await tansu_backend.create_topic(topic, partitions=3)
+        tansu_backend.create_topic(topic, partitions=3)
 
         # Produce controlled skew: partitions [10, 200, 20] messages respectively
         def _produce_messages():
-            producer = Producer({"bootstrap.servers": f"localhost:{tansu_backend.port}"})
+            producer = Producer({"bootstrap.servers": f"127.0.0.1:{tansu_backend.port}"})
             for i in range(10):
                 msg = QueueMessage(message_id=f"p0_{i}", split_id=f"s0_{i}", payload_key=f"k0_{i}")
                 producer.produce(topic, msg.to_bytes(), partition=0)
@@ -170,7 +170,7 @@ class TestPartitionSkewScenario:
         def _commit_offsets():
             for partition, offset in [(0, 0), (1, 0), (2, 20)]:
                 consumer = Consumer({
-                    "bootstrap.servers": f"localhost:{tansu_backend.port}",
+                    "bootstrap.servers": f"127.0.0.1:{tansu_backend.port}",
                     "enable.auto.commit": False,
                     "auto.offset.reset": "earliest",
                     "group.id": consumer_group,
@@ -184,7 +184,7 @@ class TestPartitionSkewScenario:
 
         master.upstream_endpoint = QueueEndpoint(
             queue_type=QueueType.TANSU,
-            host="localhost",
+            host="127.0.0.1",
             port=tansu_backend.port,
             storage_url="memory://tansu/",
         )
@@ -195,8 +195,8 @@ class TestPartitionSkewScenario:
         await master.start()
 
         try:
-            partition_metrics = await master._backpressure_monitor.get_partition_metrics()
-            skew_info = await master._backpressure_monitor.detect_skew()
+            partition_metrics = master._backpressure_monitor.get_partition_metrics()
+            skew_info = master._backpressure_monitor.detect_skew()
 
             # Expect skew: partition1 lags most (200), avg lag ~70 -> ratio > 2
             assert set(partition_metrics.keys()) == {0, 1, 2}
@@ -309,7 +309,7 @@ class TestBackpressureEndToEnd:
             backpressure_threshold_lag=5000,
             shared_broker_endpoint=QueueEndpoint(
                 queue_type=QueueType.TANSU,
-                host="localhost",
+                host="127.0.0.1",
                 port=tansu_backend.port,
                 storage_url="memory://tansu/",
             ),
@@ -328,11 +328,11 @@ class TestBackpressureEndToEnd:
 
         # Create upstream topic
         topic = "upstream_topic"
-        await tansu_backend.create_topic(topic, partitions=1)
+        tansu_backend.create_topic(topic, partitions=1)
 
         master.upstream_endpoint = QueueEndpoint(
             queue_type=QueueType.TANSU,
-            host="localhost",
+            host="127.0.0.1",
             port=tansu_backend.port,
             storage_url="memory://tansu/",
         )
@@ -348,10 +348,10 @@ class TestBackpressureEndToEnd:
                     split_id=f"split_{i}",
                     payload_key=f"key_{i}",
                 )
-                await tansu_backend.produce(topic, msg.to_bytes())
+                tansu_backend.produce(topic, msg.to_bytes())
 
             # Check backpressure - should be active
-            result1 = await master._backpressure_monitor.check_backpressure(
+            result1 = master._backpressure_monitor.check_backpressure(
                 master._output_queue, master._output_topic
             )
             assert isinstance(result1, bool)
@@ -364,7 +364,7 @@ class TestBackpressureEndToEnd:
 
             def _commit_offset():
                 consumer = Consumer({
-                    "bootstrap.servers": f"localhost:{tansu_backend.port}",
+                    "bootstrap.servers": f"127.0.0.1:{tansu_backend.port}",
                     "enable.auto.commit": False,
                     "auto.offset.reset": "earliest",
                     "group.id": consumer_group,
@@ -377,7 +377,7 @@ class TestBackpressureEndToEnd:
             await asyncio.to_thread(_commit_offset)
 
             # Check backpressure again - should clear with hysteresis
-            result2 = await master._backpressure_monitor.check_backpressure(
+            result2 = master._backpressure_monitor.check_backpressure(
                 master._output_queue, master._output_topic
             )
             assert isinstance(result2, bool)
@@ -397,7 +397,7 @@ class TestCombinedScenarios:
             partition_count=4,
             shared_broker_endpoint=QueueEndpoint(
                 queue_type=QueueType.TANSU,
-                host="localhost",
+                host="127.0.0.1",
                 port=tansu_backend.port,
                 storage_url="memory://tansu/",
             ),
@@ -416,7 +416,7 @@ class TestCombinedScenarios:
 
         # Create upstream topic
         topic = "test_topic"
-        await tansu_backend.create_topic(topic, partitions=4)
+        tansu_backend.create_topic(topic, partitions=4)
 
         # Produce many messages to create both skew and high lag
         for i in range(10000):
@@ -425,12 +425,12 @@ class TestCombinedScenarios:
                 split_id=f"split_{i}",
                 payload_key=f"key_{i}",
             )
-            await tansu_backend.produce(topic, msg.to_bytes())
+            tansu_backend.produce(topic, msg.to_bytes())
 
         consumer_group = "test_job_test_stage"
         master.upstream_endpoint = QueueEndpoint(
             queue_type=QueueType.TANSU,
-            host="localhost",
+            host="127.0.0.1",
             port=tansu_backend.port,
             storage_url="memory://tansu/",
         )
@@ -441,13 +441,13 @@ class TestCombinedScenarios:
 
         try:
             # Check backpressure via backpressure monitor
-            backpressure_active = await master._backpressure_monitor.check_backpressure(
+            backpressure_active = master._backpressure_monitor.check_backpressure(
                 master._output_queue, master._output_topic
             )
             assert isinstance(backpressure_active, bool)
 
             # Check skew detection via backpressure monitor
-            skew_info = await master._backpressure_monitor.detect_skew()
+            skew_info = master._backpressure_monitor.detect_skew()
             assert isinstance(skew_info.is_skewed, bool)
             assert isinstance(skew_info.skew_ratio, float)
             assert isinstance(master._backpressure_monitor.is_backpressure_active, bool)

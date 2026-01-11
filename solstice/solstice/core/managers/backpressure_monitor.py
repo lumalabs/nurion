@@ -114,7 +114,7 @@ class BackpressureMonitor:
         """Set references to downstream stages for backpressure propagation."""
         self._downstream_refs = refs
 
-    async def _get_metrics_queue(self) -> Optional[TansuQueueClient]:
+    def _get_metrics_queue(self) -> Optional[TansuQueueClient]:
         """Get or create a client for upstream metrics."""
         if not self._upstream_endpoint:
             return None
@@ -128,7 +128,7 @@ class BackpressureMonitor:
 
         return self._metrics_queue
 
-    async def get_input_lag(self) -> int:
+    def get_input_lag(self) -> int:
         """Get total input queue lag (messages pending processing).
 
         Returns:
@@ -137,7 +137,7 @@ class BackpressureMonitor:
         if not self._upstream_endpoint or not self._upstream_topic:
             return 0
 
-        queue = await self._get_metrics_queue()
+        queue = self._get_metrics_queue()
         if queue is None:
             return 0
 
@@ -155,7 +155,7 @@ class BackpressureMonitor:
             self._logger.debug(f"Error getting input lag: {e}")
             return 0
 
-    async def get_partition_metrics(self) -> Dict[int, PartitionMetrics]:
+    def get_partition_metrics(self) -> Dict[int, PartitionMetrics]:
         """Get metrics for all input partitions.
 
         Returns:
@@ -164,7 +164,7 @@ class BackpressureMonitor:
         if not self._upstream_endpoint or not self._upstream_topic:
             return {}
 
-        queue = await self._get_metrics_queue()
+        queue = self._get_metrics_queue()
         if queue is None:
             return {}
 
@@ -190,7 +190,7 @@ class BackpressureMonitor:
             self._logger.debug(f"Error getting partition metrics: {e}")
             return {}
 
-    async def detect_skew(self, threshold: float = 2.0) -> SkewInfo:
+    def detect_skew(self, threshold: float = 2.0) -> SkewInfo:
         """Detect partition-level skew in input queue.
 
         Args:
@@ -203,7 +203,7 @@ class BackpressureMonitor:
             return SkewInfo(is_skewed=False, skew_ratio=0.0, partition_lags={})
 
         try:
-            queue = await self._get_metrics_queue()
+            queue = self._get_metrics_queue()
             if queue is None:
                 return SkewInfo(is_skewed=False, skew_ratio=0.0, partition_lags={})
 
@@ -246,7 +246,7 @@ class BackpressureMonitor:
             self._logger.debug(f"Error detecting skew: {e}")
             return SkewInfo(is_skewed=False, skew_ratio=0.0, partition_lags={})
 
-    async def check_backpressure(
+    def check_backpressure(
         self, output_queue: Optional[QueueClient], output_topic: str
     ) -> bool:
         """Check if backpressure should be activated.
@@ -259,7 +259,7 @@ class BackpressureMonitor:
             True if backpressure should be active
         """
         # Check input queue lag
-        input_lag = await self.get_input_lag()
+        input_lag = self.get_input_lag()
         if input_lag > self._config.backpressure_threshold_lag:
             if not self._backpressure_active:
                 self._logger.warning(
@@ -320,7 +320,7 @@ class BackpressureMonitor:
 
         for stage_id, stage_ref in self._downstream_refs.items():
             try:
-                status = await stage_ref.get_status_async()
+                status = await stage_ref.get_status()
                 if status.backpressure_active:
                     self._logger.debug(f"Backpressure detected from downstream stage {stage_id}")
                     return True

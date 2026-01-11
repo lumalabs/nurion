@@ -50,7 +50,7 @@ import threading
 import time
 from typing import Dict, List, Optional
 
-from confluent_kafka import Consumer, Producer, KafkaException, TopicPartition
+from confluent_kafka import Consumer, KafkaError, KafkaException, Producer, TopicPartition
 from confluent_kafka._model import ConsumerGroupTopicPartitions
 from confluent_kafka.admin import AdminClient, NewTopic
 
@@ -360,7 +360,16 @@ class TansuQueueClient:
 
         self._producer.produce(topic, **kwargs)
         # Flush to ensure message is sent and callback is called
-        self._producer.flush(timeout=10.0)
+        remaining = self._producer.flush(timeout=10.0)
+
+        # Check if flush timed out (messages still in queue)
+        if remaining > 0:
+            raise KafkaException(
+                KafkaError(
+                    KafkaError._MSG_TIMED_OUT,
+                    f"Produce timed out: {remaining} message(s) still in queue after flush",
+                )
+            )
 
         if result_holder["error"]:
             raise KafkaException(result_holder["error"])
@@ -546,8 +555,8 @@ class TansuQueueClient:
     ) -> Consumer:
         """Get or create a consumer for the topic/partition.
 
-        Note: Consumer position is NOT automatically set from committed offset.
-        Callers should use get_committed_offset() and seek explicitly if needed.
+        For consumers with a group_id, automatically seeks to the committed offset
+        to support resumption after crashes (exactly-once semantics).
         """
         consumer_key = (topic, partition, group_id)
 
@@ -563,6 +572,24 @@ class TansuQueueClient:
             consumer = Consumer(config)
             consumer.assign([TopicPartition(topic, partition)])
             consumer.poll(timeout=0.1)  # Required for initialization before seek
+
+            # For consumers with a group_id, seek to committed offset for crash recovery
+            if group_id:
+                tp = TopicPartition(topic, partition)
+                committed = consumer.committed([tp], timeout=10.0)
+                if committed and committed[0] and committed[0].offset >= 0:
+                    consumer.seek(TopicPartition(topic, partition, committed[0].offset))
+                    self.logger.debug(
+                        f"Consumer for {topic}:{partition} (group={group_id}) "
+                        f"resuming from committed offset {committed[0].offset}"
+                    )
+                else:
+                    # No committed offset, start from beginning
+                    consumer.seek(TopicPartition(topic, partition, 0))
+                    self.logger.debug(
+                        f"Consumer for {topic}:{partition} (group={group_id}) "
+                        f"starting from offset 0 (no committed offset)"
+                    )
 
             self.logger.debug(f"Created consumer for {topic}:{partition} (group={group_id})")
             self._consumers[consumer_key] = consumer

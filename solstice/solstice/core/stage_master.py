@@ -380,10 +380,10 @@ class StageMaster:
         if self._partition_manager:
             self._partition_manager.stop()
 
-        # Stop state producer
+        # Stop state producer (async - has background tasks)
         if self._state_producer:
             try:
-                self._state_producer.stop()
+                await self._state_producer.stop()
             except Exception as e:
                 self.logger.warning(f"Error stopping state producer: {e}")
             self._state_producer = None
@@ -523,21 +523,6 @@ class StageMaster:
         return self._output_topic
 
     def get_status(self) -> StageStatus:
-        """Get current stage status (synchronous)."""
-        return StageStatus(
-            stage_id=self.stage_id,
-            worker_count=self._worker_manager.worker_count if self._worker_manager else 0,
-            output_queue_size=0,
-            is_running=self._running,
-            is_finished=self._finished,
-            failed=self._failed,
-            failure_message=self._failure_message,
-            backpressure_active=self._backpressure_monitor.is_backpressure_active
-            if self._backpressure_monitor
-            else False,
-        )
-
-    def get_status_async(self) -> StageStatus:
         """Get current stage status with queue metrics."""
         output_size = 0
         if self._output_queue:
@@ -559,11 +544,11 @@ class StageMaster:
             else False,
         )
 
-    async def get_input_queue_lag(self) -> int:
+    def get_input_queue_lag(self) -> int:
         """Get input queue lag (for autoscaler)."""
         if self._backpressure_monitor:
-            return await self._backpressure_monitor.get_input_lag()
-            return 0
+            return self._backpressure_monitor.get_input_lag()
+        return 0
 
     def set_downstream_stage_refs(self, downstream_refs: Dict[str, Any]) -> None:
         """Set downstream stage references for backpressure propagation."""

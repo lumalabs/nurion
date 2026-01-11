@@ -344,7 +344,7 @@ class SourceMaster(StageMaster):
         for stage_id, stage_ref in self._downstream_stage_refs.items():
             try:
                 # Get status from downstream stage
-                status = await stage_ref.get_status_async()
+                status = await stage_ref.get_status()
 
                 # Check if backpressure is active
                 if status.backpressure_active:
@@ -445,14 +445,8 @@ class SourceMaster(StageMaster):
         return self._source_endpoint
 
     def get_status(self) -> StageStatus:
-        """Get current source status."""
-        status = super().get_status()
-        status.metrics["splits_produced"] = self._splits_produced
-        return status
-
-    async def get_status_async(self) -> StageStatus:
         """Get current source status with queue metrics."""
-        status = await super().get_status_async()
+        status = super().get_status()
 
         # Add source queue size
         if self._source_client:
