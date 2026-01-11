@@ -124,7 +124,7 @@ class BackpressureMonitor:
         if self._metrics_queue is None:
             broker_url = f"{self._upstream_endpoint.host}:{self._upstream_endpoint.port}"
             self._metrics_queue = TansuQueueClient(broker_url)
-            await self._metrics_queue.start()
+            self._metrics_queue.start()
 
         return self._metrics_queue
 
@@ -142,13 +142,13 @@ class BackpressureMonitor:
             return 0
 
         try:
-            partition_offsets = await queue.get_all_partition_offsets(self._upstream_topic)
+            partition_offsets = queue.get_all_partition_offsets(self._upstream_topic)
+            committed_offsets = queue.get_all_committed_offsets(
+                self._consumer_group, self._upstream_topic
+            )
             total_lag = 0
             for partition_id, latest_offset in partition_offsets.items():
-                committed = await queue.get_committed_offset(
-                    self._consumer_group, self._upstream_topic, partition=partition_id
-                )
-                committed = committed or 0
+                committed = committed_offsets.get(partition_id, 0)
                 total_lag += max(0, latest_offset - committed)
             return total_lag
         except Exception as e:
@@ -169,14 +169,14 @@ class BackpressureMonitor:
             return {}
 
         try:
-            partition_offsets = await queue.get_all_partition_offsets(self._upstream_topic)
+            partition_offsets = queue.get_all_partition_offsets(self._upstream_topic)
+            committed_offsets = queue.get_all_committed_offsets(
+                self._consumer_group, self._upstream_topic
+            )
             metrics: Dict[int, PartitionMetrics] = {}
 
             for partition_id, latest_offset in partition_offsets.items():
-                committed = await queue.get_committed_offset(
-                    self._consumer_group, self._upstream_topic, partition=partition_id
-                )
-                committed = committed or 0
+                committed = committed_offsets.get(partition_id, 0)
                 lag = max(0, latest_offset - committed)
 
                 metrics[partition_id] = PartitionMetrics(
@@ -207,14 +207,14 @@ class BackpressureMonitor:
             if queue is None:
                 return SkewInfo(is_skewed=False, skew_ratio=0.0, partition_lags={})
 
-            partition_offsets = await queue.get_all_partition_offsets(self._upstream_topic)
+            partition_offsets = queue.get_all_partition_offsets(self._upstream_topic)
+            committed_offsets = queue.get_all_committed_offsets(
+                self._consumer_group, self._upstream_topic
+            )
             partition_lags: Dict[int, int] = {}
 
             for partition_id, latest_offset in partition_offsets.items():
-                committed = await queue.get_committed_offset(
-                    self._consumer_group, self._upstream_topic, partition=partition_id
-                )
-                committed = committed or 0
+                committed = committed_offsets.get(partition_id, 0)
                 partition_lags[partition_id] = max(0, latest_offset - committed)
 
             if not partition_lags:
@@ -272,7 +272,7 @@ class BackpressureMonitor:
         # Check output queue size
         if output_queue:
             try:
-                output_size = await output_queue.get_latest_offset(output_topic)
+                output_size = output_queue.get_latest_offset(output_topic)
                 if output_size > self._config.backpressure_threshold_queue_size:
                     if not self._backpressure_active:
                         self._logger.warning(
@@ -377,11 +377,11 @@ class BackpressureMonitor:
         )
         return removed
 
-    async def stop(self) -> None:
+    def stop(self) -> None:
         """Clean up resources."""
         if self._metrics_queue:
             try:
-                await self._metrics_queue.stop()
+                self._metrics_queue.stop()
             except Exception as e:
                 self._logger.warning(f"Error stopping metrics queue: {e}")
             self._metrics_queue = None

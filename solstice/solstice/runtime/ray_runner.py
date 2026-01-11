@@ -153,7 +153,7 @@ class RayJobRunner:
         self._shared_broker = TansuBrokerManager(
             storage_url=self.tansu_storage_url or "memory://tansu/",
         )
-        await self._shared_broker.start()
+        self._shared_broker.start()
 
         broker_url = self._shared_broker.get_broker_url()
         host, port_str = broker_url.split(":")
@@ -167,7 +167,7 @@ class RayJobRunner:
 
         # Create a client for the runner itself (for cleanup operations)
         self._shared_broker_client = TansuQueueClient(broker_url)
-        await self._shared_broker_client.start()
+        self._shared_broker_client.start()
 
         self.logger.info(f"Created shared Tansu broker at {broker_url}")
 
@@ -175,14 +175,14 @@ class RayJobRunner:
         """Stop the shared Tansu broker."""
         if self._shared_broker_client:
             try:
-                await self._shared_broker_client.stop()
+                self._shared_broker_client.stop()
             except Exception as e:
                 self.logger.warning(f"Error stopping shared broker client: {e}")
             self._shared_broker_client = None
 
         if self._shared_broker:
             try:
-                await self._shared_broker.stop()
+                self._shared_broker.stop()
             except Exception as e:
                 self.logger.warning(f"Error stopping shared broker: {e}")
             self._shared_broker = None

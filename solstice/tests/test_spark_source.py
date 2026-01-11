@@ -617,7 +617,7 @@ class TestSparkSourceMaster:
         # Verify source queue was created and splits were produced
         source_queue = master.get_source_client()
         assert source_queue is not None
-        assert await source_queue.health_check()
+        assert source_queue.health_check()
 
         # Check splits were produced to source queue
         status = await master.get_status_async()

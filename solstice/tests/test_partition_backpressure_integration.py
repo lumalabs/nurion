@@ -120,7 +120,7 @@ class TestPartitionSkewScenario:
         """Test skew detection in a multi-partition setup."""
         import math
         import asyncio
-        from aiokafka import AIOKafkaProducer, AIOKafkaConsumer, TopicPartition
+        from confluent_kafka import Producer, Consumer, TopicPartition
 
         config = StageConfig(
             queue_type=QueueType.TANSU,
@@ -149,39 +149,38 @@ class TestPartitionSkewScenario:
         await tansu_backend.create_topic(topic, partitions=3)
 
         # Produce controlled skew: partitions [10, 200, 20] messages respectively
-        producer = AIOKafkaProducer(bootstrap_servers=f"localhost:{tansu_backend.port}")
-        await producer.start()
-        try:
+        def _produce_messages():
+            producer = Producer({"bootstrap.servers": f"localhost:{tansu_backend.port}"})
             for i in range(10):
                 msg = QueueMessage(message_id=f"p0_{i}", split_id=f"s0_{i}", payload_key=f"k0_{i}")
-                await producer.send_and_wait(topic, msg.to_bytes(), partition=0)
+                producer.produce(topic, msg.to_bytes(), partition=0)
             for i in range(200):
                 msg = QueueMessage(message_id=f"p1_{i}", split_id=f"s1_{i}", payload_key=f"k1_{i}")
-                await producer.send_and_wait(topic, msg.to_bytes(), partition=1)
+                producer.produce(topic, msg.to_bytes(), partition=1)
             for i in range(20):
                 msg = QueueMessage(message_id=f"p2_{i}", split_id=f"s2_{i}", payload_key=f"k2_{i}")
-                await producer.send_and_wait(topic, msg.to_bytes(), partition=2)
-        finally:
-            await producer.stop()
+                producer.produce(topic, msg.to_bytes(), partition=2)
+            producer.flush(timeout=10.0)
+
+        await asyncio.to_thread(_produce_messages)
 
         # Commit offsets: p0->0 (none consumed), p1->0, p2->20 (fully consumed)
         consumer_group = "test_job_test_stage"
-        for partition, offset in [(0, 0), (1, 0), (2, 20)]:
-            commit_consumer = AIOKafkaConsumer(
-                bootstrap_servers=f"localhost:{tansu_backend.port}",
-                enable_auto_commit=False,
-                auto_offset_reset="earliest",
-                request_timeout_ms=5000,
-                group_id=consumer_group,
-            )
-            try:
-                await commit_consumer.start()
-                await asyncio.sleep(0.2)
-                commit_consumer.assign([TopicPartition(topic, partition)])
-                await asyncio.sleep(0.1)
-                await commit_consumer.commit({TopicPartition(topic, partition): offset})
-            finally:
-                await commit_consumer.stop()
+
+        def _commit_offsets():
+            for partition, offset in [(0, 0), (1, 0), (2, 20)]:
+                consumer = Consumer({
+                    "bootstrap.servers": f"localhost:{tansu_backend.port}",
+                    "enable.auto.commit": False,
+                    "auto.offset.reset": "earliest",
+                    "group.id": consumer_group,
+                })
+                tp = TopicPartition(topic, partition, offset)
+                consumer.assign([tp])
+                consumer.commit(offsets=[tp], asynchronous=False)
+                consumer.close()
+
+        await asyncio.to_thread(_commit_offsets)
 
         master.upstream_endpoint = QueueEndpoint(
             queue_type=QueueType.TANSU,
@@ -361,23 +360,21 @@ class TestBackpressureEndToEnd:
             consumer_group = master._consumer_group
             # Commit offset for partition 0
             import asyncio
-            from aiokafka import AIOKafkaConsumer, TopicPartition
+            from confluent_kafka import Consumer, TopicPartition
 
-            commit_consumer = AIOKafkaConsumer(
-                bootstrap_servers=f"localhost:{tansu_backend.port}",
-                enable_auto_commit=False,
-                auto_offset_reset="earliest",
-                request_timeout_ms=5000,
-                group_id=consumer_group,
-            )
-            try:
-                await commit_consumer.start()
-                await asyncio.sleep(0.2)
-                commit_consumer.assign([TopicPartition(topic, 0)])
-                await asyncio.sleep(0.1)
-                await commit_consumer.commit({TopicPartition(topic, 0): 3000})
-            finally:
-                await commit_consumer.stop()
+            def _commit_offset():
+                consumer = Consumer({
+                    "bootstrap.servers": f"localhost:{tansu_backend.port}",
+                    "enable.auto.commit": False,
+                    "auto.offset.reset": "earliest",
+                    "group.id": consumer_group,
+                })
+                tp = TopicPartition(topic, 0, 3000)
+                consumer.assign([tp])
+                consumer.commit(offsets=[tp], asynchronous=False)
+                consumer.close()
+
+            await asyncio.to_thread(_commit_offset)
 
             # Check backpressure again - should clear with hysteresis
             result2 = await master._backpressure_monitor.check_backpressure(

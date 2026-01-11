@@ -165,11 +165,11 @@ class SourceMaster(StageMaster):
         if self.config.queue_type == QueueType.MEMORY:
             # MEMORY: Create local broker (for testing only)
             broker = MemoryBroker()
-            await broker.start()
+            broker.start()
             self._source_broker = broker
 
             client = MemoryClient(broker)
-            await client.start()
+            client.start()
             self._source_client = client
 
             self._source_endpoint = QueueEndpoint(
@@ -177,7 +177,7 @@ class SourceMaster(StageMaster):
                 port=0,
                 storage_url="memory://",
             )
-            await client.create_topic(self._source_topic)
+            client.create_topic(self._source_topic)
             self.logger.info(f"Created Memory source queue for {self.stage_id}")
             return client
         else:
@@ -190,7 +190,7 @@ class SourceMaster(StageMaster):
 
             broker_url = f"{endpoint.host}:{endpoint.port}"
             client = TansuQueueClient(broker_url)
-            await client.start()
+            client.start()
             self._source_client = client
 
             self._source_endpoint = QueueEndpoint(
@@ -200,7 +200,7 @@ class SourceMaster(StageMaster):
                 storage_url=endpoint.storage_url,
             )
 
-            await client.create_topic(self._source_topic)
+            client.create_topic(self._source_topic)
             self.logger.info(
                 f"Connected to shared broker at {broker_url} for source {self.stage_id}"
             )
@@ -321,7 +321,7 @@ class SourceMaster(StageMaster):
             from solstice.core.stage_master import QueueMessage
 
             eof_message = QueueMessage.create_eof(partition=0)
-            await self._source_client.produce(
+            self._source_client.produce(
                 self._source_topic,
                 eof_message.to_bytes(),
                 partition=0,
@@ -403,7 +403,7 @@ class SourceMaster(StageMaster):
         )
 
         # Produce to source queue
-        offset = await self._source_client.produce(self._source_topic, message.to_bytes())
+        offset = self._source_client.produce(self._source_topic, message.to_bytes())
         self.logger.debug(f"Produced split {split.split_id} at offset {offset}")
 
     @abstractmethod
@@ -421,12 +421,12 @@ class SourceMaster(StageMaster):
         """Clean up queues. Called by runner after all consumers are done."""
         # Clean up source client first
         if self._source_client:
-            await self._source_client.stop()
+            self._source_client.stop()
             self._source_client = None
 
         # Clean up source broker
         if self._source_broker:
-            await self._source_broker.stop()
+            self._source_broker.stop()
             self._source_broker = None
 
         # Clean up output queue (parent)
@@ -457,7 +457,7 @@ class SourceMaster(StageMaster):
         # Add source queue size
         if self._source_client:
             try:
-                source_size = await self._source_client.get_latest_offset(self._source_topic)
+                source_size = self._source_client.get_latest_offset(self._source_topic)
                 status.metrics["source_queue_size"] = source_size
             except Exception:
                 pass
