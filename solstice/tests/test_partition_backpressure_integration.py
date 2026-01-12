@@ -169,12 +169,14 @@ class TestPartitionSkewScenario:
 
         def _commit_offsets():
             for partition, offset in [(0, 0), (1, 0), (2, 20)]:
-                consumer = Consumer({
-                    "bootstrap.servers": f"127.0.0.1:{tansu_backend.port}",
-                    "enable.auto.commit": False,
-                    "auto.offset.reset": "earliest",
-                    "group.id": consumer_group,
-                })
+                consumer = Consumer(
+                    {
+                        "bootstrap.servers": f"127.0.0.1:{tansu_backend.port}",
+                        "enable.auto.commit": False,
+                        "auto.offset.reset": "earliest",
+                        "group.id": consumer_group,
+                    }
+                )
                 tp = TopicPartition(topic, partition, offset)
                 consumer.assign([tp])
                 consumer.commit(offsets=[tp], asynchronous=False)
@@ -363,12 +365,14 @@ class TestBackpressureEndToEnd:
             from confluent_kafka import Consumer, TopicPartition
 
             def _commit_offset():
-                consumer = Consumer({
-                    "bootstrap.servers": f"127.0.0.1:{tansu_backend.port}",
-                    "enable.auto.commit": False,
-                    "auto.offset.reset": "earliest",
-                    "group.id": consumer_group,
-                })
+                consumer = Consumer(
+                    {
+                        "bootstrap.servers": f"127.0.0.1:{tansu_backend.port}",
+                        "enable.auto.commit": False,
+                        "auto.offset.reset": "earliest",
+                        "group.id": consumer_group,
+                    }
+                )
                 tp = TopicPartition(topic, 0, 3000)
                 consumer.assign([tp])
                 consumer.commit(offsets=[tp], asynchronous=False)
@@ -495,3 +499,150 @@ class TestCombinedScenarios:
             assert master._partition_count == 4
         finally:
             await master.stop()
+
+
+class TestDownstreamBackpressurePropagation:
+    """Tests for backpressure propagation between upstream and downstream stages."""
+
+    @pytest.mark.asyncio
+    async def test_check_downstream_backpressure_with_stage_refs(self, payload_store, ray_cluster):
+        """Test that check_downstream_backpressure correctly calls get_status on downstream stages.
+
+        This test verifies the fix for the TypeError that occurred when awaiting
+        the synchronous get_status() method.
+        """
+        # Create upstream stage config
+        upstream_config = StageConfig(
+            queue_type=QueueType.MEMORY,
+            max_workers=2,
+            min_workers=1,
+            partition_count=2,
+            num_cpus=0.25,
+        )
+        upstream_stage = Stage(
+            stage_id="upstream_stage",
+            operator_config=_TestOperatorConfig(),
+            parallelism=2,
+        )
+        upstream_master = StageMaster(
+            job_id="test_job",
+            stage=upstream_stage,
+            config=upstream_config,
+            payload_store=payload_store,
+        )
+
+        # Create downstream stage config
+        downstream_config = StageConfig(
+            queue_type=QueueType.MEMORY,
+            max_workers=2,
+            min_workers=1,
+            partition_count=2,
+            num_cpus=0.25,
+        )
+        downstream_stage = Stage(
+            stage_id="downstream_stage",
+            operator_config=_TestOperatorConfig(),
+            parallelism=2,
+        )
+        downstream_master = StageMaster(
+            job_id="test_job",
+            stage=downstream_stage,
+            config=downstream_config,
+            payload_store=payload_store,
+        )
+
+        await upstream_master.start()
+        await downstream_master.start()
+
+        try:
+            # Wire downstream refs (simulating what RayJobRunner._wire_downstream_refs does)
+            upstream_master.set_downstream_stage_refs({"downstream_stage": downstream_master})
+
+            # Verify the downstream refs are set
+            assert upstream_master._downstream_stage_refs == {"downstream_stage": downstream_master}
+
+            # Call check_downstream_backpressure - this should NOT raise TypeError
+            # (Previously would fail with "object StageStatus can't be used in 'await' expression")
+            assert upstream_master._backpressure_monitor is not None, (
+                "BackpressureMonitor should be created for this config"
+            )
+            result = await upstream_master._backpressure_monitor.check_downstream_backpressure()
+            # No backpressure expected - downstream has empty queue
+            assert result is False, "Expected no backpressure with empty downstream queue"
+
+            # Also verify get_status works directly (sync method)
+            status = downstream_master.get_status()
+            assert status.stage_id == "downstream_stage"
+            assert status.backpressure_active is False, "No backpressure should be active initially"
+            assert status.output_queue_size == 0, "Queue should be empty initially"
+            assert status.is_running is True, "Stage should be running"
+            assert status.is_finished is False, "Stage should not be finished"
+
+        finally:
+            await upstream_master.stop()
+            await downstream_master.stop()
+
+    @pytest.mark.asyncio
+    async def test_backpressure_propagates_when_downstream_active(self, payload_store, ray_cluster):
+        """Test that backpressure from downstream stage is detected by upstream."""
+        # Create upstream stage
+        upstream_config = StageConfig(
+            queue_type=QueueType.MEMORY,
+            max_workers=2,
+            min_workers=1,
+            partition_count=2,
+            num_cpus=0.25,
+            backpressure_threshold_queue_size=10,  # Low threshold for testing
+        )
+        upstream_stage = Stage(
+            stage_id="upstream",
+            operator_config=_TestOperatorConfig(),
+            parallelism=2,
+        )
+        upstream_master = StageMaster(
+            job_id="test_job",
+            stage=upstream_stage,
+            config=upstream_config,
+            payload_store=payload_store,
+        )
+
+        # Create downstream stage
+        downstream_config = StageConfig(
+            queue_type=QueueType.MEMORY,
+            max_workers=2,
+            min_workers=1,
+            partition_count=2,
+            num_cpus=0.25,
+        )
+        downstream_stage = Stage(
+            stage_id="downstream",
+            operator_config=_TestOperatorConfig(),
+            parallelism=2,
+        )
+        downstream_master = StageMaster(
+            job_id="test_job",
+            stage=downstream_stage,
+            config=downstream_config,
+            payload_store=payload_store,
+        )
+
+        await upstream_master.start()
+        await downstream_master.start()
+
+        try:
+            # Wire downstream refs
+            upstream_master.set_downstream_stage_refs({"downstream": downstream_master})
+
+            # Initially no backpressure - downstream queue is empty
+            assert upstream_master._backpressure_monitor is not None
+            result = await upstream_master._backpressure_monitor.check_downstream_backpressure()
+            assert result is False, "No backpressure expected with empty downstream queue"
+
+            # Verify downstream status shows no backpressure
+            downstream_status = downstream_master.get_status()
+            assert downstream_status.backpressure_active is False
+            assert downstream_status.output_queue_size == 0
+
+        finally:
+            await upstream_master.stop()
+            await downstream_master.stop()

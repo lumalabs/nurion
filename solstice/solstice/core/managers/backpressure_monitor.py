@@ -26,12 +26,21 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Dict, Optional, Protocol
 
 from solstice.queue import QueueType, QueueClient, TansuQueueClient
 from solstice.core.stage_config import StageConfig, QueueEndpoint
 from solstice.core.managers.partition_manager import PartitionManager
 from solstice.core.managers.worker_manager import WorkerManager
+
+if TYPE_CHECKING:
+    from solstice.core.stage_master import StageStatus
+
+
+class StageStatusProvider(Protocol):
+    """Protocol for objects that can provide stage status."""
+
+    def get_status(self) -> StageStatus: ...
 
 
 @dataclass
@@ -100,7 +109,7 @@ class BackpressureMonitor:
 
         # State
         self._backpressure_active = False
-        self._downstream_refs: Dict[str, Any] = {}
+        self._downstream_refs: Dict[str, StageStatusProvider] = {}
 
         # Cached upstream queue client for metrics
         self._metrics_queue: Optional[TansuQueueClient] = None
@@ -110,7 +119,7 @@ class BackpressureMonitor:
         """Check if backpressure is currently active."""
         return self._backpressure_active
 
-    def set_downstream_refs(self, refs: Dict[str, Any]) -> None:
+    def set_downstream_refs(self, refs: Dict[str, StageStatusProvider]) -> None:
         """Set references to downstream stages for backpressure propagation."""
         self._downstream_refs = refs
 
@@ -318,7 +327,7 @@ class BackpressureMonitor:
 
         for stage_id, stage_ref in self._downstream_refs.items():
             try:
-                status = await stage_ref.get_status()
+                status = stage_ref.get_status()
                 if status.backpressure_active:
                     self._logger.debug(f"Backpressure detected from downstream stage {stage_id}")
                     return True

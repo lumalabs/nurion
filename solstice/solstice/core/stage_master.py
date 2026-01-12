@@ -149,7 +149,7 @@ class StageMaster:
         self._upstream_finished = False
 
         # Downstream stage refs for backpressure (backward compatibility)
-        self._downstream_stage_refs: Dict[str, Any] = {}
+        self._downstream_stage_refs: Dict[str, "StageMaster"] = {}
 
         # State producer for WebUI metrics
         self._state_producer = None
@@ -550,7 +550,7 @@ class StageMaster:
             return self._backpressure_monitor.get_input_lag()
         return 0
 
-    def set_downstream_stage_refs(self, downstream_refs: Dict[str, Any]) -> None:
+    def set_downstream_stage_refs(self, downstream_refs: Dict[str, "StageMaster"]) -> None:
         """Set downstream stage references for backpressure propagation."""
         self._downstream_stage_refs = downstream_refs
         if self._backpressure_monitor:

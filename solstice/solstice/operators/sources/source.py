@@ -343,8 +343,8 @@ class SourceMaster(StageMaster):
         # Check all downstream stages for backpressure
         for stage_id, stage_ref in self._downstream_stage_refs.items():
             try:
-                # Get status from downstream stage
-                status = await stage_ref.get_status()
+                # Get status from downstream stage (sync method)
+                status = stage_ref.get_status()
 
                 # Check if backpressure is active
                 if status.backpressure_active:
