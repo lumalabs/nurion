@@ -246,9 +246,7 @@ class BackpressureMonitor:
             self._logger.debug(f"Error detecting skew: {e}")
             return SkewInfo(is_skewed=False, skew_ratio=0.0, partition_lags={})
 
-    def check_backpressure(
-        self, output_queue: Optional[QueueClient], output_topic: str
-    ) -> bool:
+    def check_backpressure(self, output_queue: Optional[QueueClient], output_topic: str) -> bool:
         """Check if backpressure should be activated.
 
         Args:
