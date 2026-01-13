@@ -377,15 +377,14 @@ class SourceMaster(StageMaster):
         """Notify workers that all splits have been produced.
 
         This allows workers to exit once they've consumed all splits.
+        Also sets the upstream_finished flag so recovered workers get notified.
         """
-        import ray
-
         self.logger.info(f"Notifying {len(self._workers)} workers: all splits produced")
-        for worker_id, worker in self._workers.items():
-            try:
-                ray.get(worker.notify_upstream_finished.remote(), timeout=5)
-            except Exception as e:
-                self.logger.warning(f"Failed to notify worker {worker_id}: {e}")
+
+        # Use WorkerManager's method to notify workers AND set the flag
+        # This ensures recovered workers will also be notified
+        if self._worker_manager:
+            self._worker_manager.notify_upstream_finished()
 
     async def _produce_split(self, split: Split) -> None:
         """Produce a split to the source queue.
