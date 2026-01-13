@@ -306,7 +306,7 @@ class DuckDBEngine:
         be merged later. For example:
         - sum -> partial sum
         - count -> partial count
-        - avg -> partial sum + partial count
+        - avg -> partial sum + partial count (for correct weighted merge)
 
         Args:
             table: Input Arrow table
@@ -316,10 +316,47 @@ class DuckDBEngine:
         Returns:
             Partially aggregated Arrow table
         """
-        # For now, partial aggregate is the same as full aggregate
-        # In a more sophisticated implementation, we would track
-        # intermediate state (e.g., sum + count for avg)
-        return self.aggregate(table, group_by, aggregations)
+        self.conn.register("input_table", table)
+
+        # Build aggregation expressions
+        # For avg, we output both sum and count for proper merging
+        agg_exprs = []
+        for col, func in aggregations.items():
+            if func == "avg":
+                # For avg, store sum and count separately
+                agg_exprs.append(f"SUM({col}) AS __avg_sum_{col}")
+                agg_exprs.append(f"COUNT({col}) AS __avg_count_{col}")
+            elif func == "sum":
+                agg_exprs.append(f"SUM({col}) AS sum_{col}")
+            elif func == "count":
+                agg_exprs.append(f"COUNT({col}) AS count_{col}")
+            elif func == "min":
+                agg_exprs.append(f"MIN({col}) AS min_{col}")
+            elif func == "max":
+                agg_exprs.append(f"MAX({col}) AS max_{col}")
+            else:
+                raise ValueError(f"Unknown aggregation function: {func}")
+
+        select_cols = group_by + agg_exprs
+        select_clause = ", ".join(select_cols)
+
+        if group_by:
+            group_clause = ", ".join(group_by)
+            query = f"""
+                SELECT {select_clause}
+                FROM input_table
+                GROUP BY {group_clause}
+            """
+        else:
+            agg_only = ", ".join(agg_exprs)
+            query = f"""
+                SELECT {agg_only}
+                FROM input_table
+            """
+
+        result = self.conn.execute(query).fetch_arrow_table()
+        self.conn.unregister("input_table")
+        return result
 
     def merge_aggregates(
         self,
@@ -330,9 +367,10 @@ class DuckDBEngine:
         """Merge partial aggregates into final result.
 
         This is the second phase of a two-phase aggregation.
+        Properly handles avg by computing weighted average from sum/count.
 
         Args:
-            tables: List of partially aggregated tables
+            tables: List of partially aggregated tables (from partial_aggregate)
             group_by: Columns to group by
             aggregations: Dict {column: function}
 
@@ -344,27 +382,48 @@ class DuckDBEngine:
 
         # Concatenate all partial results
         combined = pa.concat_tables(tables)
+        self.conn.register("partial_table", combined)
 
-        # Re-aggregate
-        # For sum/count, we sum the partial results
-        # For min/max, we take min/max of partial results
-        merge_aggs = {}
+        # Build merge expressions
+        # For avg, compute SUM(partial_sum) / SUM(partial_count)
+        agg_exprs = []
         for col, func in aggregations.items():
-            result_col = f"{func}_{col}"
-            if func in ("sum", "count"):
-                merge_aggs[result_col] = "sum"
+            if func == "sum":
+                agg_exprs.append(f"SUM(sum_{col}) AS sum_{col}")
+            elif func == "count":
+                agg_exprs.append(f"SUM(count_{col}) AS count_{col}")
             elif func == "min":
-                merge_aggs[result_col] = "min"
+                agg_exprs.append(f"MIN(min_{col}) AS min_{col}")
             elif func == "max":
-                merge_aggs[result_col] = "max"
+                agg_exprs.append(f"MAX(max_{col}) AS max_{col}")
             elif func == "avg":
-                # For avg, we need sum and count
-                # This is a simplification - proper avg merging needs sum/count tracking
-                merge_aggs[result_col] = "avg"
+                # Proper weighted average: total_sum / total_count
+                agg_exprs.append(
+                    f"SUM(__avg_sum_{col}) * 1.0 / SUM(__avg_count_{col}) AS avg_{col}"
+                )
             else:
-                merge_aggs[result_col] = func
+                raise ValueError(f"Unknown aggregation function: {func}")
 
-        return self.aggregate(combined, group_by, merge_aggs)
+        select_cols = group_by + agg_exprs
+        select_clause = ", ".join(select_cols)
+
+        if group_by:
+            group_clause = ", ".join(group_by)
+            query = f"""
+                SELECT {select_clause}
+                FROM partial_table
+                GROUP BY {group_clause}
+            """
+        else:
+            agg_only = ", ".join(agg_exprs)
+            query = f"""
+                SELECT {agg_only}
+                FROM partial_table
+            """
+
+        result = self.conn.execute(query).fetch_arrow_table()
+        self.conn.unregister("partial_table")
+        return result
 
     # === Join Operations ===
 

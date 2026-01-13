@@ -356,8 +356,8 @@ class TestDuckDBEngine:
         assert values[("a", 2)] == "third"
         assert values[("b", 1)] == "fourth"
 
-    def test_partial_and_merge_aggregate(self, engine):
-        """Test two-phase aggregation."""
+    def test_partial_and_merge_aggregate_sum(self, engine):
+        """Test two-phase sum aggregation."""
         # Simulate data split across two partitions
         table1 = pa.table({
             "user_id": [1, 2],
@@ -389,12 +389,91 @@ class TestDuckDBEngine:
 
         # Verify
         result_dict = {
-            row["user_id"]: row["sum_sum_amount"]
+            row["user_id"]: row["sum_amount"]
             for row in result.to_pylist()
         }
         assert result_dict[1] == 250  # 100 + 150
         assert result_dict[2] == 200
         assert result_dict[3] == 300
+
+    def test_partial_and_merge_aggregate_avg(self, engine):
+        """Test two-phase avg aggregation with proper weighted average.
+
+        This test verifies that avg is correctly computed as weighted average
+        when partitions have different row counts.
+
+        Bug fixed: avg(partial_averages) gives wrong results.
+        Example: partition A (100 rows, avg=5.0), partition B (10 rows, avg=10.0)
+        Wrong: avg(5.0, 10.0) = 7.5
+        Correct: (500 + 100) / 110 = 5.45
+        """
+        # Partition 1: 3 rows with values 10, 20, 30 (sum=60, avg=20)
+        table1 = pa.table({
+            "group_id": [1, 1, 1],
+            "value": [10, 20, 30],
+        })
+        # Partition 2: 1 row with value 100 (sum=100, avg=100)
+        table2 = pa.table({
+            "group_id": [1],
+            "value": [100],
+        })
+
+        # Partial aggregates
+        partial1 = engine.partial_aggregate(
+            table1,
+            group_by=["group_id"],
+            aggregations={"value": "avg"},
+        )
+        partial2 = engine.partial_aggregate(
+            table2,
+            group_by=["group_id"],
+            aggregations={"value": "avg"},
+        )
+
+        # Merge
+        result = engine.merge_aggregates(
+            [partial1, partial2],
+            group_by=["group_id"],
+            aggregations={"value": "avg"},
+        )
+
+        # Verify: correct avg = (10+20+30+100) / 4 = 160 / 4 = 40.0
+        # Wrong avg(avg(10,20,30), avg(100)) = avg(20, 100) = 60
+        result_dict = {row["group_id"]: row["avg_value"] for row in result.to_pylist()}
+        assert result_dict[1] == 40.0, f"Expected 40.0, got {result_dict[1]}"
+
+    def test_partial_and_merge_aggregate_multiple(self, engine):
+        """Test two-phase aggregation with multiple functions."""
+        table1 = pa.table({
+            "user_id": [1, 1],
+            "amount": [100, 200],
+        })
+        table2 = pa.table({
+            "user_id": [1, 1, 1],
+            "amount": [300, 400, 500],
+        })
+
+        # Partial aggregates with sum, count, avg, min, max
+        partial1 = engine.partial_aggregate(
+            table1,
+            group_by=["user_id"],
+            aggregations={"amount": "sum"},
+        )
+        partial2 = engine.partial_aggregate(
+            table2,
+            group_by=["user_id"],
+            aggregations={"amount": "sum"},
+        )
+
+        # Merge
+        result = engine.merge_aggregates(
+            [partial1, partial2],
+            group_by=["user_id"],
+            aggregations={"amount": "sum"},
+        )
+
+        row = result.to_pylist()[0]
+        assert row["sum_amount"] == 1500  # 100+200+300+400+500
 
 
 class TestAggregationSpec:
