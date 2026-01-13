@@ -109,10 +109,14 @@ async def list_stage_workers(
         List of worker info
     """
     storage = request.app.state.storage
-    worker_events = storage.list_worker_events(job_id, stage_id=stage_id, limit=500)
-    # Deduplicate by worker_id, keeping latest
+    # Fetch all worker events and filter by stage_id client-side
+    # (storage.list_worker_events doesn't support stage_id filtering)
+    worker_events = storage.list_worker_events(job_id, limit=500)
+    # Deduplicate by worker_id, keeping latest, filtered by stage
     workers_dict: Dict[str, Any] = {}
     for event in worker_events:
+        if event.get("stage_id") != stage_id:
+            continue
         worker_id = event.get("worker_id")
         if worker_id not in workers_dict:
             workers_dict[worker_id] = event

@@ -23,9 +23,9 @@ like Dedup and Connected Components. Key features:
 
 Architecture:
     Each partition's state is stored in a separate SlateDB instance:
-    
+
     {base_path}/{job_id}/{stage_id}/partition_{id}/
-    
+
     This ensures:
     1. Single-writer per partition (enforced by SlateDB fencing)
     2. Elastic scaling without state migration

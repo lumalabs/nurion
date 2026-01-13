@@ -43,15 +43,12 @@ Key design points:
 from __future__ import annotations
 
 import asyncio
-import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
+from typing import TYPE_CHECKING, Any, Dict, List, Set
 
-import ray
 
 from solstice.core.stage_master import StageMaster
-from solstice.core.stage_config import StageConfig, QueueMessage
-from solstice.utils.logging import create_ray_logger
+from solstice.core.stage_config import StageConfig
 
 if TYPE_CHECKING:
     from solstice.core.stage import Stage
@@ -61,6 +58,7 @@ if TYPE_CHECKING:
 @dataclass
 class IterationStats:
     """Statistics for one iteration."""
+
     iteration: int
     changes: int = 0
     duration: float = 0.0

@@ -43,7 +43,7 @@ Stages:
 The runner orchestrates iterations until convergence.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar, Dict, List, Optional, Type
 
 import pyarrow as pa
@@ -71,7 +71,7 @@ class CCInitConfig(OperatorConfig):
     doc_id_1_column: str = "doc_id_1"
     doc_id_2_column: str = "doc_id_2"
 
-    operator_class: ClassVar[Type["CCInitOperator"]] = None  # Set below
+    operator_class: ClassVar[Type["CCInitOperator"]] = None  # type: ignore[assignment]  # Set below
 
 
 class CCInitOperator(Operator):
@@ -115,23 +115,29 @@ class CCInitOperator(Operator):
         messages = []
         for doc1, doc2 in zip(doc_ids_1, doc_ids_2):
             # Message to doc1: consider doc2's label
-            messages.append({
-                "doc_id": doc1,
-                "neighbor_label": doc2,  # Initially, label = doc_id
-            })
+            messages.append(
+                {
+                    "doc_id": doc1,
+                    "neighbor_label": doc2,  # Initially, label = doc_id
+                }
+            )
             # Message to doc2: consider doc1's label
-            messages.append({
-                "doc_id": doc2,
-                "neighbor_label": doc1,
-            })
+            messages.append(
+                {
+                    "doc_id": doc2,
+                    "neighbor_label": doc1,
+                }
+            )
 
         if not messages:
             return None
 
-        result = pa.table({
-            "doc_id": [m["doc_id"] for m in messages],
-            "neighbor_label": [m["neighbor_label"] for m in messages],
-        })
+        result = pa.table(
+            {
+                "doc_id": [m["doc_id"] for m in messages],
+                "neighbor_label": [m["neighbor_label"] for m in messages],
+            }
+        )
 
         return SplitPayload(data=result, split_id=split.split_id)
 
@@ -160,7 +166,7 @@ class CCIterateConfig(ShuffleOperatorConfig):
     state_store_path: Optional[str] = None
     max_iterations: int = 100
 
-    operator_class: ClassVar[Type["CCIterateOperator"]] = None  # Set below
+    operator_class: ClassVar[Type["CCIterateOperator"]] = None  # type: ignore[assignment]  # Set below
     master_class: ClassVar[Optional[Type["CCIterateMaster"]]] = None  # Set below
 
     def __post_init__(self):
@@ -245,6 +251,7 @@ class CCIterateOperator(ShuffleOperator):
             current_label = current_labels_from_table.get(doc_id)
             if current_label is None and self._state_store is not None:
                 key = f"label:{doc_id}".encode()
+                assert self._partition_id is not None, "partition_id not set"
                 stored = self._state_store.get(self._partition_id, key)
                 if stored is not None:
                     current_label = stored.decode()
@@ -263,13 +270,16 @@ class CCIterateOperator(ShuffleOperator):
             # Store updated label in state store (synchronous)
             if self._state_store is not None:
                 key = f"label:{doc_id}".encode()
+                assert self._partition_id is not None, "partition_id not set"
                 self._state_store.put(self._partition_id, key, new_label.encode())
 
-            results.append({
-                "doc_id": doc_id,
-                "label": new_label,
-                "changed": changed,
-            })
+            results.append(
+                {
+                    "doc_id": doc_id,
+                    "label": new_label,
+                    "changed": changed,
+                }
+            )
 
         if not results:
             return None
@@ -277,17 +287,20 @@ class CCIterateOperator(ShuffleOperator):
         # Log changes for convergence detection
         self.logger.debug(f"CC iteration: {changes} label changes")
 
-        return pa.table({
-            "doc_id": [r["doc_id"] for r in results],
-            "label": [r["label"] for r in results],
-            "changed": [r["changed"] for r in results],
-        })
+        return pa.table(
+            {
+                "doc_id": [r["doc_id"] for r in results],
+                "label": [r["label"] for r in results],
+                "changed": [r["changed"] for r in results],
+            }
+        )
 
 
 CCIterateConfig.operator_class = CCIterateOperator
 
 # Set master_class after imports to avoid circular imports
-from solstice.operators.cc_master import CCIterateMaster
+from solstice.operators.cc_master import CCIterateMaster  # noqa: E402
+
 CCIterateConfig.master_class = CCIterateMaster
 
 
@@ -307,7 +320,7 @@ class CCMessageConfig(OperatorConfig):
     label_column: str = "label"
     neighbor_column: str = "neighbor_id"
 
-    operator_class: ClassVar[Type["CCMessageOperator"]] = None  # Set below
+    operator_class: ClassVar[Type["CCMessageOperator"]] = None  # type: ignore[assignment]  # Set below
 
 
 class CCMessageOperator(Operator):
@@ -365,20 +378,24 @@ class CCMessageOperator(Operator):
         messages = []
         for doc_id, label, neighbor in zip(doc_ids, labels, neighbors):
             if neighbor is not None:
-                messages.append({
-                    "doc_id": neighbor,
-                    "neighbor_label": label,
-                    "current_label": label_map.get(neighbor, neighbor),
-                })
+                messages.append(
+                    {
+                        "doc_id": neighbor,
+                        "neighbor_label": label,
+                        "current_label": label_map.get(neighbor, neighbor),
+                    }
+                )
 
         if not messages:
             return None
 
-        return pa.table({
-            "doc_id": [m["doc_id"] for m in messages],
-            "neighbor_label": [m["neighbor_label"] for m in messages],
-            "current_label": [m["current_label"] for m in messages],
-        })
+        return pa.table(
+            {
+                "doc_id": [m["doc_id"] for m in messages],
+                "neighbor_label": [m["neighbor_label"] for m in messages],
+                "current_label": [m["current_label"] for m in messages],
+            }
+        )
 
 
 CCMessageConfig.operator_class = CCMessageOperator
@@ -398,7 +415,7 @@ class DedupeByClusterConfig(ShuffleOperatorConfig):
     doc_id_column: str = "doc_id"
     cluster_id_column: str = "label"
 
-    operator_class: ClassVar[Type["DedupeByClusterOperator"]] = None  # Set below
+    operator_class: ClassVar[Type["DedupeByClusterOperator"]] = None  # type: ignore[assignment]  # Set below
 
     def __post_init__(self):
         # Partition by cluster_id for grouping

@@ -40,7 +40,6 @@ from typing import ClassVar, List, Optional, Type
 
 import pyarrow as pa
 
-from solstice.core.models import Split, SplitPayload
 from solstice.operators.shuffle import ShuffleOperator, ShuffleOperatorConfig
 from solstice.state import SlateDBPartitionStateStore
 
@@ -62,7 +61,7 @@ class HashDedupeConfig(ShuffleOperatorConfig):
     keep: str = "first"  # "first" or "last"
     state_store_path: Optional[str] = None
 
-    operator_class: ClassVar[Type["HashDedupeOperator"]] = None  # Set below
+    operator_class: ClassVar[Type["HashDedupeOperator"]] = None  # type: ignore[assignment]  # Set below
 
     def __post_init__(self):
         # dedup_keys are also partition_keys for shuffle
@@ -155,9 +154,7 @@ class HashDedupeOperator(ShuffleOperator):
 
         # If no state store, only do batch-level dedup
         if self._state_store is None:
-            self.logger.warning(
-                "No state store set - only performing batch-level deduplication"
-            )
+            self.logger.warning("No state store set - only performing batch-level deduplication")
             return deduped_table
 
         # Cross-batch dedup via state store (synchronous)
@@ -168,6 +165,7 @@ class HashDedupeOperator(ShuffleOperator):
             key_hash = self._compute_key_hash(deduped_table, i)
 
             # Check if key exists in state store (synchronous)
+            assert self._partition_id is not None, "partition_id not set"
             existing = self._state_store.get(self._partition_id, key_hash)
 
             if existing is None:
@@ -176,8 +174,11 @@ class HashDedupeOperator(ShuffleOperator):
                 keys_to_mark.append(key_hash)
 
         # Mark new keys as seen (synchronous)
+        # _partition_id assertion already done above
+        partition_id = self._partition_id
+        assert partition_id is not None
         for key_hash in keys_to_mark:
-            self._state_store.put(self._partition_id, key_hash, b"1")
+            self._state_store.put(partition_id, key_hash, b"1")
 
         if not output_rows:
             return None

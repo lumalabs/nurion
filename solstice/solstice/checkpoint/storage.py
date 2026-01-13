@@ -22,7 +22,6 @@ Storage layout:
 Uses atomic write (write to temp, then rename) to prevent corruption.
 """
 
-import os
 import uuid
 from typing import Optional, Protocol, runtime_checkable
 

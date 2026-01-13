@@ -42,7 +42,7 @@ The worker handles the actual routing:
 
 from abc import abstractmethod
 from dataclasses import dataclass, field
-from typing import Callable, ClassVar, List, Optional, Type
+from typing import ClassVar, List, Optional, Type
 
 import pyarrow as pa
 
@@ -220,7 +220,7 @@ class RepartitionConfig(ShuffleOperatorConfig):
     - Preparing for a join operation
     """
 
-    operator_class: ClassVar[Type["RepartitionOperator"]] = None  # Set below
+    operator_class: ClassVar[Type["RepartitionOperator"]] = None  # type: ignore[assignment]  # Set below
 
 
 class RepartitionOperator(ShuffleOperator):

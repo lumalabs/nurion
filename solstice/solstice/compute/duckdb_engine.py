@@ -39,7 +39,7 @@ Each worker must create its own engine instance.
 """
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Union
 
 import pyarrow as pa
 
@@ -131,7 +131,7 @@ class DuckDBEngine:
         """Close the DuckDB connection."""
         if self.conn:
             self.conn.close()
-            self.conn = None
+            self.conn = None  # type: ignore[assignment]
 
     def __del__(self):
         """Cleanup on garbage collection."""
@@ -259,8 +259,7 @@ class DuckDBEngine:
         # Build aggregation expressions
         if isinstance(aggregations, dict):
             agg_specs = [
-                AggregationSpec(column=col, function=func)
-                for col, func in aggregations.items()
+                AggregationSpec(column=col, function=func) for col, func in aggregations.items()
             ]
         else:
             agg_specs = aggregations
@@ -516,6 +515,7 @@ class DuckDBEngine:
         self,
         table: pa.Table,
         key_columns: List[str],
+        order_by: Optional[str] = None,
         keep: str = "first",
     ) -> pa.Table:
         """Deduplicate a table by key columns.
@@ -523,27 +523,32 @@ class DuckDBEngine:
         Args:
             table: Input Arrow table
             key_columns: Columns that define uniqueness
-            keep: Which duplicate to keep ("first" or "last")
+            order_by: Column to order by for deterministic first/last selection.
+                      If None, selection is non-deterministic (faster).
+            keep: Which duplicate to keep ("first" or "last"), only used when
+                  order_by is specified.
 
         Returns:
             Deduplicated Arrow table
         """
         self.conn.register("input_table", table)
-
         key_clause = ", ".join(key_columns)
 
-        if keep == "first":
-            # Use DISTINCT ON (DuckDB extension)
+        if order_by is None:
+            # Fast path: non-deterministic selection using DISTINCT ON
             query = f"""
                 SELECT DISTINCT ON ({key_clause}) *
                 FROM input_table
             """
         else:
-            # For "last", we need to reverse and take first
-            # This is a simplification - proper "last" needs ordering
+            # Deterministic path: order by specified column
+            if keep not in ("first", "last"):
+                raise ValueError(f"keep must be 'first' or 'last', got '{keep}'")
+            order_dir = "ASC" if keep == "first" else "DESC"
             query = f"""
                 SELECT DISTINCT ON ({key_clause}) *
                 FROM input_table
+                ORDER BY {key_clause}, {order_by} {order_dir}
             """
 
         result = self.conn.execute(query).fetch_arrow_table()

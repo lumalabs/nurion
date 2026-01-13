@@ -189,9 +189,9 @@ class SourceMaster(StageMaster):
                 )
 
             broker_url = f"{endpoint.host}:{endpoint.port}"
-            client = TansuQueueClient(broker_url)
-            client.start()
-            self._source_client = client
+            tansu_client: QueueClient = TansuQueueClient(broker_url)
+            tansu_client.start()
+            self._source_client = tansu_client
 
             self._source_endpoint = QueueEndpoint(
                 queue_type=QueueType.TANSU,
@@ -200,11 +200,11 @@ class SourceMaster(StageMaster):
                 storage_url=endpoint.storage_url,
             )
 
-            client.create_topic(self._source_topic)
+            tansu_client.create_topic(self._source_topic)
             self.logger.info(
                 f"Connected to shared broker at {broker_url} for source {self.stage_id}"
             )
-            return client
+            return tansu_client
 
     async def start(self) -> None:
         """Start the source master.
@@ -240,6 +240,9 @@ class SourceMaster(StageMaster):
 
         # Initialize managers (must be called after output queue is created)
         self._init_managers()
+
+        # Assert managers are initialized (for type checker)
+        assert self._worker_manager is not None
 
         # Update worker manager with source queue info (workers consume from source queue)
         self._worker_manager.set_target_worker_count(self.config.min_workers)
@@ -403,6 +406,7 @@ class SourceMaster(StageMaster):
         )
 
         # Produce to source queue
+        assert self._source_client is not None, "Source client not initialized"
         offset = self._source_client.produce(self._source_topic, message.to_bytes())
         self.logger.debug(f"Produced split {split.split_id} at offset {offset}")
 

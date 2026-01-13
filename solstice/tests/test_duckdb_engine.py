@@ -248,8 +248,8 @@ class TestDuckDBEngine:
         assert rows[0]["user_id"] == 1
         assert rows[0]["total"] == 300
 
-    def test_dedupe(self, engine):
-        """Test deduplication."""
+    def test_dedupe_basic(self, engine):
+        """Test basic deduplication (non-deterministic without order_by)."""
         table = pa.table({
             "user_id": [1, 1, 2, 2, 3],
             "value": [10, 20, 30, 40, 50],
@@ -258,6 +258,103 @@ class TestDuckDBEngine:
         result = engine.dedupe(table, key_columns=["user_id"])
 
         assert result.num_rows == 3  # 3 unique user_ids
+
+    def test_dedupe_with_order_keep_first(self, engine):
+        """Test deduplication keeping first by order column."""
+        table = pa.table({
+            "user_id": [1, 1, 1, 2, 2],
+            "value": ["first", "second", "third", "a", "b"],
+            "seq": [1, 2, 3, 4, 5],
+        })
+
+        result = engine.dedupe(table, key_columns=["user_id"], order_by="seq", keep="first")
+
+        assert result.num_rows == 2
+        result_dict = {row["user_id"]: row for row in result.to_pylist()}
+
+        # Should keep first by seq (smallest seq value)
+        assert result_dict[1]["value"] == "first"
+        assert result_dict[1]["seq"] == 1
+        assert result_dict[2]["value"] == "a"
+        assert result_dict[2]["seq"] == 4
+
+    def test_dedupe_with_order_keep_last(self, engine):
+        """Test deduplication keeping last by order column."""
+        table = pa.table({
+            "user_id": [1, 1, 1, 2, 2],
+            "value": ["first", "second", "third", "a", "b"],
+            "seq": [1, 2, 3, 4, 5],
+        })
+
+        result = engine.dedupe(table, key_columns=["user_id"], order_by="seq", keep="last")
+
+        assert result.num_rows == 2
+        result_dict = {row["user_id"]: row for row in result.to_pylist()}
+
+        # Should keep last by seq (largest seq value)
+        assert result_dict[1]["value"] == "third"
+        assert result_dict[1]["seq"] == 3
+        assert result_dict[2]["value"] == "b"
+        assert result_dict[2]["seq"] == 5
+
+    def test_dedupe_first_vs_last_differ(self, engine):
+        """Test that keep='first' and keep='last' produce different results with order_by."""
+        table = pa.table({
+            "key": ["a", "a", "b", "b"],
+            "seq_num": [1, 2, 3, 4],
+        })
+
+        first_result = engine.dedupe(table, key_columns=["key"], order_by="seq_num", keep="first")
+        last_result = engine.dedupe(table, key_columns=["key"], order_by="seq_num", keep="last")
+
+        first_dict = {row["key"]: row["seq_num"] for row in first_result.to_pylist()}
+        last_dict = {row["key"]: row["seq_num"] for row in last_result.to_pylist()}
+
+        # First keeps 1, 3; Last keeps 2, 4
+        assert first_dict["a"] == 1
+        assert first_dict["b"] == 3
+        assert last_dict["a"] == 2
+        assert last_dict["b"] == 4
+
+    def test_dedupe_invalid_keep_with_order(self, engine):
+        """Test that invalid keep value raises error when order_by is specified."""
+        table = pa.table({"key": [1, 2], "value": ["a", "b"], "seq": [1, 2]})
+
+        with pytest.raises(ValueError, match="keep must be 'first' or 'last'"):
+            engine.dedupe(table, key_columns=["key"], order_by="seq", keep="invalid")
+
+    def test_dedupe_without_order_ignores_keep(self, engine):
+        """Test that keep param is ignored when order_by is not specified."""
+        table = pa.table({
+            "key": [1, 1, 2],
+            "value": ["a", "b", "c"],
+        })
+
+        # Both should work without error (keep is ignored)
+        result1 = engine.dedupe(table, key_columns=["key"], keep="first")
+        result2 = engine.dedupe(table, key_columns=["key"], keep="last")
+
+        assert result1.num_rows == 2
+        assert result2.num_rows == 2
+
+    def test_dedupe_multiple_keys(self, engine):
+        """Test deduplication with multiple key columns."""
+        table = pa.table({
+            "key1": ["a", "a", "a", "b"],
+            "key2": [1, 1, 2, 1],
+            "value": ["first", "second", "third", "fourth"],
+            "seq": [1, 2, 3, 4],
+        })
+
+        result = engine.dedupe(table, key_columns=["key1", "key2"], order_by="seq", keep="first")
+
+        assert result.num_rows == 3  # (a,1), (a,2), (b,1)
+        result_list = result.to_pylist()
+        values = {(r["key1"], r["key2"]): r["value"] for r in result_list}
+
+        assert values[("a", 1)] == "first"  # First of two (a, 1) rows by seq
+        assert values[("a", 2)] == "third"
+        assert values[("b", 1)] == "fourth"
 
     def test_partial_and_merge_aggregate(self, engine):
         """Test two-phase aggregation."""

@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Integration test for MinHash deduplication workflow.
+"""Tests for MinHash deduplication workflow.
 
 Self-contained Iteration:
 - CCIterateMaster handles iteration internally
@@ -20,10 +20,9 @@ Self-contained Iteration:
 - Configure max_iterations via CCIterateConfig
 - Multiple iterative stages can coexist in one pipeline
 
-Test scope:
-- Workflow creation and DAG structure
-- CC iterate stage configuration
-- End-to-end execution (integration tests)
+Test Markers:
+- Unit tests: TestMinHashDedupWorkflowStructure (no marker, fast)
+- Workflow tests: TestMinHashDedupWorkflowExecution (@workflow, slow, e2e)
 """
 
 import asyncio
@@ -175,13 +174,13 @@ class TestMinHashDedupWorkflowStructure:
                 shutil.rmtree(tmp_dir)
 
 
-@pytest.mark.integration
+@pytest.mark.workflow
 @pytest.mark.timeout(300)
 class TestMinHashDedupWorkflowExecution:
-    """Integration tests for MinHash dedup workflow execution.
+    """End-to-end workflow tests for MinHash deduplication.
 
-    Tests the full pipeline with iterative Connected Components.
-    CCIterateMaster handles iteration internally.
+    Marked as @workflow (slow, run in separate CI job).
+    Tests the full pipeline with Ray cluster.
     """
 
     def test_basic_execution(self, ray_cluster):

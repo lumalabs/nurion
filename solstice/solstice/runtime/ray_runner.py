@@ -39,6 +39,8 @@ from solstice.checkpoint import (
 
 if TYPE_CHECKING:
     from solstice.core.stage import Stage
+    from solstice.webui.job_webui import JobWebUI
+    from solstice.webui.storage import JobStorage
 from solstice.core.stage_master import (
     StageMaster,
     StageConfig,
@@ -113,9 +115,9 @@ class RayJobRunner:
         self._autoscale_task: Optional[asyncio.Task] = None
 
         # WebUI
-        self._webui = None
+        self._webui: Optional["JobWebUI"] = None
         self._webui_port: Optional[int] = None
-        self._webui_storage = None
+        self._webui_storage: Optional["JobStorage"] = None
         self._webui_attempt_id: Optional[str] = None
 
         # State push manager (encapsulates broker, producer, manager)
@@ -128,9 +130,9 @@ class RayJobRunner:
         )
 
         # Shared Tansu broker for all stages (reduces resource usage and improves stability)
-        self._shared_broker = None
-        self._shared_broker_endpoint = None
-        self._shared_broker_client = None
+        self._shared_broker: Optional[TansuBrokerManager] = None
+        self._shared_broker_endpoint: Optional[QueueEndpoint] = None
+        self._shared_broker_client: Optional[TansuQueueClient] = None
 
         # State
         self._initialized = False
@@ -256,7 +258,8 @@ class RayJobRunner:
             storage = await self._create_webui_storage()
 
         # Initialize state push infrastructure (if WebUI enabled)
-        await self._state_push.start(storage=storage)
+        if storage is not None:
+            await self._state_push.start(storage=storage)
 
         # Create shared Tansu broker for all stages (if using Tansu)
         await self._create_shared_broker()
@@ -365,6 +368,9 @@ class RayJobRunner:
         if master_class is None:
             # Default to StageMaster for regular operators
             master_class = StageMaster
+
+        # Payload store must be initialized before creating masters
+        assert self._payload_store is not None, "payload_store not initialized"
 
         return master_class(
             job_id=self.job.job_id,
@@ -714,6 +720,8 @@ class RayJobRunner:
 
             # Create JobWebUI using pre-created storage
             # Pass state_manager for Prometheus export (push-based metrics)
+            assert self._webui_storage is not None, "webui_storage not initialized"
+            assert self._webui_attempt_id is not None, "webui_attempt_id not initialized"
             self._webui = JobWebUI(
                 self,
                 self._webui_storage,

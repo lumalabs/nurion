@@ -34,13 +34,12 @@ The output is shuffled by band_hash so that similar documents
 (with matching band hashes) end up in the same partition.
 """
 
-from dataclasses import dataclass, field
-from typing import ClassVar, List, Optional, Type
+from dataclasses import dataclass
+from typing import ClassVar, Optional, Type
 
 import numpy as np
 import pyarrow as pa
 
-from solstice.core.models import Split, SplitPayload
 from solstice.operators.shuffle import ShuffleOperator, ShuffleOperatorConfig
 
 
@@ -68,7 +67,7 @@ class MinHashComputeConfig(ShuffleOperatorConfig):
     shingle_size: int = 5  # Character n-gram size
     seed: int = 42
 
-    operator_class: ClassVar[Type["MinHashComputeOperator"]] = None  # Set below
+    operator_class: ClassVar[Type["MinHashComputeOperator"]] = None  # type: ignore[assignment]  # Set below
 
     def __post_init__(self):
         # Partition by band_hash for LSH bucketing
@@ -77,8 +76,7 @@ class MinHashComputeConfig(ShuffleOperatorConfig):
         # Validate configuration
         if self.num_hashes % self.num_bands != 0:
             raise ValueError(
-                f"num_hashes ({self.num_hashes}) must be divisible by "
-                f"num_bands ({self.num_bands})"
+                f"num_hashes ({self.num_hashes}) must be divisible by num_bands ({self.num_bands})"
             )
 
 
@@ -157,23 +155,27 @@ class MinHashComputeOperator(ShuffleOperator):
                 # Hash the band
                 band_hash = self._hash_band(band_values)
 
-                results.append({
-                    "doc_id": doc_id,
-                    "band_id": band_id,
-                    "band_hash": band_hash,
-                    "signature": signature.tobytes(),
-                })
+                results.append(
+                    {
+                        "doc_id": doc_id,
+                        "band_id": band_id,
+                        "band_hash": band_hash,
+                        "signature": signature.tobytes(),
+                    }
+                )
 
         if not results:
             return None
 
         # Convert to Arrow table
-        return pa.table({
-            "doc_id": [r["doc_id"] for r in results],
-            "band_id": [r["band_id"] for r in results],
-            "band_hash": [r["band_hash"] for r in results],
-            "signature": [r["signature"] for r in results],
-        })
+        return pa.table(
+            {
+                "doc_id": [r["doc_id"] for r in results],
+                "band_id": [r["band_id"] for r in results],
+                "band_hash": [r["band_hash"] for r in results],
+                "signature": [r["signature"] for r in results],
+            }
+        )
 
     def _compute_signature(self, text: str) -> np.ndarray:
         """Compute MinHash signature for a text document."""
@@ -204,7 +206,7 @@ class MinHashComputeOperator(ShuffleOperator):
         if len(text) < k:
             return {text} if text else set()
 
-        return {text[i:i+k] for i in range(len(text) - k + 1)}
+        return {text[i : i + k] for i in range(len(text) - k + 1)}
 
     def _hash_band(self, band_values: np.ndarray) -> int:
         """Hash a band of signature values."""

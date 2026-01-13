@@ -67,7 +67,7 @@ class CandidatePairConfig(OperatorConfig):
     band_hash_column: str = "band_hash"
     signature_column: str = "signature"
 
-    operator_class: ClassVar[Type["CandidatePairOperator"]] = None  # Set below
+    operator_class: ClassVar[Type["CandidatePairOperator"]] = None  # type: ignore[assignment]  # Set below
 
 
 class CandidatePairOperator(Operator):
@@ -151,22 +151,26 @@ class CandidatePairOperator(Operator):
                 # Compute similarity
                 sim = jaccard_similarity(sig1, sig2)
                 if sim >= config.similarity_threshold:
-                    pairs.append({
-                        "doc_id_1": doc1,
-                        "doc_id_2": doc2,
-                        "similarity": sim,
-                    })
+                    pairs.append(
+                        {
+                            "doc_id_1": doc1,
+                            "doc_id_2": doc2,
+                            "similarity": sim,
+                        }
+                    )
                     seen_in_batch.add(pair_key)
 
         if not pairs:
             return None
 
         # Convert to Arrow table
-        result = pa.table({
-            "doc_id_1": [p["doc_id_1"] for p in pairs],
-            "doc_id_2": [p["doc_id_2"] for p in pairs],
-            "similarity": [p["similarity"] for p in pairs],
-        })
+        result = pa.table(
+            {
+                "doc_id_1": [p["doc_id_1"] for p in pairs],
+                "doc_id_2": [p["doc_id_2"] for p in pairs],
+                "similarity": [p["similarity"] for p in pairs],
+            }
+        )
 
         return SplitPayload(data=result, split_id=split.split_id)
 
