@@ -179,6 +179,14 @@ jobs:
         uv sync --dev
         uv run ruff check solstice/
         uv run ruff format --check solstice/
+    
+    - name: Type check solstice (mypy)
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      # Note: mypy errors are currently warnings only as we gradually add type annotations
+      continue-on-error: true
+      run: |
+        cd solstice
+        uv run mypy solstice/ || echo "::warning::mypy found type errors (see above)"
 
   # ============================================================================
   # Aether tests (Python 3.13, no Rust/Java dependencies)
