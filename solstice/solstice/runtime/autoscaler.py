@@ -197,7 +197,7 @@ class SimpleAutoscaler:
             # For non-source stages, try to get input queue lag
             input_lag = 0
             if not is_source:
-                input_lag = master.get_input_queue_lag()
+                input_lag = await master.get_input_queue_lag()
 
             metrics[stage_id] = StageMetrics(
                 stage_id=stage_id,
@@ -300,14 +300,15 @@ class SimpleAutoscaler:
 
             try:
                 if target > current:
-                    # Scale up
-                    # TODO: Implement scale up via worker manager
-                    # For now, this is a no-op as the methods don't exist
-                    # The backpressure monitor handles dynamic scaling via scale_down
+                    # Scale up by spawning new workers
+                    to_spawn = target - current
+                    for _ in range(to_spawn):
+                        await master._spawn_worker()
+                    # Rebalance partitions after scaling
+                    master._rebalance_partitions()
+                    await master._notify_workers_partition_update()
                     self._last_scale_time[stage_id] = now
-                    self.logger.info(
-                        f"Scale UP requested for {stage_id}: {current} -> {target} workers (not implemented)"
-                    )
+                    self.logger.info(f"Scaled UP {stage_id}: {current} -> {target} workers")
 
                 elif target < current:
                     # Scale down

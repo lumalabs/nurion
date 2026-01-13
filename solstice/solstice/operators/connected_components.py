@@ -158,6 +158,7 @@ class CCIterateConfig(ShuffleOperatorConfig):
         current_label_column: Column for current label (in input)
         state_store_path: Path for SlateDB state storage
         max_iterations: Maximum iterations before forced stop
+        convergence_threshold: Number of changes below which to stop (0 = require full convergence)
     """
 
     doc_id_column: str = "doc_id"
@@ -165,6 +166,7 @@ class CCIterateConfig(ShuffleOperatorConfig):
     current_label_column: str = "current_label"
     state_store_path: Optional[str] = None
     max_iterations: int = 100
+    convergence_threshold: int = 0
 
     operator_class: ClassVar[Type["CCIterateOperator"]] = None  # type: ignore[assignment]  # Set below
     master_class: ClassVar[Optional[Type["CCIterateMaster"]]] = None  # Set below

@@ -76,6 +76,10 @@ class CCIterateMaster(StageMaster):
     5. When converged, outputs final results
 
     No special handling needed in RayJobRunner.
+
+    Configuration is read from stage.operator_config (CCIterateConfig):
+    - max_iterations: Maximum iterations before forced stop
+    - convergence_threshold: Number of changes below which to stop
     """
 
     def __init__(
@@ -84,13 +88,13 @@ class CCIterateMaster(StageMaster):
         stage: "Stage",
         config: StageConfig,
         payload_store: "SplitPayloadStore",
-        max_iterations: int = 100,
-        convergence_threshold: int = 0,
     ):
         super().__init__(job_id, stage, config, payload_store)
 
-        self._max_iterations = max_iterations
-        self._convergence_threshold = convergence_threshold
+        # Read iteration config from operator config
+        op_config = stage.operator_config
+        self._max_iterations = getattr(op_config, "max_iterations", 100)
+        self._convergence_threshold = getattr(op_config, "convergence_threshold", 0)
         self._iteration_stats: List[IterationStats] = []
 
         # Iteration state
