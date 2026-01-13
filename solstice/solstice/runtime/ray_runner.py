@@ -31,6 +31,11 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING, Union
 import ray
 
 from solstice.core.job import Job
+from solstice.checkpoint import (
+    FsspecCheckpointStorage,
+    JobCheckpointData,
+    recover_from_checkpoint,
+)
 
 if TYPE_CHECKING:
     from solstice.core.stage import Stage
@@ -136,6 +141,10 @@ class RayJobRunner:
         # DAG info
         self._reverse_dag: Dict[str, List[str]] = {}
 
+        # Checkpoint recovery
+        self._checkpoint_storage: Optional[FsspecCheckpointStorage] = None
+        self._recovered_checkpoint: Optional[JobCheckpointData] = None
+
     def _ensure_ray(self) -> None:
         """Ensure Ray is initialized."""
         if not ray.is_initialized():
@@ -188,6 +197,44 @@ class RayJobRunner:
             self._shared_broker = None
             self._shared_broker_endpoint = None
 
+    async def _try_recover_checkpoint(self) -> None:
+        """Try to recover from a checkpoint if enabled.
+
+        Sets self._recovered_checkpoint if a valid checkpoint is found.
+        """
+        config = self.job.config
+
+        # Check if recovery is enabled
+        if not config.recover_from_checkpoint:
+            self.logger.debug("Checkpoint recovery disabled")
+            return
+
+        checkpoint_path = config.checkpoint_path
+        if not checkpoint_path:
+            self.logger.debug("No checkpoint path configured")
+            return
+
+        # Create checkpoint storage
+        self._checkpoint_storage = FsspecCheckpointStorage(
+            base_path=checkpoint_path,
+            job_id=self.job.job_id,
+        )
+
+        # Try to load checkpoint
+        checkpoint, result = await recover_from_checkpoint(
+            storage=self._checkpoint_storage,
+            job_id=self.job.job_id,
+        )
+
+        if result.recovered and checkpoint:
+            self._recovered_checkpoint = checkpoint
+            self.logger.info(
+                f"Recovered from checkpoint {result.checkpoint_id}, "
+                f"iteration={checkpoint.iteration}"
+            )
+        elif result.error:
+            self.logger.warning(f"Checkpoint recovery failed: {result.error}")
+
     async def initialize(self) -> None:
         """Initialize the pipeline."""
         if self._initialized:
@@ -199,6 +246,9 @@ class RayJobRunner:
         # Create SplitPayloadStore - shared across all stages
         self._payload_store = RaySplitPayloadStore(name=f"payload_store_{self.job.job_id}")
         self.logger.info(f"Created SplitPayloadStore for job {self.job.job_id}")
+
+        # Try to recover from checkpoint if enabled
+        await self._try_recover_checkpoint()
 
         # Create shared storage for WebUI (used by both StatePush and JobWebUI)
         storage = None
@@ -229,14 +279,8 @@ class RayJobRunner:
             config.state_endpoint = self._state_push.endpoint
             config.state_topic = self._state_push.topic
 
-            if is_source:
-                # Source stage: use SourceMaster from operator_config
-                master = self._create_source_master(stage, config)
-                self._masters[stage_id] = master
-                self.logger.info(f"Created {type(master).__name__} for source stage {stage_id}")
-            else:
-                # Regular stage: use StageMaster
-                # Get upstream endpoint and topic
+            if not is_source:
+                # Non-source stage: get upstream endpoint
                 upstream_id = upstream_ids[0]  # TODO: handle multi-input
                 upstream_master = self._masters[upstream_id]
 
@@ -248,14 +292,10 @@ class RayJobRunner:
                 config.upstream_endpoint = upstream_master._output_endpoint
                 config.upstream_topic = upstream_master._output_topic
 
-                master = StageMaster(
-                    job_id=self.job.job_id,
-                    stage=stage,
-                    config=config,
-                    payload_store=self._payload_store,
-                )
-                self._masters[stage_id] = master
-                self.logger.info(f"Created StageMaster for stage {stage_id}")
+            # Create master using operator_config.master_class (or default StageMaster)
+            master = self._create_master(stage, config)
+            self._masters[stage_id] = master
+            self.logger.info(f"Created {type(master).__name__} for stage {stage_id}")
 
         # Wire downstream references for backpressure propagation
         self._wire_downstream_refs()
@@ -312,22 +352,19 @@ class RayJobRunner:
             "max_parallelism": p[1] if isinstance(p, tuple) else p,
         }
 
-    def _create_source_master(self, stage: "Stage", config: StageConfig) -> SourceMaster:
-        """Create appropriate SourceMaster for a source stage.
+    def _create_master(
+        self, stage: "Stage", config: StageConfig
+    ) -> Union[StageMaster, SourceMaster]:
+        """Create appropriate master for a stage.
 
-        The source operator_config must have a master_class attribute that
-        specifies which SourceMaster class to use.
+        Uses operator_config.master_class if specified, otherwise defaults
+        to StageMaster.
         """
-        operator_config = stage.operator_config
+        master_class = stage.operator_config.master_class
 
-        # Get master_class from operator_config
-        master_class = operator_config.master_class
         if master_class is None:
-            raise ValueError(
-                f"Source stage '{stage.stage_id}' operator_config {type(operator_config).__name__} "
-                f"does not have a master_class attribute. "
-                f"Source configs must define master_class to specify the SourceMaster to use."
-            )
+            # Default to StageMaster for regular operators
+            master_class = StageMaster
 
         return master_class(
             job_id=self.job.job_id,
@@ -377,6 +414,9 @@ class RayJobRunner:
     async def run(self, timeout: Optional[float] = None) -> JobStatus:
         """Run the pipeline until completion.
 
+        Iterative stages (like CCIterateMaster) handle their own iteration
+        internally - no special handling needed here.
+
         Args:
             timeout: Maximum time to wait (seconds), None for no timeout
 
@@ -385,7 +425,6 @@ class RayJobRunner:
         """
         if not self._initialized:
             await self.initialize()
-
         self._running = True
         self._start_time = time.time()
         deadline = time.time() + timeout if timeout else None

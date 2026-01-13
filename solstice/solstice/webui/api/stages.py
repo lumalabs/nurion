@@ -51,12 +51,12 @@ async def get_stage_detail(
 ) -> Dict[str, Any]:
     """Get detailed stage information."""
     storage = request.app.state.storage
-    job_data = storage.get_job(job_id)
+    job_data: Dict[str, Any] | None = storage.get_job(job_id)
     if job_data:
         stages = job_data.get("stages", [])
         for stage in stages:
             if stage.get("stage_id") == stage_id:
-                return stage
+                return dict(stage)
         raise HTTPException(status_code=404, detail=f"Stage {stage_id} not found")
     raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
 
@@ -87,7 +87,10 @@ async def get_stage_metrics_history(
         start_time = end_time - 300
 
     storage = request.app.state.storage
-    return storage.get_metrics_history(job_id, stage_id, start_time, end_time)
+    result: List[Dict[str, Any]] = storage.get_metrics_history(
+        job_id, stage_id, start_time, end_time
+    )
+    return result
 
 
 @router.get("/jobs/{job_id}/stages/{stage_id}/workers")
