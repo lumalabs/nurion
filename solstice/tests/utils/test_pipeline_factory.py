@@ -58,8 +58,8 @@ TestSourceConfig.master_class = None  # Will be set below
 class TestSourceOperator(Operator):
     """Test source operator that generates test data."""
 
-    def __init__(self, config: TestSourceConfig, worker_id: str = None):
-        super().__init__(config, worker_id)
+    def __init__(self, config: TestSourceConfig):
+        super().__init__(config)
         self._generated = 0
 
     def generate_splits(self) -> List[Split]:
@@ -169,8 +169,8 @@ PassthroughConfig.operator_class = None  # Will be set below
 class PassthroughOperator(Operator):
     """Passthrough operator that forwards data without modification."""
 
-    def __init__(self, config: PassthroughConfig, worker_id: str = None):
-        super().__init__(config, worker_id)
+    def __init__(self, config: PassthroughConfig):
+        super().__init__(config)
         self._processed = 0
 
     def process_split(
@@ -213,8 +213,8 @@ SlowTransformConfig.operator_class = None  # Will be set below
 class SlowTransformOperator(Operator):
     """Slow transform operator for testing backpressure."""
 
-    def __init__(self, config: SlowTransformConfig, worker_id: str = None):
-        super().__init__(config, worker_id)
+    def __init__(self, config: SlowTransformConfig):
+        super().__init__(config)
 
     def process_split(
         self, split: Split, payload: Optional[SplitPayload]
@@ -259,8 +259,8 @@ class FilterOperator(Operator):
     The filter is deterministic based on ID, so results are reproducible.
     """
 
-    def __init__(self, config: FilterConfig, worker_id: str = None):
-        super().__init__(config, worker_id)
+    def __init__(self, config: FilterConfig):
+        super().__init__(config)
         self._input_count = 0
         self._output_count = 0
 
@@ -324,8 +324,8 @@ class ExplodeOperator(Operator):
     is added to distinguish copies (0, 1, 2, ..., factor-1).
     """
 
-    def __init__(self, config: ExplodeConfig, worker_id: str = None):
-        super().__init__(config, worker_id)
+    def __init__(self, config: ExplodeConfig):
+        super().__init__(config)
         self._input_count = 0
         self._output_count = 0
 
@@ -400,8 +400,8 @@ FilterExplodeConfig.operator_class = None  # Will be set below
 class FilterExplodeOperator(Operator):
     """Combined filter-then-explode operator for complex row count changes."""
 
-    def __init__(self, config: FilterExplodeConfig, worker_id: str = None):
-        super().__init__(config, worker_id)
+    def __init__(self, config: FilterExplodeConfig):
+        super().__init__(config)
         self._input_count = 0
         self._after_filter_count = 0
         self._output_count = 0

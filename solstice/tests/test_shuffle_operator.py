@@ -52,9 +52,8 @@ class TestRepartitionOperator:
 
     def test_repartition_basic(self, sample_split, sample_payload):
         """Test basic repartition operation."""
-        config = RepartitionConfig(partition_keys=["user_id"])
+        config = RepartitionConfig(partition_keys=["user_id"], num_partitions=4)
         operator = config.setup()
-        operator.set_num_partitions(4)
 
         result = operator.process_split(sample_split, sample_payload)
 
@@ -76,14 +75,12 @@ class TestRepartitionOperator:
 
     def test_repartition_deterministic(self, sample_split, sample_payload):
         """Test that repartition is deterministic."""
-        config = RepartitionConfig(partition_keys=["user_id"])
+        config = RepartitionConfig(partition_keys=["user_id"], num_partitions=4)
 
         operator1 = config.setup()
-        operator1.set_num_partitions(4)
         result1 = operator1.process_split(sample_split, sample_payload)
 
         operator2 = config.setup()
-        operator2.set_num_partitions(4)
         result2 = operator2.process_split(sample_split, sample_payload)
 
         # Same partition assignments
@@ -96,9 +93,8 @@ class TestRepartitionOperator:
 
     def test_repartition_same_key_same_partition(self, sample_split, sample_payload):
         """Test that rows with same key go to same partition."""
-        config = RepartitionConfig(partition_keys=["user_id"])
+        config = RepartitionConfig(partition_keys=["user_id"], num_partitions=8)
         operator = config.setup()
-        operator.set_num_partitions(8)
 
         result = operator.process_split(sample_split, sample_payload)
         table = result.to_table()
@@ -119,9 +115,8 @@ class TestRepartitionOperator:
 
     def test_repartition_empty_payload(self, sample_split):
         """Test repartition with empty payload."""
-        config = RepartitionConfig(partition_keys=["user_id"])
+        config = RepartitionConfig(partition_keys=["user_id"], num_partitions=4)
         operator = config.setup()
-        operator.set_num_partitions(4)
 
         result = operator.process_split(sample_split, None)
         assert result is None
@@ -130,9 +125,8 @@ class TestRepartitionOperator:
 
     def test_repartition_empty_table(self, sample_split):
         """Test repartition with empty table."""
-        config = RepartitionConfig(partition_keys=["user_id"])
+        config = RepartitionConfig(partition_keys=["user_id"], num_partitions=4)
         operator = config.setup()
-        operator.set_num_partitions(4)
 
         empty_table = pa.table({"user_id": [], "value": []})
         empty_payload = SplitPayload(data=empty_table, split_id="test")
@@ -151,9 +145,8 @@ class TestRepartitionOperator:
         })
         payload = SplitPayload(data=table, split_id="test")
 
-        config = RepartitionConfig(partition_keys=["user_id", "category"])
+        config = RepartitionConfig(partition_keys=["user_id", "category"], num_partitions=4)
         operator = config.setup()
-        operator.set_num_partitions(4)
 
         result = operator.process_split(sample_split, payload)
         assert result is not None

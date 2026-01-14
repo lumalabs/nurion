@@ -98,9 +98,8 @@ class TestCCIterateOperator:
         })
         payload = SplitPayload(data=table, split_id="test")
 
-        config = CCIterateConfig()
+        config = CCIterateConfig(num_partitions=4)
         operator = config.setup()
-        operator.set_num_partitions(4)
 
         result = operator.process_split(sample_split, payload)
 
@@ -135,9 +134,8 @@ class TestCCIterateOperator:
         })
         payload = SplitPayload(data=table, split_id="test")
 
-        config = CCIterateConfig()
+        config = CCIterateConfig(num_partitions=4)
         operator = config.setup()
-        operator.set_num_partitions(4)
 
         result = operator.process_split(sample_split, payload)
 
@@ -174,9 +172,8 @@ class TestCCIterateOperator:
         })
         payload = SplitPayload(data=table, split_id="test")
 
-        config = CCIterateConfig()
+        config = CCIterateConfig(num_partitions=4)
         operator = config.setup()
-        operator.set_num_partitions(4)
 
         result = operator.process_split(sample_split, payload)
 
@@ -214,9 +211,8 @@ class TestDedupeByClusterOperator:
         })
         payload = SplitPayload(data=table, split_id="test")
 
-        config = DedupeByClusterConfig()
+        config = DedupeByClusterConfig(num_partitions=4)
         operator = config.setup()
-        operator.set_num_partitions(4)
 
         result = operator.process_split(sample_split, payload)
 
@@ -242,9 +238,8 @@ class TestDedupeByClusterOperator:
         Since data is shuffled by cluster_id, all docs in a cluster
         should be in the same batch/partition.
         """
-        config = DedupeByClusterConfig()
+        config = DedupeByClusterConfig(num_partitions=4)
         operator = config.setup()
-        operator.set_num_partitions(4)
 
         # First batch: cluster A with doc A
         table1 = pa.table({
@@ -278,9 +273,8 @@ class TestDedupeByClusterOperator:
 
     def test_dedupe_empty(self, sample_split):
         """Test with empty input."""
-        config = DedupeByClusterConfig()
+        config = DedupeByClusterConfig(num_partitions=4)
         operator = config.setup()
-        operator.set_num_partitions(4)
 
         result = operator.process_split(sample_split, None)
         assert result is None
@@ -315,9 +309,8 @@ class TestCCEndToEnd:
         assert messages_table.num_rows == 2
 
         # Now iterate
-        iterate_config = CCIterateConfig()
+        iterate_config = CCIterateConfig(num_partitions=1)
         iterate_op = iterate_config.setup()
-        iterate_op.set_num_partitions(1)
 
         labels_result = iterate_op.process_split(sample_split, messages_result)
 

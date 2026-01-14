@@ -56,9 +56,8 @@ class TestHashDedupeOperator:
 
     def test_dedupe_single_key(self, sample_split, sample_payload):
         """Test deduplication by single key."""
-        config = HashDedupeConfig(dedup_keys=["user_id"])
+        config = HashDedupeConfig(dedup_keys=["user_id"], num_partitions=4)
         operator = config.setup()
-        operator.set_num_partitions(4)
 
         result = operator.process_split(sample_split, sample_payload)
 
@@ -78,9 +77,8 @@ class TestHashDedupeOperator:
 
     def test_dedupe_multiple_keys(self, sample_split, sample_payload):
         """Test deduplication by multiple keys."""
-        config = HashDedupeConfig(dedup_keys=["user_id", "event_id"])
+        config = HashDedupeConfig(dedup_keys=["user_id", "event_id"], num_partitions=4)
         operator = config.setup()
-        operator.set_num_partitions(4)
 
         result = operator.process_split(sample_split, sample_payload)
 
@@ -105,9 +103,8 @@ class TestHashDedupeOperator:
         })
         payload = SplitPayload(data=table, split_id="test")
 
-        config = HashDedupeConfig(dedup_keys=["user_id"])
+        config = HashDedupeConfig(dedup_keys=["user_id"], num_partitions=4)
         operator = config.setup()
-        operator.set_num_partitions(4)
 
         result = operator.process_split(sample_split, payload)
 
@@ -129,9 +126,8 @@ class TestHashDedupeOperator:
         })
         payload = SplitPayload(data=table, split_id="test")
 
-        config = HashDedupeConfig(dedup_keys=["user_id"])
+        config = HashDedupeConfig(dedup_keys=["user_id"], num_partitions=4)
         operator = config.setup()
-        operator.set_num_partitions(4)
 
         result = operator.process_split(sample_split, payload)
 
@@ -147,9 +143,8 @@ class TestHashDedupeOperator:
 
     def test_dedupe_empty_payload(self, sample_split):
         """Test with empty payload."""
-        config = HashDedupeConfig(dedup_keys=["user_id"])
+        config = HashDedupeConfig(dedup_keys=["user_id"], num_partitions=4)
         operator = config.setup()
-        operator.set_num_partitions(4)
 
         result = operator.process_split(sample_split, None)
         assert result is None
@@ -162,9 +157,8 @@ class TestHashDedupeOperator:
         Note: Cross-batch deduplication requires a state store to be configured.
         Without it, the operator logs a warning and only dedupes within the batch.
         """
-        config = HashDedupeConfig(dedup_keys=["user_id"])
+        config = HashDedupeConfig(dedup_keys=["user_id"], num_partitions=4)
         operator = config.setup()
-        operator.set_num_partitions(4)
 
         # First batch
         table1 = pa.table({

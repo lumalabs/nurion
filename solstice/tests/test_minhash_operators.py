@@ -52,9 +52,9 @@ class TestMinHashComputeOperator:
             id_column="id",
             num_hashes=64,
             num_bands=8,
+            num_partitions=4,
         )
         operator = config.setup()
-        operator.set_num_partitions(4)
 
         result = operator.process_split(sample_split, payload)
 
@@ -90,9 +90,9 @@ class TestMinHashComputeOperator:
             num_hashes=128,
             num_bands=16,
             seed=42,
+            num_partitions=4,
         )
         operator = config.setup()
-        operator.set_num_partitions(4)
 
         result = operator.process_split(sample_split, payload)
         result_table = result.to_table()
@@ -135,9 +135,9 @@ class TestMinHashComputeOperator:
             id_column="id",
             num_hashes=64,
             num_bands=8,
+            num_partitions=4,
         )
         operator = config.setup()
-        operator.set_num_partitions(4)
 
         result = operator.process_split(sample_split, payload)
 
@@ -163,14 +163,13 @@ class TestMinHashComputeOperator:
             num_hashes=64,
             num_bands=8,
             seed=42,
+            num_partitions=4,
         )
 
         operator1 = config.setup()
-        operator1.set_num_partitions(4)
         result1 = operator1.process_split(sample_split, payload)
 
         operator2 = config.setup()
-        operator2.set_num_partitions(4)
         result2 = operator2.process_split(sample_split, payload)
 
         # Signatures should be identical
