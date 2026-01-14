@@ -43,7 +43,6 @@ from solstice.core.split_payload_store import SplitPayloadStore
 
 if TYPE_CHECKING:
     from solstice.core.stage import Stage
-    from solstice.state import SlateDBPartitionStateStore
 
 
 @ray.remote

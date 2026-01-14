@@ -15,10 +15,18 @@
 """Tests for MinHash deduplication workflow.
 
 Test Data (same format as runMinHashExample.py):
-- Train file: ~/Downloads/articles_10000.train
+- Train file: articles_10000.train
   Format: Each line is "<doc_id> <word1> <word2> ..."
-- Truth file: ~/Downloads/articles_10000.truth
+- Truth file: articles_10000.truth
   Format: Each line is "<doc_id1> <doc_id2>" (plagiary pairs)
+
+Data is downloaded from public HTTPS endpoint (no authentication required).
+
+Local Cache Mode:
+    Set MINHASH_CACHE_DIR environment variable to cache downloaded files:
+
+        export MINHASH_CACHE_DIR=~/.cache/solstice_minhash_test
+        pytest tests/test_minhash_dedup_workflow.py -v -m workflow
 
 NOTE: Current pipeline limitation - documents without candidate pairs are not
 output. This is because Solstice doesn't yet support multi-upstream stages.
@@ -29,8 +37,9 @@ import logging
 import os
 import shutil
 import tempfile
+import urllib.request
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional
 
 import lance
 import pyarrow as pa
@@ -38,12 +47,61 @@ import pytest
 
 logger = logging.getLogger(__name__)
 
-# Real test data paths
-ARTICLES_TRAIN_PATH = os.path.expanduser("~/Downloads/articles_10000.train")
-ARTICLES_TRUTH_PATH = os.path.expanduser("~/Downloads/articles_10000.truth")
+# Public HTTPS endpoint (no auth required)
+PUBLIC_DATA_URL = "https://pub-8bc1f1d3d1984bdfb056d0bc0bf97c3d.r2.dev/minhash"
+
+# Test data files
+TRAIN_FILE = "articles_10000.train"
+TRUTH_FILE = "articles_10000.truth"
+
+# Local cache directory (set via MINHASH_CACHE_DIR env var)
+LOCAL_CACHE_DIR = os.environ.get("MINHASH_CACHE_DIR")
 
 
-def load_articles_train(path: str = ARTICLES_TRAIN_PATH) -> List[Dict[str, str]]:
+def _get_cache_dir() -> Path:
+    """Get cache directory for downloaded test data."""
+    if LOCAL_CACHE_DIR:
+        cache_dir = Path(LOCAL_CACHE_DIR).expanduser()
+    else:
+        # Use system temp directory
+        cache_dir = Path(tempfile.gettempdir()) / "solstice_minhash_test"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir
+
+
+def _download_file(filename: str) -> Path:
+    """Download file from public URL if not cached.
+
+    Args:
+        filename: Name of the file to download
+
+    Returns:
+        Path to local file (cached or newly downloaded)
+    """
+    cache_dir = _get_cache_dir()
+    local_path = cache_dir / filename
+
+    if local_path.exists():
+        logger.info(f"Using cached file: {local_path}")
+        return local_path
+
+    url = f"{PUBLIC_DATA_URL}/{filename}"
+    logger.info(f"Downloading {url} -> {local_path}")
+
+    try:
+        urllib.request.urlretrieve(url, local_path)
+        logger.info(f"Downloaded {filename} ({local_path.stat().st_size} bytes)")
+    except Exception as e:
+        raise RuntimeError(
+            f"Failed to download {url}: {e}\n"
+            f"Please ensure the file is available at the public URL, "
+            f"or set MINHASH_CACHE_DIR and place the file there manually."
+        ) from e
+
+    return local_path
+
+
+def load_articles_train(path: Optional[str] = None) -> List[Dict[str, str]]:
     """Load articles from train file.
 
     Format (same as runMinHashExample.py):
@@ -53,7 +111,13 @@ def load_articles_train(path: str = ARTICLES_TRAIN_PATH) -> List[Dict[str, str]]
         # rest are content words
 
     Each line: "<doc_id> <word1> <word2> ..."
+
+    Args:
+        path: Optional local path. If None, downloads from public URL.
     """
+    if path is None:
+        path = str(_download_file(TRAIN_FILE))
+
     documents = []
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
@@ -67,7 +131,7 @@ def load_articles_train(path: str = ARTICLES_TRAIN_PATH) -> List[Dict[str, str]]
     return documents
 
 
-def load_articles_truth(path: str = ARTICLES_TRUTH_PATH) -> Dict[str, str]:
+def load_articles_truth(path: Optional[str] = None) -> Dict[str, str]:
     """Load ground truth plagiary pairs.
 
     Format (same as runMinHashExample.py):
@@ -76,12 +140,18 @@ def load_articles_truth(path: str = ARTICLES_TRUTH_PATH) -> Dict[str, str]:
         plagiaries[docs[1]] = docs[0]
 
     Returns bidirectional dict: plagiaries[doc1] = doc2, plagiaries[doc2] = doc1
+
+    Args:
+        path: Optional local path. If None, downloads from public URL.
     """
+    if path is None:
+        path = str(_download_file(TRUTH_FILE))
+
     plagiaries = {}
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
             # Strip newline
-            if line and line[-1] == '\n':
+            if line and line[-1] == "\n":
                 line = line[:-1]
             if not line:
                 continue
@@ -192,9 +262,7 @@ class TestMinHashDedupWorkflowExecution:
             output_id_set = set(output_doc_ids)
 
             logger.info(
-                f"Results:\n"
-                f"  - Input: {metadata['total_docs']}\n"
-                f"  - Output: {result_count}"
+                f"Results:\n  - Input: {metadata['total_docs']}\n  - Output: {result_count}"
             )
 
             # === VERIFICATION (same logic as runMinHashExample.py) ===
@@ -244,7 +312,11 @@ class TestMinHashDedupWorkflowExecution:
             )
 
             # At least some truth pairs should have one doc kept (recall > 0)
-            recall = one_kept / metadata["num_truth_pairs"] * 100 if metadata["num_truth_pairs"] > 0 else 0
+            recall = (
+                one_kept / metadata["num_truth_pairs"] * 100
+                if metadata["num_truth_pairs"] > 0
+                else 0
+            )
             logger.info(f"  - Recall: {recall:.1f}%")
 
         finally:

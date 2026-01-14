@@ -132,7 +132,9 @@ class HashDedupeOperator(ShuffleOperator):
 
         # If no state store, only do batch-level dedup
         if self.state_store is None:
-            self.logger.warning("No state store configured - only performing batch-level deduplication")
+            self.logger.warning(
+                "No state store configured - only performing batch-level deduplication"
+            )
             return deduped_table
 
         # Cross-batch dedup via state store (synchronous)

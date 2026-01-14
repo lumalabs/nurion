@@ -205,6 +205,7 @@ class CCIterateOperator(ShuffleOperator):
     def _get_partition_for_doc(self, doc_id: str) -> int:
         """Compute partition for a doc_id using consistent hashing."""
         import hashlib
+
         h = int(hashlib.sha256(doc_id.encode()).hexdigest(), 16)
         return h % self.num_partitions
 
@@ -316,9 +317,7 @@ class CCIterateOperator(ShuffleOperator):
 
             # Get current label: table > state store > default
             current_label = (
-                current_labels_from_table.get(doc_id)
-                or stored_labels.get(doc_id)
-                or doc_id
+                current_labels_from_table.get(doc_id) or stored_labels.get(doc_id) or doc_id
             )
 
             # New label is minimum of current and all neighbors
@@ -335,7 +334,9 @@ class CCIterateOperator(ShuffleOperator):
                 # Merge edges
                 existing_edges = stored_edges.get(doc_id, set())
                 all_edges = existing_edges | edges_by_doc[doc_id]
-                writes.append((partition_id, f"edges:{doc_id}".encode(), ",".join(sorted(all_edges)).encode()))
+                writes.append(
+                    (partition_id, f"edges:{doc_id}".encode(), ",".join(sorted(all_edges)).encode())
+                )
 
             results.append({"doc_id": doc_id, "label": new_label, "changed": changed})
 
@@ -346,24 +347,32 @@ class CCIterateOperator(ShuffleOperator):
         self._iteration_changes += changes
 
         if self.state_store is not None:
-            # Add doc_ids and changes metadata
+            # Add doc_ids metadata for each partition
             for partition_id, doc_ids_set in docs_by_partition.items():
                 # Get existing doc_ids from batch read results
                 existing_key = (partition_id, b"__doc_ids__")
-                existing_value = read_results.get(existing_key) if 'read_results' in dir() else None
+                existing_value = read_results.get(existing_key) if "read_results" in dir() else None
                 existing_doc_ids = set()
                 if existing_value:
                     existing_str = existing_value.decode()
                     if existing_str:
                         existing_doc_ids = set(existing_str.split(","))
                 all_doc_ids = existing_doc_ids | doc_ids_set
-                writes.append((partition_id, b"__doc_ids__", ",".join(sorted(all_doc_ids)).encode()))
-                writes.append((partition_id, b"__changes__", str(self._iteration_changes).encode()))
+                writes.append(
+                    (partition_id, b"__doc_ids__", ",".join(sorted(all_doc_ids)).encode())
+                )
+
+            # Write __changes__ only to FIRST partition (avoid overcounting when master sums)
+            # Master reads from all partitions, so writing to each would cause N*changes
+            first_partition = min(docs_by_partition.keys())
+            writes.append((first_partition, b"__changes__", str(self._iteration_changes).encode()))
 
             # Single batch write (one flush per partition)
             self.state_store.put_batch(writes)
 
-        self.logger.debug(f"CC iteration 1: {changes} label changes (total: {self._iteration_changes})")
+        self.logger.debug(
+            f"CC iteration 1: {changes} label changes (total: {self._iteration_changes})"
+        )
 
         return pa.table(
             {
@@ -512,14 +521,18 @@ class CCIterateOperator(ShuffleOperator):
         # === Phase 4: Batch write ===
         self._iteration_changes += changes
 
-        # Add changes metadata
-        for partition_id in assigned_partitions:
-            writes.append((partition_id, b"__changes__", str(self._iteration_changes).encode()))
+        # Write __changes__ only to FIRST partition (avoid overcounting when master sums)
+        # Note: In iteration 2+, master uses return value directly, but we write for consistency
+        if assigned_partitions:
+            first_partition = min(assigned_partitions)
+            writes.append((first_partition, b"__changes__", str(self._iteration_changes).encode()))
 
         if writes:
             self.state_store.put_batch(writes)
 
-        self.logger.debug(f"CC recompute: {changes} label changes (total: {self._iteration_changes})")
+        self.logger.debug(
+            f"CC recompute: {changes} label changes (total: {self._iteration_changes})"
+        )
 
         return changes
 

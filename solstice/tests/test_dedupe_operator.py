@@ -20,7 +20,6 @@ import pytest
 from solstice.core.models import Split, SplitPayload
 from solstice.operators.dedupe import (
     HashDedupeConfig,
-    HashDedupeOperator,
 )
 from solstice.operators.shuffle import ShuffleOperator
 
@@ -38,11 +37,13 @@ class TestHashDedupeOperator:
     @pytest.fixture
     def sample_table_with_dupes(self):
         """Create a sample table with duplicates."""
-        return pa.table({
-            "user_id": [1, 2, 1, 3, 2, 1],
-            "event_id": ["a", "b", "a", "c", "b", "d"],
-            "value": [10, 20, 30, 40, 50, 60],
-        })
+        return pa.table(
+            {
+                "user_id": [1, 2, 1, 3, 2, 1],
+                "event_id": ["a", "b", "a", "c", "b", "d"],
+                "value": [10, 20, 30, 40, 50, 60],
+            }
+        )
 
     @pytest.fixture
     def sample_payload(self, sample_table_with_dupes):
@@ -97,10 +98,12 @@ class TestHashDedupeOperator:
 
     def test_dedupe_no_duplicates(self, sample_split):
         """Test with data that has no duplicates."""
-        table = pa.table({
-            "user_id": [1, 2, 3, 4],
-            "value": [10, 20, 30, 40],
-        })
+        table = pa.table(
+            {
+                "user_id": [1, 2, 3, 4],
+                "value": [10, 20, 30, 40],
+            }
+        )
         payload = SplitPayload(data=table, split_id="test")
 
         config = HashDedupeConfig(dedup_keys=["user_id"], num_partitions=4)
@@ -120,10 +123,12 @@ class TestHashDedupeOperator:
 
     def test_dedupe_all_duplicates(self, sample_split):
         """Test with data where all rows are duplicates."""
-        table = pa.table({
-            "user_id": [1, 1, 1, 1],
-            "value": [10, 20, 30, 40],
-        })
+        table = pa.table(
+            {
+                "user_id": [1, 1, 1, 1],
+                "value": [10, 20, 30, 40],
+            }
+        )
         payload = SplitPayload(data=table, split_id="test")
 
         config = HashDedupeConfig(dedup_keys=["user_id"], num_partitions=4)
@@ -161,18 +166,22 @@ class TestHashDedupeOperator:
         operator = config.setup()
 
         # First batch
-        table1 = pa.table({
-            "user_id": [1, 2],
-            "value": [10, 20],
-        })
+        table1 = pa.table(
+            {
+                "user_id": [1, 2],
+                "value": [10, 20],
+            }
+        )
         payload1 = SplitPayload(data=table1, split_id="test1")
         result1 = operator.process_split(sample_split, payload1)
 
         # Second batch with overlapping keys
-        table2 = pa.table({
-            "user_id": [2, 3],  # user_id=2 would be duplicate with state store
-            "value": [30, 40],
-        })
+        table2 = pa.table(
+            {
+                "user_id": [2, 3],  # user_id=2 would be duplicate with state store
+                "value": [30, 40],
+            }
+        )
         payload2 = SplitPayload(data=table2, split_id="test2")
         result2 = operator.process_split(sample_split, payload2)
 

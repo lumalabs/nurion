@@ -42,13 +42,16 @@ The worker handles the actual routing:
 
 from abc import abstractmethod
 from dataclasses import dataclass, field
-from typing import ClassVar, List, Optional, Type
+from typing import ClassVar, List, Optional, Type, TYPE_CHECKING
 
 import pyarrow as pa
 
 from solstice.core.models import Split, SplitPayload
 from solstice.core.operator import Operator, OperatorConfig
 from solstice.compute import DuckDBEngine
+
+if TYPE_CHECKING:
+    from solstice.state import SlateDBPartitionStateStore
 
 
 @dataclass

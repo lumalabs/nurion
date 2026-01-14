@@ -575,6 +575,54 @@ class StageMaster:
             return await self._backpressure_monitor.scale_down(count)
         return 0
 
+    async def scale_up(self, count: int) -> int:
+        """Scale up by spawning new workers.
+
+        Args:
+            count: Number of workers to add
+
+        Returns:
+            Number of workers actually added
+        """
+        if count <= 0 or not self._worker_manager:
+            return 0
+
+        current = self._worker_manager.worker_count
+        max_workers = self.config.max_workers
+        safe_to_add = max(0, max_workers - current)
+        actual_add = min(count, safe_to_add)
+
+        if actual_add == 0:
+            self.logger.debug(f"Cannot scale up: current={current}, max={max_workers}")
+            return 0
+
+        # Get partition count for worker assignment
+        partition_count = self._partition_manager.partition_count
+
+        added = 0
+        for _ in range(actual_add):
+            try:
+                worker_id = await self._worker_manager.spawn_worker(
+                    partition_count=partition_count,
+                    is_min_worker=False,
+                )
+                if worker_id:
+                    added += 1
+            except Exception as e:
+                self.logger.warning(f"Failed to spawn worker: {e}")
+                break
+
+        # Rebalance partitions among all workers
+        if added > 0:
+            self._partition_manager.rebalance(self._worker_manager.worker_ids, partition_count)
+            await self._worker_manager.notify_all_partition_update()
+
+        self.logger.info(
+            f"Scaled up {self.stage_id}: added {added}/{count} workers "
+            f"(now {self._worker_manager.worker_count} workers)"
+        )
+        return added
+
     async def cleanup_queue(self) -> None:
         """Clean up output queue (called by runner after all consumers done)."""
         if self._output_queue:

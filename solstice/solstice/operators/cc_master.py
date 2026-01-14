@@ -42,7 +42,6 @@ Key design points:
 
 from __future__ import annotations
 
-import os
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
@@ -139,11 +138,13 @@ class CCIterateMaster(StageMaster):
             total_changes = await self._poll_worker_changes()
             iteration_duration = time.time() - start_time
 
-            self._iteration_stats.append(IterationStats(
-                iteration=1,
-                changes=total_changes,
-                duration=iteration_duration,
-            ))
+            self._iteration_stats.append(
+                IterationStats(
+                    iteration=1,
+                    changes=total_changes,
+                    duration=iteration_duration,
+                )
+            )
 
             self.logger.info(
                 f"Iteration 1 completed: {total_changes} changes, "
@@ -168,11 +169,13 @@ class CCIterateMaster(StageMaster):
                 total_changes = await self._recompute_worker_iterations()
                 iteration_duration = time.time() - iteration_start
 
-                self._iteration_stats.append(IterationStats(
-                    iteration=self._current_iteration,
-                    changes=total_changes,
-                    duration=iteration_duration,
-                ))
+                self._iteration_stats.append(
+                    IterationStats(
+                        iteration=self._current_iteration,
+                        changes=total_changes,
+                        duration=iteration_duration,
+                    )
+                )
 
                 self.logger.info(
                     f"Iteration {self._current_iteration} completed: {total_changes} changes, "
@@ -181,9 +184,7 @@ class CCIterateMaster(StageMaster):
 
                 # Check convergence
                 if self._check_convergence(total_changes):
-                    self.logger.info(
-                        f"Converged after {self._current_iteration} iterations"
-                    )
+                    self.logger.info(f"Converged after {self._current_iteration} iterations")
                     self._converged = True
                     break
 
@@ -242,9 +243,7 @@ class CCIterateMaster(StageMaster):
                     if changes_bytes:
                         partition_changes = int(changes_bytes.decode())
                         total_changes += partition_changes
-                        self.logger.debug(
-                            f"Partition {partition_id}: {partition_changes} changes"
-                        )
+                        self.logger.debug(f"Partition {partition_id}: {partition_changes} changes")
                 except Exception as e:
                     self.logger.debug(f"Failed to read changes from partition {partition_id}: {e}")
                 finally:
@@ -279,8 +278,15 @@ class CCIterateMaster(StageMaster):
         total_changes = 0
         futures = []
 
-        for worker in self._worker_manager.workers.values():
-            futures.append(worker.invoke_operator.remote("recompute_from_state"))
+        for worker_id, worker in self._worker_manager.workers.items():
+            # Get partition assignment for this worker
+            assigned_partitions = self._partition_manager.get_assignment(worker_id)
+            if not assigned_partitions:
+                self.logger.warning(f"No partitions assigned to worker {worker_id}")
+                continue
+            futures.append(
+                worker.invoke_operator.remote("recompute_from_state", assigned_partitions)
+            )
 
         if futures:
             try:

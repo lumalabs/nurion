@@ -65,7 +65,9 @@ class TestSourceOperator(Operator):
     def generate_splits(self) -> List[Split]:
         """Generate splits for the source."""
         splits = []
-        num_batches = (self.config.num_records + self.config.batch_size - 1) // self.config.batch_size
+        num_batches = (
+            self.config.num_records + self.config.batch_size - 1
+        ) // self.config.batch_size
         for i in range(num_batches):
             start = i * self.config.batch_size
             end = min((i + 1) * self.config.batch_size, self.config.num_records)
@@ -91,10 +93,11 @@ class TestSourceOperator(Operator):
         # Use pre-generated data if provided
         if self.config.source_data is not None:
             records = self.config.source_data[start:end]
-            data = pa.table({
-                col: [r[col] for r in records]
-                for col in records[0].keys()
-            }) if records else pa.table({})
+            data = (
+                pa.table({col: [r[col] for r in records] for col in records[0].keys()})
+                if records
+                else pa.table({})
+            )
         else:
             # Generate test data
             ids = list(range(start, end))
@@ -102,19 +105,22 @@ class TestSourceOperator(Operator):
 
             if self.config.with_checksum:
                 checksums = [
-                    hashlib.md5(f"record_{i}".encode()).hexdigest()
-                    for i in range(start, end)
+                    hashlib.md5(f"record_{i}".encode()).hexdigest() for i in range(start, end)
                 ]
-                data = pa.table({
-                    "id": ids,
-                    "value": values,
-                    "checksum": checksums,
-                })
+                data = pa.table(
+                    {
+                        "id": ids,
+                        "value": values,
+                        "checksum": checksums,
+                    }
+                )
             else:
-                data = pa.table({
-                    "id": ids,
-                    "value": values,
-                })
+                data = pa.table(
+                    {
+                        "id": ids,
+                        "value": values,
+                    }
+                )
 
         self._generated += end - start
         return SplitPayload(data=data, split_id=split.split_id)
@@ -183,6 +189,7 @@ class PassthroughOperator(Operator):
         # Simulate slow processing if configured
         if self.config.delay_per_record > 0:
             import time
+
             time.sleep(self.config.delay_per_record * len(payload))
 
         self._processed += len(payload)
@@ -221,6 +228,7 @@ class SlowTransformOperator(Operator):
     ) -> Optional[SplitPayload]:
         """Process with artificial delay."""
         import time
+
         time.sleep(self.config.delay_seconds)
         return payload
 
@@ -276,10 +284,7 @@ class FilterOperator(Operator):
 
         # Filter: keep rows where id % modulo == remainder
         id_col = table.column(self.config.id_field).to_pylist()
-        mask = [
-            i % self.config.modulo == self.config.remainder
-            for i in id_col
-        ]
+        mask = [i % self.config.modulo == self.config.remainder for i in id_col]
 
         # Apply filter
         filtered_table = table.filter(pa.array(mask))
@@ -418,10 +423,7 @@ class FilterExplodeOperator(Operator):
 
         # Step 1: Filter
         id_col = table.column(self.config.id_field).to_pylist()
-        mask = [
-            i % self.config.filter_modulo == self.config.filter_remainder
-            for i in id_col
-        ]
+        mask = [i % self.config.filter_modulo == self.config.filter_remainder for i in id_col]
         filtered_table = table.filter(pa.array(mask))
         self._after_filter_count += len(filtered_table)
 
@@ -624,9 +626,11 @@ def generate_test_data_with_checksum(num_records: int) -> List[Dict]:
     for i in range(num_records):
         value = f"record_{i}"
         checksum = hashlib.md5(value.encode()).hexdigest()
-        records.append({
-            "id": i,
-            "value": value,
-            "checksum": checksum,
-        })
+        records.append(
+            {
+                "id": i,
+                "value": value,
+                "checksum": checksum,
+            }
+        )
     return records
