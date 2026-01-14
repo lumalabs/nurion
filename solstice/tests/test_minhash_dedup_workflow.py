@@ -37,13 +37,13 @@ import logging
 import os
 import shutil
 import tempfile
-import urllib.request
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import lance
 import pyarrow as pa
 import pytest
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -89,9 +89,14 @@ def _download_file(filename: str) -> Path:
     logger.info(f"Downloading {url} -> {local_path}")
 
     try:
-        urllib.request.urlretrieve(url, local_path)
+        with requests.get(url, stream=True, timeout=300) as r:
+            r.raise_for_status()
+            with open(local_path, "wb") as f:
+                for chunk in r.iter_content(chunk_size=8 * 1024 * 1024):
+                    if chunk:
+                        f.write(chunk)
         logger.info(f"Downloaded {filename} ({local_path.stat().st_size} bytes)")
-    except Exception as e:
+    except requests.RequestException as e:
         raise RuntimeError(
             f"Failed to download {url}: {e}\n"
             f"Please ensure the file is available at the public URL, "
