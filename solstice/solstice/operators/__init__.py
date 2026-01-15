@@ -59,6 +59,24 @@ from solstice.operators.connected_components import (
     DedupeByClusterConfig,
     DedupeByClusterOperator,
 )
+# HTTP operators
+from solstice.operators.http import (
+    HttpOperator,
+    HttpOperatorConfig,
+    CircuitBreaker,
+    CircuitBreakerConfig,
+    GlobalRateLimiter,
+)
+# LLM operators
+from solstice.operators.llm import (
+    LLMOperator,
+    LLMOperatorConfig,
+    LLMStageMaster,
+    RouterConfig,
+    WorkerConfig,
+    SGLangRouterActor,
+    SGLangWorkerActor,
+)
 
 __all__ = [
     # Source operators and configs
@@ -114,4 +132,18 @@ __all__ = [
     "CCMessageOperator",
     "DedupeByClusterConfig",
     "DedupeByClusterOperator",
+    # HTTP operators
+    "HttpOperator",
+    "HttpOperatorConfig",
+    "CircuitBreaker",
+    "CircuitBreakerConfig",
+    "GlobalRateLimiter",
+    # LLM operators
+    "LLMOperator",
+    "LLMOperatorConfig",
+    "LLMStageMaster",
+    "RouterConfig",
+    "WorkerConfig",
+    "SGLangRouterActor",
+    "SGLangWorkerActor",
 ]
