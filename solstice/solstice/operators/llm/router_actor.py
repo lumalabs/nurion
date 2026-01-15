@@ -91,10 +91,15 @@ class SGLangRouterActor:
 
         # Build command for sglang router
         cmd = [
-            "python", "-m", "sglang_router.launch_router",
-            "--host", self._config.host,
-            "--port", str(port),
-            "--policy", self._config.policy,
+            "python",
+            "-m",
+            "sglang_router.launch_router",
+            "--host",
+            self._config.host,
+            "--port",
+            str(port),
+            "--policy",
+            self._config.policy,
         ]
 
         self._logger.info(f"Starting SGLang router: {' '.join(cmd)}")
@@ -178,8 +183,7 @@ class SGLangRouterActor:
                     else:
                         body = await resp.text()
                         self._logger.error(
-                            f"Failed to register worker {worker_id}: "
-                            f"HTTP {resp.status} - {body}"
+                            f"Failed to register worker {worker_id}: HTTP {resp.status} - {body}"
                         )
                         return False
         except Exception as e:
@@ -215,8 +219,7 @@ class SGLangRouterActor:
                     else:
                         body = await resp.text()
                         self._logger.warning(
-                            f"Failed to unregister worker {worker_id}: "
-                            f"HTTP {resp.status} - {body}"
+                            f"Failed to unregister worker {worker_id}: HTTP {resp.status} - {body}"
                         )
                         return False
         except Exception as e:

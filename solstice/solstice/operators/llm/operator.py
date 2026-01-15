@@ -22,17 +22,21 @@ Supports:
 Uses OpenAI-compatible Chat Completions API (/v1/chat/completions).
 """
 
+from __future__ import annotations
+
 import asyncio
 import base64
 from dataclasses import dataclass, field
-from typing import Any, ClassVar, Literal, Optional, Type, Union
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Optional, Type, Union
 
 import pyarrow as pa
 
 from solstice.core.models import Split, SplitPayload
 from solstice.operators.http.operator import HttpOperator, HttpOperatorConfig
 from solstice.operators.llm.config import RouterConfig, WorkerConfig
-from solstice.operators.llm.stage_master import LLMStageMaster
+
+if TYPE_CHECKING:
+    from solstice.operators.llm.stage_master import LLMStageMaster
 
 
 @dataclass
@@ -235,9 +239,7 @@ class LLMOperator(HttpOperator):
 
         return messages_list
 
-    def _get_single_images(
-        self, table: pa.Table, count: int
-    ) -> list[Optional[Union[str, bytes]]]:
+    def _get_single_images(self, table: pa.Table, count: int) -> list[Optional[Union[str, bytes]]]:
         """Get single images from table."""
         if self._config.image_field and self._config.image_field in table.column_names:
             return table[self._config.image_field].to_pylist()
@@ -260,19 +262,23 @@ class LLMOperator(HttpOperator):
 
         # Add image
         if image_url:
-            content.append({
-                "type": "image_url",
-                "image_url": {"url": image_url, "detail": self._config.detail},
-            })
+            content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": image_url, "detail": self._config.detail},
+                }
+            )
         elif image:
             image_b64 = base64.b64encode(image).decode() if isinstance(image, bytes) else image
-            content.append({
-                "type": "image_url",
-                "image_url": {
-                    "url": f"data:image/jpeg;base64,{image_b64}",
-                    "detail": self._config.detail,
-                },
-            })
+            content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/jpeg;base64,{image_b64}",
+                        "detail": self._config.detail,
+                    },
+                }
+            )
 
         # Add text
         content.append({"type": "text", "text": prompt})
@@ -287,13 +293,15 @@ class LLMOperator(HttpOperator):
 
         for image in images:
             image_b64 = base64.b64encode(image).decode() if isinstance(image, bytes) else image
-            content.append({
-                "type": "image_url",
-                "image_url": {
-                    "url": f"data:image/jpeg;base64,{image_b64}",
-                    "detail": self._config.detail,
-                },
-            })
+            content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/jpeg;base64,{image_b64}",
+                        "detail": self._config.detail,
+                    },
+                }
+            )
 
         content.append({"type": "text", "text": prompt})
 

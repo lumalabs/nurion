@@ -112,9 +112,7 @@ class SGLangWorkerActor:
 
             await self._wait_for_ready()
 
-            success = await self._router.register_worker.remote(
-                self._worker_id, self._endpoint
-            )
+            success = await self._router.register_worker.remote(self._worker_id, self._endpoint)
             if not success:
                 raise RuntimeError(f"Failed to register worker {self._worker_id}")
 
@@ -130,12 +128,19 @@ class SGLangWorkerActor:
     def _build_command(self, port: int) -> list[str]:
         """Build SGLang server command."""
         cmd = [
-            "python", "-m", "sglang.launch_server",
-            "--model-path", self._config.model_path,
-            "--tp", str(self._config.tensor_parallel_size),
-            "--host", self._config.host,
-            "--port", str(port),
-            "--mem-fraction-static", str(self._config.gpu_memory_utilization),
+            "python",
+            "-m",
+            "sglang.launch_server",
+            "--model-path",
+            self._config.model_path,
+            "--tp",
+            str(self._config.tensor_parallel_size),
+            "--host",
+            self._config.host,
+            "--port",
+            str(port),
+            "--mem-fraction-static",
+            str(self._config.gpu_memory_utilization),
         ]
 
         if self._config.max_model_len > 0:

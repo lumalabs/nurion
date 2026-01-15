@@ -22,7 +22,7 @@ Provides:
 import logging
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Dict, List, Optional, Set
 
 
@@ -141,8 +141,7 @@ class NodeBlacklist:
             # Clean up old failures outside the window
             window_start = now - self._config.failure_window_seconds
             self._failures[node_id] = [
-                f for f in self._failures[node_id]
-                if f.timestamp > window_start
+                f for f in self._failures[node_id] if f.timestamp > window_start
             ]
 
             # Add new failure
@@ -171,14 +170,10 @@ class NodeBlacklist:
         # Check if already blacklisted
         if node_id in self._blacklist:
             # Extend the blacklist period
-            self._blacklist[node_id].expires_at = (
-                time.time() + self._config.quarantine_ttl_seconds
-            )
+            self._blacklist[node_id].expires_at = time.time() + self._config.quarantine_ttl_seconds
             self._blacklist[node_id].failure_count = failure_count
             self._blacklist[node_id].last_reason = reason
-            self._logger.warning(
-                f"Extended blacklist for node {node_id}: {reason}"
-            )
+            self._logger.warning(f"Extended blacklist for node {node_id}: {reason}")
             return True
 
         # Check max blacklisted nodes limit
@@ -212,10 +207,7 @@ class NodeBlacklist:
         Must be called with lock held.
         """
         now = time.time()
-        expired = [
-            node_id for node_id, info in self._blacklist.items()
-            if info.expires_at <= now
-        ]
+        expired = [node_id for node_id, info in self._blacklist.items() if info.expires_at <= now]
         for node_id in expired:
             del self._blacklist[node_id]
             self._logger.info(f"Node {node_id} removed from blacklist (expired)")
@@ -311,8 +303,7 @@ class NodeBlacklist:
                     for info in self._blacklist.values()
                 ],
                 "failure_counts": {
-                    node_id: len(failures)
-                    for node_id, failures in self._failures.items()
+                    node_id: len(failures) for node_id, failures in self._failures.items()
                 },
             }
 

@@ -79,18 +79,14 @@ class HttpOperatorConfig(OperatorConfig):
     # Retry configuration
     max_retries: int = 3
     retry_backoff: float = 1.0
-    retry_on_status: list[int] = field(
-        default_factory=lambda: [429, 500, 502, 503, 504]
-    )
+    retry_on_status: list[int] = field(default_factory=lambda: [429, 500, 502, 503, 504])
 
     # Rate limiting
     max_concurrent_requests: int = 100
     requests_per_second: float = 0  # 0 = unlimited
 
     # Circuit breaker
-    circuit_breaker: CircuitBreakerConfig = field(
-        default_factory=CircuitBreakerConfig
-    )
+    circuit_breaker: CircuitBreakerConfig = field(default_factory=CircuitBreakerConfig)
 
     # Rate limiter settings
     rate_limiter_name: str = ""
