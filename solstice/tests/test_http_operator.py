@@ -72,10 +72,12 @@ class TestCircuitBreaker:
         """Circuit transitions to HALF_OPEN after recovery timeout."""
         with patch("solstice.operators.http.circuit_breaker.time") as mock_time:
             mock_time.time.return_value = 1000.0
-            cb = CircuitBreaker(CircuitBreakerConfig(
-                failure_threshold=1,
-                recovery_timeout=10.0,
-            ))
+            cb = CircuitBreaker(
+                CircuitBreakerConfig(
+                    failure_threshold=1,
+                    recovery_timeout=10.0,
+                )
+            )
 
             cb.record_failure()
             assert cb.state == CircuitState.OPEN
@@ -89,11 +91,13 @@ class TestCircuitBreaker:
         """Circuit closes after successful requests in HALF_OPEN."""
         with patch("solstice.operators.http.circuit_breaker.time") as mock_time:
             mock_time.time.return_value = 1000.0
-            cb = CircuitBreaker(CircuitBreakerConfig(
-                failure_threshold=1,
-                recovery_timeout=10.0,
-                half_open_requests=2,
-            ))
+            cb = CircuitBreaker(
+                CircuitBreakerConfig(
+                    failure_threshold=1,
+                    recovery_timeout=10.0,
+                    half_open_requests=2,
+                )
+            )
 
             cb.record_failure()
             mock_time.time.return_value = 1011.0
@@ -109,10 +113,12 @@ class TestCircuitBreaker:
         """Circuit reopens on failure in HALF_OPEN state."""
         with patch("solstice.operators.http.circuit_breaker.time") as mock_time:
             mock_time.time.return_value = 1000.0
-            cb = CircuitBreaker(CircuitBreakerConfig(
-                failure_threshold=1,
-                recovery_timeout=10.0,
-            ))
+            cb = CircuitBreaker(
+                CircuitBreakerConfig(
+                    failure_threshold=1,
+                    recovery_timeout=10.0,
+                )
+            )
 
             cb.record_failure()
             mock_time.time.return_value = 1011.0
@@ -126,10 +132,12 @@ class TestCircuitBreaker:
         """Failures outside window are not counted."""
         with patch("solstice.operators.http.circuit_breaker.time") as mock_time:
             mock_time.time.return_value = 1000.0
-            cb = CircuitBreaker(CircuitBreakerConfig(
-                failure_threshold=3,
-                failure_window_seconds=10.0,
-            ))
+            cb = CircuitBreaker(
+                CircuitBreakerConfig(
+                    failure_threshold=3,
+                    failure_window_seconds=10.0,
+                )
+            )
 
             cb.record_failure()
             cb.record_failure()
@@ -143,10 +151,12 @@ class TestCircuitBreaker:
         """Can get time until retry is possible."""
         with patch("solstice.operators.http.circuit_breaker.time") as mock_time:
             mock_time.time.return_value = 1000.0
-            cb = CircuitBreaker(CircuitBreakerConfig(
-                failure_threshold=1,
-                recovery_timeout=10.0,
-            ))
+            cb = CircuitBreaker(
+                CircuitBreakerConfig(
+                    failure_threshold=1,
+                    recovery_timeout=10.0,
+                )
+            )
 
             assert cb.get_time_until_retry() == 0.0
 
@@ -215,10 +225,12 @@ class TestNodeBlacklist:
 
         with patch("solstice.core.fault_tolerance.time") as mock_time:
             mock_time.time.return_value = 1000.0
-            blacklist = NodeBlacklist(NodeBlacklistConfig(
-                failures_to_blacklist=1,
-                quarantine_ttl_seconds=60.0,
-            ))
+            blacklist = NodeBlacklist(
+                NodeBlacklistConfig(
+                    failures_to_blacklist=1,
+                    quarantine_ttl_seconds=60.0,
+                )
+            )
 
             blacklist.record_failure("node-1", "worker-0", "error")
             assert blacklist.is_blacklisted("node-1")
@@ -230,10 +242,12 @@ class TestNodeBlacklist:
         """Respects maximum blacklisted nodes limit."""
         from solstice.core.fault_tolerance import NodeBlacklist, NodeBlacklistConfig
 
-        blacklist = NodeBlacklist(NodeBlacklistConfig(
-            failures_to_blacklist=1,
-            max_blacklisted_nodes=2,
-        ))
+        blacklist = NodeBlacklist(
+            NodeBlacklistConfig(
+                failures_to_blacklist=1,
+                max_blacklisted_nodes=2,
+            )
+        )
 
         blacklist.record_failure("node-1", "w", "e")
         blacklist.record_failure("node-2", "w", "e")
@@ -259,10 +273,12 @@ class TestNodeBlacklist:
 
         with patch("solstice.core.fault_tolerance.time") as mock_time:
             mock_time.time.return_value = 1000.0
-            blacklist = NodeBlacklist(NodeBlacklistConfig(
-                failures_to_blacklist=2,
-                failure_window_seconds=60.0,
-            ))
+            blacklist = NodeBlacklist(
+                NodeBlacklistConfig(
+                    failures_to_blacklist=2,
+                    failure_window_seconds=60.0,
+                )
+            )
 
             blacklist.record_failure("node-1", "w0", "e")
             mock_time.time.return_value = 1070.0
@@ -309,10 +325,12 @@ class TestTimeoutMonitor:
 
         with patch("solstice.core.fault_tolerance.time") as mock_time:
             mock_time.time.return_value = 1000.0
-            monitor = TimeoutMonitor(TimeoutConfig(
-                split_timeout_seconds=60.0,
-                grace_period_seconds=10.0,
-            ))
+            monitor = TimeoutMonitor(
+                TimeoutConfig(
+                    split_timeout_seconds=60.0,
+                    grace_period_seconds=10.0,
+                )
+            )
 
             monitor.record_split_start("worker-0", "split-123")
             assert len(monitor.check_timeouts()) == 0
@@ -322,21 +340,36 @@ class TestTimeoutMonitor:
             assert "worker-0" in timed_out
 
     def test_heartbeat_extends_timeout(self):
-        """Heartbeat prevents timeout detection."""
+        """Heartbeat prevents timeout detection by updating last_heartbeat.
+
+        The timeout detection checks both:
+        1. elapsed > (timeout + grace) - total time since start
+        2. since_heartbeat > (timeout/2 + grace) - time since last heartbeat
+
+        Heartbeats reset the heartbeat check, not the total elapsed time.
+        """
         from solstice.core.fault_tolerance import TimeoutConfig, TimeoutMonitor
 
         with patch("solstice.core.fault_tolerance.time") as mock_time:
             mock_time.time.return_value = 1000.0
-            monitor = TimeoutMonitor(TimeoutConfig(
-                split_timeout_seconds=60.0,
-                grace_period_seconds=10.0,
-            ))
+            # timeout=60s, grace=10s
+            # elapsed timeout: 70s
+            # heartbeat timeout: 40s
+            monitor = TimeoutMonitor(
+                TimeoutConfig(
+                    split_timeout_seconds=60.0,
+                    grace_period_seconds=10.0,
+                )
+            )
 
             monitor.record_split_start("worker-0", "split-123")
-            mock_time.time.return_value = 1050.0
-            monitor.record_heartbeat("worker-0")
-            mock_time.time.return_value = 1090.0
 
+            # At t=1035, elapsed=35s < 70s (OK), since_heartbeat=35s < 40s (OK)
+            mock_time.time.return_value = 1035.0
+            monitor.record_heartbeat("worker-0")
+
+            # At t=1065, elapsed=65s < 70s (OK), since_heartbeat=30s < 40s (OK)
+            mock_time.time.return_value = 1065.0
             timed_out = monitor.check_timeouts()
             assert "worker-0" not in timed_out
 
@@ -346,10 +379,12 @@ class TestTimeoutMonitor:
 
         with patch("solstice.core.fault_tolerance.time") as mock_time:
             mock_time.time.return_value = 1000.0
-            monitor = TimeoutMonitor(TimeoutConfig(
-                enabled=False,
-                split_timeout_seconds=10.0,
-            ))
+            monitor = TimeoutMonitor(
+                TimeoutConfig(
+                    enabled=False,
+                    split_timeout_seconds=10.0,
+                )
+            )
 
             monitor.record_split_start("worker-0", "split-123")
             mock_time.time.return_value = 2000.0
@@ -357,50 +392,17 @@ class TestTimeoutMonitor:
             assert len(monitor.check_timeouts()) == 0
 
 
-class TestGlobalRateLimiter:
-    """Tests for GlobalRateLimiter (unit tests, no Ray)."""
-
-    def test_request_tokens(self):
-        """Can request tokens from the pool."""
-        from solstice.operators.http.rate_limiter import GlobalRateLimiter
-
-        # Test the class methods directly (without Ray)
-        limiter = GlobalRateLimiter.__new__(GlobalRateLimiter)
-        limiter.__init__(max_concurrent=100, requests_per_second=0)
-
-        granted = limiter.request_tokens(20)
-        assert granted == 20
-
-    def test_return_tokens(self):
-        """Can return tokens to the pool."""
-        from solstice.operators.http.rate_limiter import GlobalRateLimiter
-
-        limiter = GlobalRateLimiter.__new__(GlobalRateLimiter)
-        limiter.__init__(max_concurrent=100, requests_per_second=0)
-
-        limiter.request_tokens(50)
-        limiter.return_tokens(30)
-
-        stats = limiter.get_stats()
-        assert stats["current_concurrent"] == 20
-
-    def test_respects_max_concurrent(self):
-        """Respects maximum concurrent limit."""
-        from solstice.operators.http.rate_limiter import GlobalRateLimiter
-
-        limiter = GlobalRateLimiter.__new__(GlobalRateLimiter)
-        limiter.__init__(max_concurrent=10, requests_per_second=0)
-
-        granted = limiter.request_tokens(20)
-        assert granted == 10
-
-
 class TestLocalRateLimiter:
-    """Tests for LocalRateLimiter."""
+    """Tests for LocalRateLimiter (synchronous parts only).
+
+    Note: GlobalRateLimiter is a Ray actor and requires a running Ray cluster
+    for proper testing. See integration tests for full rate limiter tests.
+    """
 
     def test_acquire_release(self):
         """Can acquire and release tokens locally."""
         from unittest.mock import MagicMock
+
         from solstice.operators.http.rate_limiter import LocalRateLimiter
 
         mock_global = MagicMock()
@@ -420,6 +422,7 @@ class TestLocalRateLimiter:
     def test_acquire_fails_when_empty(self):
         """Acquire returns False when no tokens."""
         from unittest.mock import MagicMock
+
         from solstice.operators.http.rate_limiter import LocalRateLimiter
 
         mock_global = MagicMock()
@@ -428,23 +431,54 @@ class TestLocalRateLimiter:
 
         assert not limiter.acquire()
 
-    @pytest.mark.asyncio
-    async def test_start_stop(self):
-        """Can start and stop the limiter."""
-        from unittest.mock import AsyncMock, MagicMock
+    def test_available_property(self):
+        """Reports available tokens."""
+        from unittest.mock import MagicMock
+
         from solstice.operators.http.rate_limiter import LocalRateLimiter
 
         mock_global = MagicMock()
-        mock_global.request_tokens = MagicMock()
-        mock_global.request_tokens.remote = AsyncMock(return_value=10)
-        mock_global.return_tokens = MagicMock()
-        mock_global.return_tokens.remote = MagicMock()
+        limiter = LocalRateLimiter(mock_global, batch_size=10)
+        limiter._tokens = 10
 
-        limiter = LocalRateLimiter(mock_global, batch_size=10, refill_interval=0.01)
-        await limiter.start()
+        assert limiter.available == 10
 
-        assert limiter._running
+        limiter.acquire()
+        assert limiter.available == 9
+
+    def test_in_flight_property(self):
+        """Reports in-flight requests."""
+        from unittest.mock import MagicMock
+
+        from solstice.operators.http.rate_limiter import LocalRateLimiter
+
+        mock_global = MagicMock()
+        limiter = LocalRateLimiter(mock_global, batch_size=10)
+        limiter._tokens = 10
+
+        assert limiter.in_flight == 0
+
+        limiter.acquire()
+        assert limiter.in_flight == 1
+
+        limiter.release()
+        assert limiter.in_flight == 0
+
+    @pytest.mark.asyncio
+    async def test_refill_requests_tokens(self):
+        """Refill requests tokens from global limiter."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from solstice.operators.http.rate_limiter import LocalRateLimiter
+
+        mock_global = MagicMock()
+        mock_remote = AsyncMock(return_value=10)
+        mock_global.request_tokens.remote = mock_remote
+
+        limiter = LocalRateLimiter(mock_global, batch_size=10)
+
+        # Call _refill directly (no background task)
+        await limiter._refill()
+
+        mock_remote.assert_called_once_with(10)
         assert limiter._tokens == 10
-
-        await limiter.stop()
-        assert not limiter._running

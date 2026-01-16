@@ -124,12 +124,22 @@ class HttpOperator(Operator):
         self._session: Optional[aiohttp.ClientSession] = None
         self._local_limiter: Optional[LocalRateLimiter] = None
         self._circuit_breaker: Optional[CircuitBreaker] = None
-        self._initialized = False
+        self._bound_loop: Optional[asyncio.AbstractEventLoop] = None
 
     async def _init_http(self) -> None:
-        """Initialize HTTP client and fault tolerance components."""
-        if self._initialized:
-            return
+        """Initialize HTTP client and fault tolerance components.
+
+        Handles event loop changes (e.g., when using asyncio.run() multiple times)
+        by reinitializing resources bound to the current loop.
+        """
+        current_loop = asyncio.get_running_loop()
+
+        # Check if we need to reinitialize due to event loop change
+        if self._bound_loop is not None and self._bound_loop is not current_loop:
+            await self._cleanup_async_resources()
+
+        if self._session is not None:
+            return  # Already initialized for this loop
 
         # Create aiohttp session with timeouts
         timeout = aiohttp.ClientTimeout(
@@ -157,10 +167,27 @@ class HttpOperator(Operator):
             )
             await self._local_limiter.start()
 
-        # Initialize circuit breaker (per-worker)
-        self._circuit_breaker = CircuitBreaker(self._http_config.circuit_breaker)
+        # Initialize circuit breaker (per-worker, not loop-bound)
+        if self._circuit_breaker is None:
+            self._circuit_breaker = CircuitBreaker(self._http_config.circuit_breaker)
 
-        self._initialized = True
+        self._bound_loop = current_loop
+
+    async def _cleanup_async_resources(self) -> None:
+        """Clean up async resources (session, limiter) without touching circuit breaker."""
+        if self._local_limiter:
+            try:
+                await self._local_limiter.stop()
+            except Exception:
+                pass
+            self._local_limiter = None
+
+        if self._session:
+            try:
+                await self._session.close()
+            except Exception:
+                pass
+            self._session = None
 
     async def _ensure_session(self) -> aiohttp.ClientSession:
         """Ensure HTTP session is initialized."""
@@ -291,26 +318,19 @@ class HttpOperator(Operator):
 
     def close(self) -> None:
         """Clean up HTTP resources."""
-        if self._session:
+        if self._session or self._local_limiter:
             try:
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
-                    loop.create_task(self._close_async())
+                    loop.create_task(self._cleanup_async_resources())
                 else:
-                    loop.run_until_complete(self._close_async())
+                    loop.run_until_complete(self._cleanup_async_resources())
             except Exception:
-                pass
+                # Event loop may be closed, force cleanup
+                self._session = None
+                self._local_limiter = None
+        self._bound_loop = None
         super().close()
-
-    async def _close_async(self) -> None:
-        """Async cleanup."""
-        if self._local_limiter:
-            await self._local_limiter.stop()
-            self._local_limiter = None
-
-        if self._session:
-            await self._session.close()
-            self._session = None
 
 
 # Set operator_class after definition

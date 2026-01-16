@@ -317,6 +317,10 @@ def get_or_create_rate_limiter(
 ) -> ray.actor.ActorHandle:
     """Get existing global rate limiter or create a new one.
 
+    The actor is NOT detached, so it will be garbage collected when all
+    references are released. LocalRateLimiter holds a reference, keeping
+    it alive during the job.
+
     Args:
         name: Unique name for the rate limiter (Ray named actor)
         max_concurrent: Maximum concurrent requests
@@ -328,8 +332,30 @@ def get_or_create_rate_limiter(
     return GlobalRateLimiter.options(
         name=name,
         get_if_exists=True,
-        lifetime="detached",
+        # No lifetime="detached" - actor will be GC'd when no references exist
     ).remote(
         max_concurrent=max_concurrent,
         requests_per_second=requests_per_second,
     )
+
+
+def cleanup_rate_limiter(name: str) -> bool:
+    """Explicitly kill a rate limiter actor by name.
+
+    Call this at job completion to ensure cleanup. Not strictly necessary
+    since actors are GC'd when references are released, but useful for
+    immediate cleanup.
+
+    Args:
+        name: The rate limiter name (same as passed to get_or_create_rate_limiter)
+
+    Returns:
+        True if actor was found and killed, False if not found
+    """
+    try:
+        actor = ray.get_actor(name)
+        ray.kill(actor)
+        return True
+    except ValueError:
+        # Actor not found
+        return False

@@ -186,6 +186,16 @@ class CircuitBreaker:
                     self._state = CircuitState.OPEN
                     self._opened_at = now
 
+    def _get_time_until_retry_unlocked(self) -> float:
+        """Calculate time until retry (caller must hold lock)."""
+        if self._state != CircuitState.OPEN:
+            return 0.0
+        if self._opened_at is None:
+            return 0.0
+        elapsed = time.time() - self._opened_at
+        remaining = self.config.recovery_timeout - elapsed
+        return max(0.0, remaining)
+
     def get_time_until_retry(self) -> float:
         """Get seconds until circuit breaker might allow requests again.
 
@@ -193,15 +203,7 @@ class CircuitBreaker:
             Seconds until retry is possible, 0 if requests are allowed
         """
         with self._lock:
-            if self._state != CircuitState.OPEN:
-                return 0.0
-
-            if self._opened_at is None:
-                return 0.0
-
-            elapsed = time.time() - self._opened_at
-            remaining = self.config.recovery_timeout - elapsed
-            return max(0.0, remaining)
+            return self._get_time_until_retry_unlocked()
 
     def reset(self) -> None:
         """Reset circuit breaker to initial state."""
@@ -226,5 +228,5 @@ class CircuitBreaker:
                 "success_count": self._success_count,
                 "last_failure_time": self._last_failure_time,
                 "opened_at": self._opened_at,
-                "time_until_retry": self.get_time_until_retry(),
+                "time_until_retry": self._get_time_until_retry_unlocked(),
             }

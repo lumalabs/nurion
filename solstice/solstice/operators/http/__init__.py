@@ -24,6 +24,7 @@ from solstice.operators.http.rate_limiter import (
     GlobalRateLimiter,
     LocalRateLimiter,
     RateLimitExceededError,
+    cleanup_rate_limiter,
 )
 from solstice.operators.http.operator import (
     HttpOperator,
@@ -41,6 +42,7 @@ __all__ = [
     "GlobalRateLimiter",
     "LocalRateLimiter",
     "RateLimitExceededError",
+    "cleanup_rate_limiter",
     # HTTP operator
     "HttpOperator",
     "HttpOperatorConfig",
