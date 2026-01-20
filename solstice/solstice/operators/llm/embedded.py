@@ -453,12 +453,40 @@ class EmbeddedLLMOperator(Operator):
         images: list[Any],
     ) -> list[str]:
         """Generate VLM responses using SGLang."""
-        outputs = self._engine.generate(
-            prompts,
-            images=images,
-            **self._sampling_params,
-        )
-        return [output["text"] for output in outputs]
+        # Handle None images by separating text-only from VLM inputs
+        text_only_indices = []
+        vlm_indices = []
+        vlm_prompts = []
+        vlm_images = []
+        text_prompts = []
+
+        for i, (prompt, image_data) in enumerate(zip(prompts, images)):
+            if image_data is None:
+                text_only_indices.append(i)
+                text_prompts.append(prompt)
+            else:
+                vlm_indices.append(i)
+                vlm_prompts.append(prompt)
+                vlm_images.append(image_data)
+
+        # Generate responses for each batch
+        results = [None] * len(prompts)
+
+        if text_prompts:
+            text_outputs = self._engine.generate(text_prompts, **self._sampling_params)
+            for idx, output in zip(text_only_indices, text_outputs):
+                results[idx] = output["text"]
+
+        if vlm_prompts:
+            vlm_outputs = self._engine.generate(
+                vlm_prompts,
+                images=vlm_images,
+                **self._sampling_params,
+            )
+            for idx, output in zip(vlm_indices, vlm_outputs):
+                results[idx] = output["text"]
+
+        return results
 
     def teardown(self) -> None:
         """Clean up the inference engine."""
