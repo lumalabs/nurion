@@ -351,6 +351,10 @@ class Operator(ABC):
         Returns:
             True if this offset was already processed
         """
+        # In AT_LEAST_ONCE mode, never deduplicate
+        if self.semantic_guarantee == SemanticGuarantee.AT_LEAST_ONCE:
+            return False
+        
         if self.last_offset < 0:
             return False
         return offset <= self.last_offset

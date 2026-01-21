@@ -34,6 +34,7 @@ import ray
 from solstice.core.stage_config import StageConfig, QueueEndpoint
 from solstice.core.stage_worker import StageWorker
 from solstice.core.managers.partition_manager import PartitionManager
+from solstice.core.operator import SemanticGuarantee
 from solstice.utils.logging import create_ray_logger
 
 if TYPE_CHECKING:
@@ -77,6 +78,7 @@ class WorkerManager:
         self._state_endpoint = state_endpoint
         self._state_topic = state_topic
         self._lineage_sample_rate = lineage_sample_rate
+        self._semantic_guarantee = config.semantic_guarantee or SemanticGuarantee.AT_LEAST_ONCE
 
         # Worker state
         self._workers: Dict[str, ray.actor.ActorHandle] = {}
@@ -218,6 +220,7 @@ class WorkerManager:
             state_endpoint=self._state_endpoint,
             state_topic=self._state_topic,
             lineage_sample_rate=self._lineage_sample_rate,
+            semantic_guarantee=self._semantic_guarantee,
         )
 
         self._workers[worker_id] = worker

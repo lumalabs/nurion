@@ -32,7 +32,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, final
 from solstice.queue import QueueType
 
 if TYPE_CHECKING:
-    pass
+    from solstice.core.operator import SemanticGuarantee
 
 
 @final
@@ -105,6 +105,9 @@ class StageConfig:
 
     # Lineage tracking (for WebUI)
     lineage_sample_rate: float = 0.0  # 0=off, 1=full, 0.x=sampling
+
+    # Semantic guarantee (AT_LEAST_ONCE or EXACTLY_ONCE)
+    semantic_guarantee: Optional["SemanticGuarantee"] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
