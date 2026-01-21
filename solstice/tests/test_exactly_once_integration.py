@@ -31,11 +31,15 @@ import pyarrow as pa
 import pytest
 
 from solstice.core import (
+    Job,
+    JobConfig,
+    Stage,
     OperatorConfig,
     SemanticGuarantee,
 )
 from solstice.core.models import Split, SplitPayload
 from solstice.core.sink_operator import SinkOperator
+from solstice.queue import QueueType
 from solstice.testing import (
     FaultInjector,
     set_fault_injector,
@@ -354,8 +358,12 @@ class TestFaultInjection:
         finally:
             set_fault_injector(None)
 
-    def test_at_least_once_no_dedup(self, clean_storage, temp_state_dir):
-        """At-least-once mode: no dedup check, always process."""
+    def test_at_least_once_dedup_works_same_as_exactly_once(self, clean_storage, temp_state_dir):
+        """AT_LEAST_ONCE uses the same offset-based dedup as EXACTLY_ONCE within a run.
+
+        The difference is in recovery behavior, not runtime dedup logic.
+        Both modes track last_offset and skip duplicates via is_duplicate().
+        """
         storage_id = "test_alo"
         _clear_sink_storage(storage_id)
 
@@ -371,25 +379,111 @@ class TestFaultInjection:
         op = config.setup()
         op.init_from_state_store()
 
-        # Process same offset multiple times
+        processed_count = 0
+        skipped_count = 0
+
+        # Process same offsets multiple times (simulates redelivery)
         for _ in range(3):
             for offset in range(5):
-                # In AT_LEAST_ONCE, is_duplicate always returns False
-                if not op.is_duplicate(offset):
-                    payload = SplitPayload(
-                        data=pa.table({"value": [offset]}),
-                        split_id=f"s{offset}",
-                    )
-                    op.process_split(
-                        Split(split_id=f"s{offset}", stage_id="sink", data_range={}),
-                        payload,
-                    )
+                # Dedup check - same logic in both AT_LEAST_ONCE and EXACTLY_ONCE
+                if op.is_duplicate(offset):
+                    skipped_count += 1
+                    continue
+
+                payload = SplitPayload(
+                    data=pa.table({"value": [offset]}),
+                    split_id=f"s{offset}",
+                )
+                op.process_split(
+                    Split(split_id=f"s{offset}", stage_id="sink", data_range={}),
+                    payload,
+                )
+                # Mark as processed (like stage_worker does)
+                op.mark_processed(offset)
+                processed_count += 1
 
         op.close()
 
-        # Idempotent sink still has 5 unique values (set semantics)
+        # Only first round should process (5 unique), rounds 2-3 should be skipped (10 duplicates)
+        assert processed_count == 5, f"Expected 5 processed, got {processed_count}"
+        assert skipped_count == 10, f"Expected 10 skipped, got {skipped_count}"
+
+        # Idempotent sink has 5 unique values
         storage = _get_sink_storage(storage_id)
         assert len(storage) == 5
+
+
+# =============================================================================
+# Config Propagation Tests (no Ray runtime)
+# =============================================================================
+
+
+class TestConfigPropagation:
+    """Test that semantic_guarantee is properly passed through config chain.
+
+    This verifies the fix for the bug where JobConfig.semantic_guarantee
+    was never passed to StageWorker.
+    """
+
+    def test_stage_config_has_semantic_guarantee(self):
+        """Verify StageConfig includes semantic_guarantee field."""
+        from solstice.core.stage_config import StageConfig
+
+        # Default should be AT_LEAST_ONCE
+        config = StageConfig()
+        assert config.semantic_guarantee == SemanticGuarantee.AT_LEAST_ONCE
+
+        # Can be set to EXACTLY_ONCE
+        config = StageConfig(semantic_guarantee=SemanticGuarantee.EXACTLY_ONCE)
+        assert config.semantic_guarantee == SemanticGuarantee.EXACTLY_ONCE
+
+    def test_job_config_semantic_guarantee_in_stage_config(self):
+        """Verify JobConfig.semantic_guarantee flows to StageConfig."""
+        # Create job with EXACTLY_ONCE
+        job = Job(
+            job_id="test_config_flow",
+            config=JobConfig(
+                queue_type=QueueType.MEMORY,
+                semantic_guarantee=SemanticGuarantee.EXACTLY_ONCE,
+            ),
+        )
+
+        job.add_stage(
+            Stage(
+                stage_id="sink",
+                operator_config=_IdempotentSinkConfig(storage_id="test"),
+                parallelism=1,
+            )
+        )
+
+        # Create runner and check _build_stage_config
+        runner = job.create_ray_runner()
+        stage = job.stages["sink"]
+        stage_config = runner._build_stage_config(stage)
+
+        # Verify semantic_guarantee was passed
+        assert stage_config.semantic_guarantee == SemanticGuarantee.EXACTLY_ONCE
+
+    def test_at_least_once_default(self):
+        """Verify AT_LEAST_ONCE is the default."""
+        job = Job(
+            job_id="test_default",
+            config=JobConfig(queue_type=QueueType.MEMORY),
+        )
+
+        job.add_stage(
+            Stage(
+                stage_id="sink",
+                operator_config=_IdempotentSinkConfig(storage_id="test"),
+                parallelism=1,
+            )
+        )
+
+        runner = job.create_ray_runner()
+        stage = job.stages["sink"]
+        stage_config = runner._build_stage_config(stage)
+
+        assert stage_config.semantic_guarantee == SemanticGuarantee.AT_LEAST_ONCE
 
 
 if __name__ == "__main__":

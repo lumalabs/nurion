@@ -213,7 +213,7 @@ class StageWorker:
             raise
         finally:
             self._running = False
-            self._cleanup()
+            await self._cleanup()
 
     async def _run_partition_loops(self) -> None:
         """Run processing loops for all partitions concurrently using asyncio.gather."""
@@ -487,7 +487,7 @@ class StageWorker:
         # Emit metrics periodically
         await self._emit_worker_metrics()
 
-    def _cleanup(self) -> None:
+    async def _cleanup(self) -> None:
         """Clean up resources."""
         # Close all partition operators
         for pop in self._partition_operators.values():
@@ -500,9 +500,9 @@ class StageWorker:
         # Stop state producer
         if self._state_producer:
             try:
-                asyncio.get_event_loop().run_until_complete(self._state_producer.stop())
-            except Exception:
-                pass
+                await self._state_producer.stop()
+            except Exception as e:
+                self.logger.warning(f"Error stopping state producer: {e}")
 
         # Cleanup queue connections
         if self.upstream_queue:

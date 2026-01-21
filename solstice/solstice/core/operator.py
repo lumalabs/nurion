@@ -239,7 +239,7 @@ class Operator(ABC):
 
         # State store (created lazily if state_store_path is set)
         self._state_store: Optional["PartitionStateStore"] = None
-        self._partition_acquired = False
+        self._acquired_partitions: set[int] = set()  # Track acquired partition IDs
 
         # Offset tracking for dedup
         self.last_offset: int = -1  # -1 = no offset recovered
@@ -301,15 +301,23 @@ class Operator(ABC):
                 )
         return self._state_store
 
-    def _ensure_partition_acquired(self) -> None:
-        """Ensure partition is acquired in state store."""
-        if self._partition_acquired:
+    def _ensure_partition_acquired(self, partition_id: Optional[int] = None) -> None:
+        """Ensure partition is acquired in state store.
+
+        Args:
+            partition_id: Partition ID to acquire. If None, uses self.partition_id.
+                         Multi-partition operators should pass explicit partition_id.
+        """
+        pid = partition_id if partition_id is not None else self.partition_id
+        if pid is None:
+            return
+        if pid in self._acquired_partitions:
             return
         store = self.state_store
-        if store is None or self.partition_id is None:
+        if store is None:
             return
-        store.acquire_partition(self.partition_id)
-        self._partition_acquired = True
+        store.acquire_partition(pid)
+        self._acquired_partitions.add(pid)
 
     # =========================================================================
     # Recovery Methods
@@ -439,12 +447,13 @@ class Operator(ABC):
         if self.task and not self.task.done():
             self.task.cancel()
 
-        # Release partition from state store
-        if self._state_store is not None and self.partition_id is not None:
-            if self._partition_acquired:
+        # Release all acquired partitions from state store
+        if self._state_store is not None:
+            for pid in self._acquired_partitions:
                 try:
-                    self._state_store.release_partition(self.partition_id)
+                    self._state_store.release_partition(pid)
                 except Exception as e:
-                    self.logger.warning(f"Error releasing partition: {e}")
+                    self.logger.warning(f"Error releasing partition {pid}: {e}")
+            self._acquired_partitions.clear()
             self._state_store.close()
             self._state_store = None
