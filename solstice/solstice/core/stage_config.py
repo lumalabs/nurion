@@ -351,3 +351,22 @@ def create_queue_endpoint(
         port=port if port is not None else 9092,
         storage_url=storage_url or "memory://",
     )
+
+
+def make_split_id(job_id: str, stage_id: str, partition: int, offset: int) -> str:
+    """Generate a deterministic split ID.
+
+    This ID is derived solely from immutable properties (job, stage, partition, offset)
+    so that retries after a crash produce the same ID. This enables downstream
+    deduplication for exactly-once semantics.
+
+    Args:
+        job_id: The job identifier
+        stage_id: The stage identifier
+        partition: The partition number being processed
+        offset: The offset of the input message in the upstream queue
+
+    Returns:
+        A deterministic split ID in the format "job:stage:pN:oM"
+    """
+    return f"{job_id}:{stage_id}:p{partition}:o{offset}"
