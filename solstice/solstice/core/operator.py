@@ -159,7 +159,8 @@ class OperatorConfig(ABC):
     master_class: ClassVar[Optional[Type["StageMaster"]]] = None  # Default: use StageMaster
 
     # State store configuration (optional, for stateful operators)
-    state_store_path: Optional[str] = None
+    # Using kw_only=True to allow child classes to have positional required fields
+    state_store_path: Optional[str] = field(default=None, kw_only=True)
 
     # Runtime context - set by runner/worker before setup()
     # These are NOT constructor args, set via attribute assignment after init
