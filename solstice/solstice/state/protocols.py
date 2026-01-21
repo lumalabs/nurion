@@ -82,6 +82,18 @@ class PartitionStateStore(Protocol):
         """
         ...
 
+    def put_batch(self, writes: list[tuple[int, bytes, bytes]]) -> None:
+        """Atomically write multiple values to partition state.
+
+        This method enables atomic writes of multiple key-value pairs,
+        which is critical for exactly-once semantics (e.g., atomically
+        updating both offset and state).
+
+        Args:
+            writes: List of (partition_id, key, value) tuples to write
+        """
+        ...
+
     def close(self) -> None:
         """Close the state store and release all resources."""
         ...
