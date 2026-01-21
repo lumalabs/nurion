@@ -649,6 +649,7 @@ class StageWorker:
         if not self.state_endpoint or not self.state_topic:
             return
 
+        state_queue = None
         try:
             state_queue = await self._create_queue_from_endpoint(self.state_endpoint)
             self._state_producer = StateProducer(
@@ -661,6 +662,9 @@ class StageWorker:
         except Exception as e:
             self.logger.warning(f"Failed to init state producer: {e}")
             self._state_producer = None
+            # Clean up the queue if it was created
+            if state_queue is not None:
+                state_queue.stop()
 
     async def _emit_worker_started(self) -> None:
         """Emit WORKER_STARTED event."""

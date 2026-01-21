@@ -352,6 +352,10 @@ class Operator(ABC):
         Returns:
             True if this offset was already processed
         """
+        # In AT_LEAST_ONCE mode, no deduplication
+        if not self.is_exactly_once:
+            return False
+        
         if self.last_offset < 0:
             return False
         return offset <= self.last_offset
