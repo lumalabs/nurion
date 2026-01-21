@@ -379,11 +379,10 @@ class Operator(ABC):
             offset: The offset to save
             state_updates: Optional additional state updates
         """
-        # Update in-memory state
-        self.last_offset = offset
-
         store = self.state_store
         if store is None or self.partition_id is None:
+            # Update in-memory state if no state store
+            self.last_offset = offset
             return
 
         self._ensure_partition_acquired()
@@ -401,8 +400,9 @@ class Operator(ABC):
         offset_bytes = offset.to_bytes(8, "big", signed=True)
         writes.append((partition_id, OFFSET_KEY, offset_bytes))
 
-        # Atomic write
+        # Atomic write - only update in-memory state after successful persistence
         store.put_batch(writes)
+        self.last_offset = offset
 
     def mark_processed(
         self,
