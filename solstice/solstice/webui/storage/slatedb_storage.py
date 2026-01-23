@@ -121,6 +121,7 @@ class JobStorage:
         """
         self.path = path
         self.logger = create_ray_logger("JobStorage")
+        self._env_file_path = None
 
         from slatedb import SlateDB
 
@@ -128,10 +129,10 @@ class JobStorage:
         if path.startswith("s3://"):
             # S3 storage - use explicit env file for object store config
             bucket, prefix = _parse_s3_path(path)
-            env_file = _write_s3_env_file(bucket)
+            self._env_file_path = _write_s3_env_file(bucket)
             db_path = prefix or "slatedb"
             settings_path = _get_settings_path()
-            self.db = SlateDB(db_path, env_file=env_file, settings=settings_path)
+            self.db = SlateDB(db_path, env_file=self._env_file_path, settings=settings_path)
         else:
             # Local filesystem storage
             # Ensure directory exists
@@ -526,3 +527,11 @@ class JobStorage:
 
         # Apply offset and limit
         return sorted_events[offset : offset + limit]
+
+    def __del__(self) -> None:
+        """Clean up temporary env file on destruction."""
+        if self._env_file_path:
+            try:
+                os.unlink(self._env_file_path)
+            except OSError:
+                pass  # Ignore errors if file already deleted

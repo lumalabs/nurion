@@ -57,17 +57,23 @@ def _open_slatedb(path: str) -> Generator:
     """
     from slatedb import SlateDBReader
 
+    env_file_path = None
     if path.startswith("s3://"):
         bucket, prefix = _parse_s3_path(path)
-        env_file = _write_s3_env_file(bucket)
+        env_file_path = _write_s3_env_file(bucket)
         db_path = prefix or "slatedb"
-        db = SlateDBReader(db_path, env_file=env_file)
+        db = SlateDBReader(db_path, env_file=env_file_path)
     else:
         db = SlateDBReader("db", url=f"file://{path}/")
     try:
         yield db
     finally:
         db.close()
+        if env_file_path:
+            try:
+                os.unlink(env_file_path)
+            except OSError:
+                pass  # Ignore errors if file already deleted
 
 
 class PortalStorage:
