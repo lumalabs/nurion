@@ -29,11 +29,20 @@ The Portal scans this directory structure to find completed jobs.
 """
 
 import json
+import os
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, Generator, List, Optional
+from typing import Any, Dict, Generator, List, Optional, Tuple
 
 from solstice.utils.logging import create_ray_logger
+from solstice.webui.storage.slatedb_storage import _write_s3_env_file
+
+
+def _parse_s3_path(path: str) -> Tuple[str, str]:
+    """Parse s3://bucket/prefix into (bucket, prefix)."""
+    without_scheme = path[5:]
+    bucket, _, prefix = without_scheme.partition("/")
+    return bucket, prefix
 
 
 @contextmanager
@@ -49,7 +58,10 @@ def _open_slatedb(path: str) -> Generator:
     from slatedb import SlateDBReader
 
     if path.startswith("s3://"):
-        db = SlateDBReader("db", url=path)
+        bucket, prefix = _parse_s3_path(path)
+        env_file = _write_s3_env_file(bucket)
+        db_path = prefix or "slatedb"
+        db = SlateDBReader(db_path, env_file=env_file)
     else:
         db = SlateDBReader("db", url=f"file://{path}/")
     try:
@@ -82,8 +94,45 @@ class PortalStorage:
         self.base_path = base_path.rstrip("/")
         self.logger = create_ray_logger("PortalStorage")
         self._is_s3 = base_path.startswith("s3://")
+        self._s3_bucket: Optional[str] = None
+        self._s3_prefix: str = ""
+        self._s3_base_prefix: str = ""
+        self._s3_client = None
+
+        if self._is_s3:
+            bucket, prefix = _parse_s3_path(self.base_path)
+            self._s3_bucket = bucket
+            self._s3_prefix = prefix.rstrip("/")
+            self._s3_base_prefix = f"{self._s3_prefix}/" if self._s3_prefix else ""
 
         self.logger.info(f"PortalStorage initialized at {self.base_path}")
+
+    def _get_s3_client(self):
+        if self._s3_client:
+            return self._s3_client
+        import boto3
+
+        region = os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION")
+        endpoint = os.getenv("AWS_ENDPOINT_URL")
+        self._s3_client = boto3.client(
+            "s3",
+            region_name=region,
+            endpoint_url=endpoint,
+        )
+        return self._s3_client
+
+    def _list_s3_prefixes(self, prefix: str) -> List[str]:
+        if not self._s3_bucket:
+            return []
+        s3 = self._get_s3_client()
+        paginator = s3.get_paginator("list_objects_v2")
+        prefixes: List[str] = []
+        for page in paginator.paginate(
+            Bucket=self._s3_bucket, Prefix=prefix, Delimiter="/"
+        ):
+            for item in page.get("CommonPrefixes", []):
+                prefixes.append(item["Prefix"])
+        return prefixes
 
     def list_jobs(
         self,
@@ -158,8 +207,23 @@ class PortalStorage:
 
         Note: This is a placeholder - S3 scanning requires boto3 or similar.
         """
-        self.logger.warning("S3 storage scanning not yet implemented")
-        return []
+        jobs = []
+        job_prefixes = self._list_s3_prefixes(self._s3_base_prefix)
+
+        for job_prefix in job_prefixes:
+            job_id = job_prefix[len(self._s3_base_prefix) :].rstrip("/")
+            latest_attempt = self._get_latest_attempt_path(job_id)
+            if not latest_attempt:
+                continue
+            try:
+                job_data = self._read_job_archive(latest_attempt, job_id)
+                if job_data:
+                    if status is None or job_data.get("status") == status:
+                        jobs.append(job_data)
+            except Exception as e:
+                self.logger.debug(f"Skipping job {job_id}: {e}")
+
+        return jobs
 
     def _read_job_archive(self, attempt_path: str, job_id: str) -> Optional[Dict[str, Any]]:
         """Read job archive from an attempt directory using SlateDB.
@@ -213,13 +277,22 @@ class PortalStorage:
 
     def _get_job_archive_s3(self, job_id: str) -> Optional[Dict[str, Any]]:
         """Get job archive from S3."""
-        self.logger.warning("S3 job archive retrieval not yet implemented")
-        return None
+        latest_attempt = self._get_latest_attempt_path(job_id)
+        if not latest_attempt:
+            return None
+        return self._read_job_archive(latest_attempt, job_id)
 
-    def _get_latest_attempt_path(self, job_id: str) -> Optional[Path]:
+    def _get_latest_attempt_path(self, job_id: str) -> Optional[str]:
         """Get the path to the latest attempt directory for a job."""
         if self._is_s3:
-            return None
+            if not self._s3_bucket:
+                return None
+            job_prefix = f"{self._s3_base_prefix}{job_id}/"
+            attempts = self._list_s3_prefixes(job_prefix)
+            if not attempts:
+                return None
+            latest_attempt = sorted(attempts)[-1].rstrip("/")
+            return f"s3://{self._s3_bucket}/{latest_attempt}"
 
         job_dir = Path(self.base_path) / job_id
         if not job_dir.exists():
@@ -233,7 +306,7 @@ class PortalStorage:
         if not latest_attempt.is_dir():
             return None
 
-        return latest_attempt
+        return str(latest_attempt)
 
     def get_configuration(self, job_id: str) -> Optional[Dict[str, Any]]:
         """Get job configuration from storage.
@@ -247,9 +320,6 @@ class PortalStorage:
         Returns:
             Configuration data with job_config, stage_configs, environment
         """
-        if self._is_s3:
-            return None
-
         latest_attempt = self._get_latest_attempt_path(job_id)
         if not latest_attempt:
             return None
@@ -306,9 +376,6 @@ class PortalStorage:
         offset: int = 0,
     ) -> List[Dict[str, Any]]:
         """List exceptions for a job by scanning its SlateDB."""
-        if self._is_s3:
-            return []
-
         latest_attempt = self._get_latest_attempt_path(job_id)
         if not latest_attempt:
             return []
@@ -329,9 +396,6 @@ class PortalStorage:
         end_time: float,
     ) -> List[Dict[str, Any]]:
         """Get metrics history for a stage."""
-        if self._is_s3:
-            return []
-
         latest_attempt = self._get_latest_attempt_path(job_id)
         if not latest_attempt:
             return []
@@ -356,9 +420,6 @@ class PortalStorage:
 
     def get_split_lineage(self, job_id: str, split_id: str) -> Optional[Dict[str, Any]]:
         """Get lineage for a specific split."""
-        if self._is_s3:
-            return None
-
         latest_attempt = self._get_latest_attempt_path(job_id)
         if not latest_attempt:
             return None
@@ -378,9 +439,6 @@ class PortalStorage:
         offset: int = 0,
     ) -> List[Dict[str, Any]]:
         """List splits for a stage."""
-        if self._is_s3:
-            return []
-
         latest_attempt = self._get_latest_attempt_path(job_id)
         if not latest_attempt:
             return []
@@ -405,9 +463,6 @@ class PortalStorage:
         offset: int = 0,
     ) -> List[Dict[str, Any]]:
         """List all workers for a job."""
-        if self._is_s3:
-            return []
-
         latest_attempt = self._get_latest_attempt_path(job_id)
         if not latest_attempt:
             return []
@@ -429,9 +484,6 @@ class PortalStorage:
         worker_id: str,
     ) -> Optional[Dict[str, Any]]:
         """Get worker history."""
-        if self._is_s3:
-            return None
-
         latest_attempt = self._get_latest_attempt_path(job_id)
         if not latest_attempt:
             return None
@@ -453,9 +505,6 @@ class PortalStorage:
         Returns:
             Dict with 'stages', 'edges', and 'dag_edges'
         """
-        if self._is_s3:
-            return {"stages": [], "edges": [], "dag_edges": {}}
-
         latest_attempt = self._get_latest_attempt_path(job_id)
         if not latest_attempt:
             return {"stages": [], "edges": [], "dag_edges": {}}
@@ -556,9 +605,6 @@ class PortalStorage:
         Returns:
             Dict with 'splits' (ordered by stage), 'edges', and 'root_split_id'
         """
-        if self._is_s3:
-            return {"splits": [], "edges": [], "root_split_id": split_id}
-
         latest_attempt = self._get_latest_attempt_path(job_id)
         if not latest_attempt:
             return {"splits": [], "edges": [], "root_split_id": split_id}
@@ -639,9 +685,6 @@ class PortalStorage:
         Returns:
             List of worker events
         """
-        if self._is_s3:
-            return []
-
         latest_attempt = self._get_latest_attempt_path(job_id)
         if not latest_attempt:
             return []

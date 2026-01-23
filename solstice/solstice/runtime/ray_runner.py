@@ -161,8 +161,11 @@ class RayJobRunner:
         if self.queue_type != QueueType.TANSU:
             return  # Memory queue doesn't need shared broker
 
+        from solstice.utils.network import get_node_ip
+
         self._shared_broker = TansuBrokerManager(
             storage_url=self.tansu_storage_url or "memory://tansu/",
+            host=get_node_ip(),  # Use actual IP instead of 127.0.0.1 for cross-node access
         )
         self._shared_broker.start()
 
@@ -355,6 +358,7 @@ class RayJobRunner:
             lineage_sample_rate=self.job.config.webui.lineage_sample_rate,
             shared_broker_endpoint=self._shared_broker_endpoint,
             semantic_guarantee=self.job.config.semantic_guarantee,
+            partition_count=stage.output_partitions,  # None = auto based on max_workers
         )
 
     def _stage_info(self, stage: "Stage") -> Dict[str, Any]:
@@ -415,7 +419,7 @@ class RayJobRunner:
 
         return result
 
-    def _notify_downstream_stages(self, finished_stage_id: str, all_finished: set) -> None:
+    async def _notify_downstream_stages(self, finished_stage_id: str, all_finished: set) -> None:
         """Notify downstream stages that an upstream has finished.
 
         A downstream stage is notified when ALL its upstreams have finished.
@@ -426,7 +430,7 @@ class RayJobRunner:
                 # Check if ALL upstreams of this stage are finished
                 all_upstreams_done = all(up_id in all_finished for up_id in upstream_ids)
                 if all_upstreams_done and stage_id in self._masters:
-                    self._masters[stage_id].notify_upstream_finished()
+                    await self._masters[stage_id].notify_upstream_finished()
                     self.logger.info(f"Notified stage {stage_id}: all upstreams finished")
 
     async def run(self, timeout: Optional[float] = None) -> JobStatus:
@@ -454,16 +458,23 @@ class RayJobRunner:
                     await master.start()
 
             # Create tasks for all master run loops
+            self.logger.info(f"Creating run tasks for {len(self._masters)} masters")
             for stage_id, master in self._masters.items():
                 if stage_id not in self._master_tasks:
+                    self.logger.info(f"Creating run task for master {stage_id}")
                     task = asyncio.create_task(
                         master.run(),
                         name=f"master_{stage_id}",
                     )
                     self._master_tasks[stage_id] = task
+            self.logger.info(f"Created {len(self._master_tasks)} master run tasks")
 
             # Start autoscaler if configured
             self._start_autoscaler()
+            
+            # Give asyncio tasks a chance to start executing
+            await asyncio.sleep(0)
+            self.logger.info("Entering main run loop")
 
             # Track which stages have finished (for upstream completion notification)
             finished_stages = set()
@@ -492,7 +503,7 @@ class RayJobRunner:
                     finished_stages.add(stage_id)
 
                     # Notify downstream stages that this upstream has finished
-                    self._notify_downstream_stages(stage_id, finished_stages)
+                    await self._notify_downstream_stages(stage_id, finished_stages)
 
                 if not self._master_tasks:
                     break

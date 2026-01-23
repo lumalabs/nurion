@@ -15,9 +15,77 @@
 """SlateDB storage backend for WebUI data persistence."""
 
 import json
-from typing import Any, Dict, List, Optional
+import os
+import tempfile
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
 from solstice.utils.logging import create_ray_logger
+
+
+def _parse_s3_path(path: str) -> Tuple[str, str]:
+    """Parse s3://bucket/prefix into (bucket, prefix)."""
+    without_scheme = path[5:]
+    bucket, _, prefix = without_scheme.partition("/")
+    return bucket, prefix
+
+
+def _write_s3_env_file(bucket: str) -> str:
+    """Write a .env file for SlateDB S3 config and return its path."""
+    # SlateDB uses object_store::AmazonS3Builder::from_env which only
+    # reads AWS_* uppercase variables.
+    lines = ["CLOUD_PROVIDER=aws", f"AWS_BUCKET={bucket}"]
+
+    access_key = os.getenv("AWS_ACCESS_KEY_ID")
+    secret_key = os.getenv("AWS_SECRET_ACCESS_KEY")
+    session_token = os.getenv("AWS_SESSION_TOKEN")
+    region = os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION")
+    default_region = os.getenv("AWS_DEFAULT_REGION")
+    endpoint = os.getenv("AWS_ENDPOINT_URL")
+    imds_disabled = os.getenv("AWS_EC2_METADATA_DISABLED")
+    shared_credentials = os.getenv("AWS_SHARED_CREDENTIALS_FILE")
+    profile = os.getenv("AWS_PROFILE")
+
+    if access_key:
+        lines.append(f"AWS_ACCESS_KEY_ID={access_key}")
+    if secret_key:
+        lines.append(f"AWS_SECRET_ACCESS_KEY={secret_key}")
+    if session_token:
+        lines.append(f"AWS_SESSION_TOKEN={session_token}")
+    if region:
+        lines.append(f"AWS_REGION={region}")
+    if default_region:
+        lines.append(f"AWS_DEFAULT_REGION={default_region}")
+    if endpoint:
+        lines.append(f"AWS_ENDPOINT_URL={endpoint}")
+    if imds_disabled:
+        lines.append(f"AWS_EC2_METADATA_DISABLED={imds_disabled}")
+    if shared_credentials:
+        lines.append(f"AWS_SHARED_CREDENTIALS_FILE={shared_credentials}")
+    if profile:
+        lines.append(f"AWS_PROFILE={profile}")
+
+    env_file = tempfile.NamedTemporaryFile(
+        mode="w",
+        delete=False,
+        prefix="slatedb_s3_",
+        suffix=".env",
+    )
+    env_file.write("\n".join(lines) + "\n")
+    env_file.flush()
+    env_file.close()
+    return env_file.name
+
+
+def _get_settings_path() -> Optional[str]:
+    """Resolve SlateDB settings file path if configured."""
+    override = os.getenv("SOLSTICE_SLATEDB_SETTINGS")
+    if override:
+        return override
+    default_path = Path(__file__).with_name("slatedb_settings.json")
+    if default_path.exists():
+        return str(default_path)
+    return None
 
 
 class JobStorage:
@@ -51,8 +119,6 @@ class JobStorage:
                 - Local: /tmp/solstice-webui/
                 - S3: s3://bucket/path/
         """
-        from pathlib import Path
-
         self.path = path
         self.logger = create_ray_logger("JobStorage")
 
@@ -60,15 +126,20 @@ class JobStorage:
 
         # Configure SlateDB based on path
         if path.startswith("s3://"):
-            # S3 storage - use the path directly as URL
-            self.db = SlateDB("db", url=path)
+            # S3 storage - use explicit env file for object store config
+            bucket, prefix = _parse_s3_path(path)
+            env_file = _write_s3_env_file(bucket)
+            db_path = prefix or "slatedb"
+            settings_path = _get_settings_path()
+            self.db = SlateDB(db_path, env_file=env_file, settings=settings_path)
         else:
             # Local filesystem storage
             # Ensure directory exists
             Path(path).mkdir(parents=True, exist_ok=True)
             # Use file:// URL for local storage
             url = f"file://{path}/"
-            self.db = SlateDB("db", url=url)
+            settings_path = _get_settings_path()
+            self.db = SlateDB("db", url=url, settings=settings_path)
         self.logger.info(f"Initialized SlateDB storage at {path}")
 
     # === Job Configuration ===
@@ -97,6 +168,10 @@ class JobStorage:
             result: Dict[str, Any] = json.loads(data.decode())
             return result
         return None
+
+    def flush(self) -> None:
+        """Flush pending writes to storage."""
+        self.db.flush()
 
     # === Job Archive ===
 
@@ -313,7 +388,7 @@ class JobStorage:
             )
 
             # Add edges from parents
-            for parent_id in lineage.get("parent_ids", []):
+            for parent_id in lineage.get("parent_split_ids", []):
                 edges.append(
                     {
                         "source": parent_id,
