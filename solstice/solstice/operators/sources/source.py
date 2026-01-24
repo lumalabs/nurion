@@ -178,7 +178,7 @@ class SourceMaster(StageMaster):
                 storage_url="memory://",
             )
             # Create source queue with partitions matching source parallelism
-            source_partitions = self.config.max_workers
+            source_partitions = max(1, self.config.max_workers)
             client.create_topic(self._source_topic, partitions=source_partitions)
             self.logger.info(
                 f"Created Memory source queue for {self.stage_id} with {source_partitions} partition(s)"
@@ -205,7 +205,7 @@ class SourceMaster(StageMaster):
             )
 
             # Create source queue with partitions matching source parallelism
-            source_partitions = self.config.max_workers
+            source_partitions = max(1, self.config.max_workers)
             tansu_client.create_topic(self._source_topic, partitions=source_partitions)
             self.logger.info(
                 f"Connected to shared broker at {broker_url} for source {self.stage_id} "
@@ -334,7 +334,7 @@ class SourceMaster(StageMaster):
             from solstice.core.stage_master import QueueMessage
 
             # Send EOF to each partition
-            source_partitions = self.config.max_workers
+            source_partitions = max(1, self.config.max_workers)
             for partition in range(source_partitions):
                 eof_message = QueueMessage.create_eof(partition=partition)
                 self._source_client.produce(
@@ -422,7 +422,7 @@ class SourceMaster(StageMaster):
         )
 
         # Distribute splits across partitions using round-robin
-        source_partitions = self.config.max_workers
+        source_partitions = max(1, self.config.max_workers)
         partition = self._splits_produced % source_partitions
 
         # Produce to source queue
