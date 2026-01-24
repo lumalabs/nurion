@@ -158,9 +158,7 @@ class LanceSink(SinkOperator):
             except Exception as e:
                 attempt += 1
                 if attempt >= self.write_retry_attempts:
-                    self.logger.error(
-                        "Lance write failed after %s attempts: %s", attempt, e
-                    )
+                    self.logger.error("Lance write failed after %s attempts: %s", attempt, e)
                     raise
                 backoff = min(
                     self.write_retry_backoff_s * (2 ** (attempt - 1)),

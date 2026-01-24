@@ -264,7 +264,7 @@ class StageWorker:
             if all_done:
                 self.logger.info(f"Worker {self.worker_id} all partitions done, exiting loop")
                 break
-            
+
             # Debug: log task states periodically
             task_states = {
                 pid: ("done" if pop.task and pop.task.done() else "running" if pop.task else "none")

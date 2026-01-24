@@ -41,6 +41,7 @@ if TYPE_CHECKING:
     from solstice.core.stage import Stage
     from solstice.webui.job_webui import JobWebUI
     from solstice.webui.storage import JobStorage
+    from solstice.webui.runtime_server import EmbeddedWebUIServer
 from solstice.core.stage_master import (
     StageMaster,
     StageConfig,
@@ -116,6 +117,7 @@ class RayJobRunner:
 
         # WebUI
         self._webui: Optional["JobWebUI"] = None
+        self._webui_server: Optional["EmbeddedWebUIServer"] = None
         self._webui_port: Optional[int] = None
         self._webui_storage: Optional["JobStorage"] = None
         self._webui_attempt_id: Optional[str] = None
@@ -471,7 +473,7 @@ class RayJobRunner:
 
             # Start autoscaler if configured
             self._start_autoscaler()
-            
+
             # Give asyncio tasks a chance to start executing
             await asyncio.sleep(0)
             self.logger.info("Entering main run loop")
@@ -718,28 +720,15 @@ class RayJobRunner:
     async def _initialize_webui(self) -> None:
         """Initialize WebUI components.
 
-        - Ensures Portal is running (starts if needed)
         - Creates JobWebUI instance using pre-created storage
-        - Starts collectors
+        - Starts collectors and embedded WebUI server
 
         Note: Storage is created earlier in _create_webui_storage() to be
         shared with StatePushManager.
         """
         try:
             from solstice.webui.job_webui import JobWebUI
-            from solstice.webui.portal import portal_exists, start_portal
-
-            # Ensure Portal is running
-            if not portal_exists():
-                self.logger.info("Starting Solstice Portal...")
-                start_portal(
-                    storage_path=self.job.config.webui.storage_path,
-                    port=self.job.config.webui.port,
-                )
-            else:
-                self.logger.info("Portal already running")
-
-            self._webui_port = self.job.config.webui.port
+            from solstice.webui.runtime_server import EmbeddedWebUIServer
 
             # Create JobWebUI using pre-created storage
             # Pass state_manager for Prometheus export (push-based metrics)
@@ -756,18 +745,43 @@ class RayJobRunner:
             # Start WebUI
             await self._webui.start()
 
+            # Start embedded WebUI server (runtime mode)
+            self._webui_server = EmbeddedWebUIServer(
+                job_id=self.job.job_id,
+                storage=self._webui_storage,
+                host="0.0.0.0",
+                port_base=self.job.config.webui.port,
+            )
+            self._webui_port = self._webui_server.start()
+
+            from solstice.utils.network import get_node_ip
+
+            host = get_node_ip()
             self.logger.info(
-                f"WebUI available at Ray Serve port {self._webui_port}, "
-                f"path: /solstice/jobs/{self.job.job_id}/"
+                f"WebUI available at http://{host}:{self._webui_port}/jobs/{self.job.job_id}/"
             )
 
         except Exception as e:
             self.logger.error(f"Failed to initialize WebUI: {e}")
             # Don't fail the job if WebUI fails
             self._webui = None
+            if self._webui_server:
+                try:
+                    self._webui_server.stop()
+                except Exception:
+                    pass
+                self._webui_server = None
+            self._webui_port = None
 
     async def _stop_webui(self) -> None:
         """Stop WebUI components."""
+        if self._webui_server:
+            try:
+                self._webui_server.stop()
+            except Exception as e:
+                self.logger.warning(f"Error stopping WebUI server: {e}")
+            self._webui_server = None
+            self._webui_port = None
         if self._webui:
             try:
                 await self._webui.stop()
@@ -781,7 +795,7 @@ class RayJobRunner:
         """Get WebUI port if available.
 
         Returns:
-            Ray Serve port where WebUI is accessible, or None
+            Embedded WebUI port where WebUI is accessible, or None
         """
         return self._webui_port
 
@@ -790,10 +804,10 @@ class RayJobRunner:
         """Get WebUI path if available.
 
         Returns:
-            WebUI path (e.g., "/solstice/jobs/{job_id}/"), or None
+            WebUI path (e.g., "/jobs/{job_id}/"), or None
         """
         if self._webui_port:
-            return f"/solstice/jobs/{self.job.job_id}/"
+            return f"/jobs/{self.job.job_id}/"
         return None
 
 

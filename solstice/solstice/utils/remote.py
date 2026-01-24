@@ -257,9 +257,7 @@ def _get_s3_client():
     import boto3
     from botocore.config import Config
 
-    endpoint_url = os.environ.get("AWS_ENDPOINT_URL") or os.environ.get(
-        "FSSPEC_S3_ENDPOINT_URL"
-    )
+    endpoint_url = os.environ.get("AWS_ENDPOINT_URL") or os.environ.get("FSSPEC_S3_ENDPOINT_URL")
     region_name = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
     if not region_name:
         options = get_s3_storage_options()

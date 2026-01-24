@@ -337,7 +337,7 @@ class WorkerManager:
 
         # Use ray.wait in a thread to avoid blocking the async event loop
         ready, _ = await asyncio.to_thread(ray.wait, task_list, num_returns=1, timeout=timeout)
-        
+
         if ready:
             self._logger.info(f"wait_for_completion: {len(ready)} of {len(task_list)} tasks ready")
 
