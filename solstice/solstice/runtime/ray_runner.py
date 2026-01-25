@@ -761,17 +761,22 @@ class RayJobRunner:
                 f"WebUI available at http://{host}:{self._webui_port}/jobs/{self.job.job_id}/"
             )
 
-        except Exception as e:
-            self.logger.error(f"Failed to initialize WebUI: {e}")
-            # Don't fail the job if WebUI fails
-            self._webui = None
-            if self._webui_server:
-                try:
-                    self._webui_server.stop()
-                except Exception:
-                    pass
-                self._webui_server = None
-            self._webui_port = None
+    except Exception as e:
+        self.logger.error(f"Failed to initialize WebUI: {e}")
+        # Don't fail the job if WebUI fails
+        if self._webui:
+            try:
+                await self._webui.stop()
+            except Exception:
+                pass
+        self._webui = None
+        if self._webui_server:
+            try:
+                self._webui_server.stop()
+            except Exception:
+                pass
+            self._webui_server = None
+        self._webui_port = None
 
     async def _stop_webui(self) -> None:
         """Stop WebUI components."""
