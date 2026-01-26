@@ -50,11 +50,7 @@ def _load_s3_config(
     env_endpoint = os.environ.get("AWS_ENDPOINT_URL") or os.environ.get(
         "FSSPEC_S3_ENDPOINT_URL", ""
     )
-    env_region = (
-        os.environ.get("AWS_REGION")
-        or os.environ.get("AWS_DEFAULT_REGION")
-        or "us-east-1"
-    )
+    env_region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "us-east-1"
 
     if env_key and env_secret:
         _S3_CONFIG = {
@@ -93,9 +89,7 @@ def _load_s3_config(
             key = section.get("aws_access_key_id", "")
             secret = section.get("aws_secret_access_key", "")
             if key and secret:
-                logger.debug(
-                    "Loaded AWS credentials from %s [%s]", creds_path, aws_profile
-                )
+                logger.debug("Loaded AWS credentials from %s [%s]", creds_path, aws_profile)
                 break
 
     aws_config_paths = [
@@ -110,9 +104,7 @@ def _load_s3_config(
             continue
         config = configparser.ConfigParser()
         config.read(config_path)
-        section_name = (
-            aws_profile if aws_profile == "default" else f"profile {aws_profile}"
-        )
+        section_name = aws_profile if aws_profile == "default" else f"profile {aws_profile}"
         if section_name in config:
             section = config[section_name]
             region = section.get("region", region)
@@ -234,9 +226,7 @@ def restore_s3_object(path: str, days: int = 2) -> bool:
     import boto3
     from botocore.config import Config
 
-    endpoint_url = os.environ.get("AWS_ENDPOINT_URL") or os.environ.get(
-        "FSSPEC_S3_ENDPOINT_URL"
-    )
+    endpoint_url = os.environ.get("AWS_ENDPOINT_URL") or os.environ.get("FSSPEC_S3_ENDPOINT_URL")
     region_name = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
     if not region_name:
         options = get_s3_storage_options()
@@ -399,9 +389,7 @@ def ensure_local_file(
         else:
             import fsspec
 
-            storage_options = (
-                get_s3_storage_options() if remote_url.startswith("s3://") else {}
-            )
+            storage_options = get_s3_storage_options() if remote_url.startswith("s3://") else {}
             with fsspec.open(remote_url, "rb", **storage_options) as remote_file:
                 with open(target_path, "wb") as local_file:
                     while True:

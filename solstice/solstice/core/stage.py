@@ -28,7 +28,7 @@ from solstice.core.operator import OperatorConfig, SemanticGuarantee
 from solstice.queue import QueueType
 
 if TYPE_CHECKING:
-    from solstice.core.stage_config import QueueEndpoint
+    from solstice.core.models import QueueEndpoint
 
 
 # =============================================================================

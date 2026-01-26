@@ -29,12 +29,11 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Dict, Mapping, Optional, Protocol
 
 from solstice.queue import QueueType, QueueClient, TansuQueueClient
-from solstice.core.stage_config import QueueEndpoint
 from solstice.core.managers.partition_manager import PartitionManager
 from solstice.core.managers.worker_manager import WorkerManager
 
 if TYPE_CHECKING:
-    from solstice.core.stage import Stage
+    from solstice.core.stage import Stage, StageRuntime
     from solstice.core.stage_master import StageStatus
 
 
@@ -90,21 +89,17 @@ class BackpressureMonitor:
 
     def __init__(
         self,
-        stage_id: str,
         stage: "Stage",
+        runtime: "StageRuntime",
         partition_manager: PartitionManager,
         worker_manager: WorkerManager,
-        upstream_endpoint: Optional[QueueEndpoint],
-        upstream_topic: Optional[str],
         consumer_group: str,
         logger: logging.Logger,
     ):
-        self._stage_id = stage_id
         self._stage = stage
+        self._runtime = runtime
         self._partition_manager = partition_manager
         self._worker_manager = worker_manager
-        self._upstream_endpoint = upstream_endpoint
-        self._upstream_topic = upstream_topic
         self._consumer_group = consumer_group
         self._logger = logger
 
@@ -126,13 +121,14 @@ class BackpressureMonitor:
 
     def _get_metrics_queue(self) -> Optional[TansuQueueClient]:
         """Get or create a client for upstream metrics."""
-        if not self._upstream_endpoint:
+        endpoint = self._runtime.upstream_endpoint
+        if not endpoint:
             return None
-        if self._upstream_endpoint.queue_type != QueueType.TANSU:
+        if endpoint.queue_type != QueueType.TANSU:
             return None
 
         if self._metrics_queue is None:
-            broker_url = f"{self._upstream_endpoint.host}:{self._upstream_endpoint.port}"
+            broker_url = f"{endpoint.host}:{endpoint.port}"
             self._metrics_queue = TansuQueueClient(broker_url)
             self._metrics_queue.start()
 
@@ -144,7 +140,7 @@ class BackpressureMonitor:
         Returns:
             Sum of (latest_offset - committed_offset) across all partitions.
         """
-        if not self._upstream_endpoint or not self._upstream_topic:
+        if not self._runtime.upstream_endpoint or not self._runtime.upstream_topic:
             return 0
 
         queue = self._get_metrics_queue()
@@ -152,9 +148,9 @@ class BackpressureMonitor:
             return 0
 
         try:
-            partition_offsets = queue.get_all_partition_offsets(self._upstream_topic)
+            partition_offsets = queue.get_all_partition_offsets(self._runtime.upstream_topic)
             committed_offsets = queue.get_all_committed_offsets(
-                self._consumer_group, self._upstream_topic
+                self._consumer_group, self._runtime.upstream_topic
             )
             total_lag = 0
             for partition_id, latest_offset in partition_offsets.items():
@@ -171,7 +167,7 @@ class BackpressureMonitor:
         Returns:
             Dictionary mapping partition_id to PartitionMetrics
         """
-        if not self._upstream_endpoint or not self._upstream_topic:
+        if not self._runtime.upstream_endpoint or not self._runtime.upstream_topic:
             return {}
 
         queue = self._get_metrics_queue()
@@ -179,9 +175,9 @@ class BackpressureMonitor:
             return {}
 
         try:
-            partition_offsets = queue.get_all_partition_offsets(self._upstream_topic)
+            partition_offsets = queue.get_all_partition_offsets(self._runtime.upstream_topic)
             committed_offsets = queue.get_all_committed_offsets(
-                self._consumer_group, self._upstream_topic
+                self._consumer_group, self._runtime.upstream_topic
             )
             metrics: Dict[int, PartitionMetrics] = {}
 
@@ -209,7 +205,7 @@ class BackpressureMonitor:
         Returns:
             SkewInfo with detection result and partition lags
         """
-        if not self._upstream_endpoint or not self._upstream_topic:
+        if not self._runtime.upstream_endpoint or not self._runtime.upstream_topic:
             return SkewInfo(is_skewed=False, skew_ratio=0.0, partition_lags={})
 
         try:
@@ -217,9 +213,9 @@ class BackpressureMonitor:
             if queue is None:
                 return SkewInfo(is_skewed=False, skew_ratio=0.0, partition_lags={})
 
-            partition_offsets = queue.get_all_partition_offsets(self._upstream_topic)
+            partition_offsets = queue.get_all_partition_offsets(self._runtime.upstream_topic)
             committed_offsets = queue.get_all_committed_offsets(
-                self._consumer_group, self._upstream_topic
+                self._consumer_group, self._runtime.upstream_topic
             )
             partition_lags: Dict[int, int] = {}
 
@@ -242,7 +238,7 @@ class BackpressureMonitor:
 
             if is_skewed:
                 self._logger.warning(
-                    f"Partition skew detected in {self._stage_id}: "
+                    f"Partition skew detected in {self._stage.stage_id}: "
                     f"max_lag={max_lag}, avg_lag={avg_lag:.1f}, "
                     f"skew_ratio={skew_ratio:.2f}, threshold={threshold}"
                 )
@@ -271,7 +267,7 @@ class BackpressureMonitor:
         if input_lag > self._stage.backpressure_threshold_lag:
             if not self._backpressure_active:
                 self._logger.warning(
-                    f"Backpressure activated for {self._stage_id}: "
+                    f"Backpressure activated for {self._stage.stage_id}: "
                     f"input_lag={input_lag} > threshold={self._stage.backpressure_threshold_lag}"
                 )
             self._backpressure_active = True
@@ -284,7 +280,7 @@ class BackpressureMonitor:
                 if output_size > self._stage.backpressure_threshold_queue_size:
                     if not self._backpressure_active:
                         self._logger.warning(
-                            f"Backpressure activated for {self._stage_id}: "
+                            f"Backpressure activated for {self._stage.stage_id}: "
                             f"output_queue_size={output_size} > "
                             f"threshold={self._stage.backpressure_threshold_queue_size}"
                         )
@@ -296,7 +292,9 @@ class BackpressureMonitor:
         # Deactivate with hysteresis (only when well below threshold)
         if self._backpressure_active:
             if input_lag < self._stage.backpressure_threshold_lag * 0.7:
-                self._logger.info(f"Backpressure deactivated for {self._stage_id}: lag={input_lag}")
+                self._logger.info(
+                    f"Backpressure deactivated for {self._stage.stage_id}: lag={input_lag}"
+                )
                 self._backpressure_active = False
 
         return self._backpressure_active
@@ -311,7 +309,7 @@ class BackpressureMonitor:
             return None
 
         return BackpressureSignal(
-            from_stage=self._stage_id,
+            from_stage=self._stage.stage_id,
             to_stage="",  # Set by caller
             slow_down_factor=0.5,  # Default: slow down by 50%
             reason="queue_lag_exceeded",
@@ -380,7 +378,7 @@ class BackpressureMonitor:
             await self._worker_manager.notify_all_partition_update()
 
         self._logger.info(
-            f"Scaled down {self._stage_id}: removed {removed}/{count} workers "
+            f"Scaled down {self._stage.stage_id}: removed {removed}/{count} workers "
             f"(now {self._worker_manager.worker_count} workers)"
         )
         return removed
@@ -429,7 +427,7 @@ class BackpressureMonitor:
             await self._worker_manager.notify_all_partition_update()
 
         self._logger.info(
-            f"Scaled up {self._stage_id}: added {added}/{count} workers "
+            f"Scaled up {self._stage.stage_id}: added {added}/{count} workers "
             f"(now {self._worker_manager.worker_count} workers)"
         )
         return added

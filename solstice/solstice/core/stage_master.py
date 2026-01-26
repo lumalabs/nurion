@@ -56,7 +56,7 @@ from solstice.queue import (
 )
 from solstice.utils.logging import create_ray_logger
 from solstice.core.split_payload_store import SplitPayloadStore
-from solstice.core.stage_config import (
+from solstice.core.models import (
     FailurePolicy,
     FailureTracker,
     QueueEndpoint,
@@ -152,10 +152,8 @@ class StageMaster:
 
         # Initialize managers (will be fully configured in start())
         self._partition_manager = PartitionManager(
-            stage_id=self.stage_id,
             stage=stage,
-            upstream_endpoint=runtime.upstream_endpoint,
-            upstream_topic=runtime.upstream_topic,
+            runtime=runtime,
         )
 
         # Worker and recovery managers created after output queue is ready
@@ -237,12 +235,10 @@ class StageMaster:
         )
 
         self._backpressure_monitor = BackpressureMonitor(
-            stage_id=self.stage_id,
             stage=self.stage,
+            runtime=self.runtime,
             partition_manager=self._partition_manager,
             worker_manager=self._worker_manager,
-            upstream_endpoint=self.upstream_endpoint,
-            upstream_topic=self.upstream_topic,
             consumer_group=self._consumer_group,
             logger=self.logger,
         )

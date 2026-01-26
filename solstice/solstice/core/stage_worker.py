@@ -39,7 +39,7 @@ import ray
 from solstice.queue import QueueType, QueueClient, MemoryClient, TansuQueueClient
 from solstice.webui.state.producer import StateProducer
 from solstice.utils.logging import create_ray_logger
-from solstice.core.stage_config import (
+from solstice.core.models import (
     QueueEndpoint,
     QueueMessage,
     make_split_id,

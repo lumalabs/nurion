@@ -24,6 +24,9 @@ Tests cover:
 from unittest.mock import MagicMock
 
 from solstice.core.managers.partition_manager import PartitionManager
+from solstice.core.stage import StageRuntime
+from solstice.core.operator import SemanticGuarantee
+from solstice.queue import QueueType
 
 
 def _make_mock_stage(
@@ -37,6 +40,23 @@ def _make_mock_stage(
     return stage
 
 
+def _make_runtime(
+    upstream_endpoint=None,
+    upstream_topic=None,
+) -> StageRuntime:
+    """Create a StageRuntime for testing."""
+    return StageRuntime(
+        queue_type=QueueType.MEMORY,
+        shared_broker_endpoint=None,
+        upstream_endpoint=upstream_endpoint,
+        upstream_topic=upstream_topic,
+        state_endpoint=None,
+        state_topic=None,
+        semantic_guarantee=SemanticGuarantee.AT_LEAST_ONCE,
+        lineage_sample_rate=0.0,
+    )
+
+
 class TestPartitionCountCalculation:
     """Tests for partition count calculation logic."""
 
@@ -44,10 +64,8 @@ class TestPartitionCountCalculation:
         """Test that single worker scenario uses 1 partition."""
         stage = _make_mock_stage(max_parallelism=1, output_partitions=None)
         manager = PartitionManager(
-            stage_id="test",
             stage=stage,
-            upstream_endpoint=None,
-            upstream_topic=None,
+            runtime=_make_runtime(),
         )
 
         assert manager.partition_count == 1
@@ -56,10 +74,8 @@ class TestPartitionCountCalculation:
         """Test that explicit partition_count is respected."""
         stage = _make_mock_stage(max_parallelism=4, output_partitions=8)
         manager = PartitionManager(
-            stage_id="test",
             stage=stage,
-            upstream_endpoint=None,
-            upstream_topic=None,
+            runtime=_make_runtime(),
         )
 
         assert manager.partition_count == 8
@@ -68,10 +84,8 @@ class TestPartitionCountCalculation:
         """Test that partition count equals max_workers when auto."""
         stage = _make_mock_stage(max_parallelism=4, output_partitions=None)
         manager = PartitionManager(
-            stage_id="test",
             stage=stage,
-            upstream_endpoint=None,
-            upstream_topic=None,
+            runtime=_make_runtime(),
         )
 
         assert manager.partition_count == 4
@@ -80,10 +94,8 @@ class TestPartitionCountCalculation:
         """Test that partition count is always at least 1."""
         stage = _make_mock_stage(max_parallelism=0, output_partitions=0)
         manager = PartitionManager(
-            stage_id="test",
             stage=stage,
-            upstream_endpoint=None,
-            upstream_topic=None,
+            runtime=_make_runtime(),
         )
 
         assert manager.partition_count >= 1
@@ -96,10 +108,8 @@ class TestPartitionCountEdgeCases:
         """Test partition count when max_workers is 0."""
         stage = _make_mock_stage(max_parallelism=0, output_partitions=None)
         manager = PartitionManager(
-            stage_id="test",
             stage=stage,
-            upstream_endpoint=None,
-            upstream_topic=None,
+            runtime=_make_runtime(),
         )
 
         # Should default to 1 (minimum)
@@ -109,10 +119,8 @@ class TestPartitionCountEdgeCases:
         """Test partition count with negative explicit value."""
         stage = _make_mock_stage(max_parallelism=4, output_partitions=-5)
         manager = PartitionManager(
-            stage_id="test",
             stage=stage,
-            upstream_endpoint=None,
-            upstream_topic=None,
+            runtime=_make_runtime(),
         )
 
         # Should be clamped to minimum 1
@@ -122,10 +130,8 @@ class TestPartitionCountEdgeCases:
         """Test partition count with very large value."""
         stage = _make_mock_stage(max_parallelism=4, output_partitions=1000)
         manager = PartitionManager(
-            stage_id="test",
             stage=stage,
-            upstream_endpoint=None,
-            upstream_topic=None,
+            runtime=_make_runtime(),
         )
 
         # Should accept large value (no upper limit)
@@ -139,10 +145,8 @@ class TestWorkerAssignment:
         """Test that partitions are assigned round-robin."""
         stage = _make_mock_stage(max_parallelism=3, output_partitions=6)
         manager = PartitionManager(
-            stage_id="test",
             stage=stage,
-            upstream_endpoint=None,
-            upstream_topic=None,
+            runtime=_make_runtime(),
         )
 
         # Assign 3 workers to 6 partitions
@@ -159,10 +163,8 @@ class TestWorkerAssignment:
         """Test assignment when workers > partitions."""
         stage = _make_mock_stage(max_parallelism=4, output_partitions=2)
         manager = PartitionManager(
-            stage_id="test",
             stage=stage,
-            upstream_endpoint=None,
-            upstream_topic=None,
+            runtime=_make_runtime(),
         )
 
         # 4 workers, 2 partitions -> some workers get empty assignments
@@ -180,10 +182,8 @@ class TestWorkerAssignment:
         """Test getting assignment for a worker."""
         stage = _make_mock_stage(max_parallelism=2, output_partitions=4)
         manager = PartitionManager(
-            stage_id="test",
             stage=stage,
-            upstream_endpoint=None,
-            upstream_topic=None,
+            runtime=_make_runtime(),
         )
 
         manager.assign_worker("w0", 0, 2, 4)
@@ -201,10 +201,8 @@ class TestRebalancing:
         """Test rebalancing when a worker is removed."""
         stage = _make_mock_stage(max_parallelism=3, output_partitions=6)
         manager = PartitionManager(
-            stage_id="test",
             stage=stage,
-            upstream_endpoint=None,
-            upstream_topic=None,
+            runtime=_make_runtime(),
         )
 
         # Initial assignment
@@ -227,10 +225,8 @@ class TestRebalancing:
         """Test collecting orphaned partitions from multiple workers."""
         stage = _make_mock_stage(max_parallelism=3, output_partitions=6)
         manager = PartitionManager(
-            stage_id="test",
             stage=stage,
-            upstream_endpoint=None,
-            upstream_topic=None,
+            runtime=_make_runtime(),
         )
 
         manager.assign_worker("w0", 0, 3, 6)
@@ -252,10 +248,8 @@ class TestRebalancing:
         """Test assigning a single orphaned partition to a worker."""
         stage = _make_mock_stage(max_parallelism=2, output_partitions=4)
         manager = PartitionManager(
-            stage_id="test",
             stage=stage,
-            upstream_endpoint=None,
-            upstream_topic=None,
+            runtime=_make_runtime(),
         )
 
         # Initial assignment: w0->[0,2], w1->[1,3]
@@ -278,10 +272,8 @@ class TestRebalancing:
         """Test that a partition cannot be assigned to multiple workers."""
         stage = _make_mock_stage(max_parallelism=2, output_partitions=4)
         manager = PartitionManager(
-            stage_id="test",
             stage=stage,
-            upstream_endpoint=None,
-            upstream_topic=None,
+            runtime=_make_runtime(),
         )
 
         # Assign partitions to w0 and w1
@@ -300,10 +292,8 @@ class TestRebalancing:
         """Test validation detects no duplicates after proper assignment."""
         stage = _make_mock_stage(max_parallelism=3, output_partitions=6)
         manager = PartitionManager(
-            stage_id="test",
             stage=stage,
-            upstream_endpoint=None,
-            upstream_topic=None,
+            runtime=_make_runtime(),
         )
 
         manager.rebalance(["w0", "w1", "w2"], 6)

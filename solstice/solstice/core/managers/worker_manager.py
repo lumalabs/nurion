@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import ray
 
-from solstice.core.stage_config import QueueEndpoint
+from solstice.core.models import QueueEndpoint
 from solstice.core.stage_worker import StageWorker, WorkerRuntime
 from solstice.core.managers.partition_manager import PartitionManager
 from solstice.utils.logging import create_ray_logger

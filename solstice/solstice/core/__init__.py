@@ -13,7 +13,7 @@ from solstice.core.operator import (
 from solstice.core.source_operator import SourceOperator
 from solstice.core.sink_operator import SinkOperator
 from solstice.core.stage import Stage, StageRuntime
-from solstice.core.stage_config import (
+from solstice.core.models import (
     FailurePolicy,
     FailureTracker,
     QueueEndpoint,
