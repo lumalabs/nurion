@@ -245,6 +245,11 @@ class StageWorker:
                 f"Worker {self.worker_id} requires upstream_endpoint and upstream_topic."
             )
 
+        if not self.output_endpoint or not self.output_topic:
+            raise RuntimeError(
+                f"Worker {self.worker_id} requires output_endpoint and output_topic."
+            )
+
         try:
             # Create queue connections
             self.output_queue = await self._create_queue_from_endpoint(self.output_endpoint)
