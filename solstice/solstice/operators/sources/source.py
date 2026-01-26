@@ -341,11 +341,13 @@ class SourceMaster(StageMaster):
 
         # Send EOF to each partition with retry logic
         source_partitions = self.config.max_workers
+        successful_sends = 0
 
         for partition in range(source_partitions):
             eof_message = QueueMessage.create_eof(partition=partition)
             try:
                 await self._produce_eof_with_retry(eof_message, partition)
+                successful_sends += 1
             except Exception as e:
                 # Best effort EOF delivery - continue to next partition
                 self.logger.warning(
@@ -353,7 +355,7 @@ class SourceMaster(StageMaster):
                 )
 
         self.logger.info(
-            f"Source {self.stage_id} sent EOF marker to {source_partitions} partition(s)"
+            f"Source {self.stage_id} sent EOF marker to {successful_sends}/{source_partitions} partition(s)"
         )
 
     async def _produce_eof_with_retry(self, eof_message: "QueueMessage", partition: int) -> None:
