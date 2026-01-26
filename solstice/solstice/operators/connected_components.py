@@ -161,7 +161,6 @@ class CCIterateConfig(ShuffleOperatorConfig):
     max_iterations: int = 100
     convergence_threshold: int = 0
 
-    operator_class: ClassVar[Type["CCIterateOperator"]] = None  # type: ignore[assignment]  # Set below
     master_class: ClassVar[Optional[Type["CCIterateMaster"]]] = None  # Set below
 
     def __post_init__(self):
