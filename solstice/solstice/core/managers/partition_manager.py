@@ -24,11 +24,14 @@ Responsibilities:
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional
 
 from solstice.queue import QueueType, TansuQueueClient
-from solstice.core.stage_config import StageConfig, QueueEndpoint
+from solstice.core.stage_config import QueueEndpoint
 from solstice.utils.logging import create_ray_logger
+
+if TYPE_CHECKING:
+    from solstice.core.stage import Stage
 
 
 class PartitionManager:
@@ -44,12 +47,12 @@ class PartitionManager:
     def __init__(
         self,
         stage_id: str,
-        config: StageConfig,
+        stage: "Stage",
         upstream_endpoint: Optional[QueueEndpoint],
         upstream_topic: Optional[str],
     ):
         self._stage_id = stage_id
-        self._config = config
+        self._stage = stage
         self._upstream_endpoint = upstream_endpoint
         self._upstream_topic = upstream_topic
         self._logger = create_ray_logger(f"PartitionMgr-{stage_id}")
@@ -80,16 +83,16 @@ class PartitionManager:
         """Compute the number of partitions based on worker configuration.
 
         Returns:
-            Number of partitions to use. If partition_count is explicitly set,
-            use that. Otherwise, auto-compute based on max_workers.
+            Number of partitions to use. If output_partitions is explicitly set,
+            use that. Otherwise, auto-compute based on max_parallelism.
         """
-        if self._config.partition_count is not None:
-            return max(1, self._config.partition_count)
+        if self._stage.output_partitions is not None:
+            return max(1, self._stage.output_partitions)
 
-        # Auto-compute: use max_workers as partition count
-        if self._config.max_workers <= 1:
+        # Auto-compute: use max_parallelism as partition count
+        if self._stage.max_parallelism <= 1:
             return 1
-        return self._config.max_workers
+        return self._stage.max_parallelism
 
     async def get_upstream_partition_count(self) -> int:
         """Get the partition count of the upstream topic.

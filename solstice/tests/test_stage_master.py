@@ -26,15 +26,14 @@ from dataclasses import dataclass
 from typing import List
 from unittest.mock import MagicMock
 
-from solstice.queue import MemoryBroker, MemoryClient
+from solstice.queue import MemoryBroker, MemoryClient, QueueType
 from solstice.core.stage_master import (
     StageMaster,
-    StageConfig,
-    QueueType,
     QueueMessage,
     QueueEndpoint,
 )
-from solstice.core.operator import OperatorConfig, Operator
+from solstice.core.operator import OperatorConfig, Operator, SemanticGuarantee
+from solstice.core.stage import StageRuntime
 
 # Note: Only async test classes/functions should use @pytest.mark.asyncio decorator
 

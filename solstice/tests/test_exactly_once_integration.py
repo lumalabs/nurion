@@ -37,6 +37,7 @@ from solstice.core import (
     OperatorConfig,
     SemanticGuarantee,
 )
+from tests.conftest import make_operator_runtime
 from solstice.core.models import Split, SplitPayload
 from solstice.core.sink_operator import SinkOperator
 import os
@@ -154,7 +155,7 @@ class TestOperatorExactlyOnce:
         config.partition_id = 0
         config.semantic_guarantee = SemanticGuarantee.EXACTLY_ONCE
 
-        op = config.setup()
+        op = config.setup(make_operator_runtime())
         op.init_from_state_store()
 
         # Process messages 0-4
@@ -380,7 +381,7 @@ class TestFaultInjection:
         config.partition_id = 0
         config.semantic_guarantee = SemanticGuarantee.AT_LEAST_ONCE
 
-        op = config.setup()
+        op = config.setup(make_operator_runtime())
         op.init_from_state_store()
 
         processed_count = 0
@@ -423,26 +424,45 @@ class TestFaultInjection:
 
 
 class TestConfigPropagation:
-    """Test that semantic_guarantee is properly passed through config chain.
+    """Test that semantic_guarantee is properly passed through runtime chain.
 
-    This verifies the fix for the bug where JobConfig.semantic_guarantee
-    was never passed to StageWorker.
+    This verifies that JobConfig.semantic_guarantee is properly passed
+    to StageRuntime and eventually to StageWorker.
     """
 
-    def test_stage_config_has_semantic_guarantee(self):
-        """Verify StageConfig includes semantic_guarantee field."""
-        from solstice.core.stage_config import StageConfig
+    def test_stage_runtime_has_semantic_guarantee(self):
+        """Verify StageRuntime includes semantic_guarantee field."""
+        from solstice.core.stage import StageRuntime
+        from solstice.queue import QueueType
 
-        # Default should be AT_LEAST_ONCE
-        config = StageConfig()
-        assert config.semantic_guarantee == SemanticGuarantee.AT_LEAST_ONCE
+        # Create with AT_LEAST_ONCE
+        runtime = StageRuntime(
+            queue_type=QueueType.MEMORY,
+            shared_broker_endpoint=None,
+            upstream_endpoint=None,
+            upstream_topic=None,
+            state_endpoint=None,
+            state_topic=None,
+            semantic_guarantee=SemanticGuarantee.AT_LEAST_ONCE,
+            lineage_sample_rate=0.0,
+        )
+        assert runtime.semantic_guarantee == SemanticGuarantee.AT_LEAST_ONCE
 
-        # Can be set to EXACTLY_ONCE
-        config = StageConfig(semantic_guarantee=SemanticGuarantee.EXACTLY_ONCE)
-        assert config.semantic_guarantee == SemanticGuarantee.EXACTLY_ONCE
+        # Create with EXACTLY_ONCE
+        runtime = StageRuntime(
+            queue_type=QueueType.MEMORY,
+            shared_broker_endpoint=None,
+            upstream_endpoint=None,
+            upstream_topic=None,
+            state_endpoint=None,
+            state_topic=None,
+            semantic_guarantee=SemanticGuarantee.EXACTLY_ONCE,
+            lineage_sample_rate=0.0,
+        )
+        assert runtime.semantic_guarantee == SemanticGuarantee.EXACTLY_ONCE
 
-    def test_job_config_semantic_guarantee_in_stage_config(self):
-        """Verify JobConfig.semantic_guarantee flows to StageConfig."""
+    def test_job_config_semantic_guarantee_in_stage_runtime(self):
+        """Verify JobConfig.semantic_guarantee flows to StageRuntime."""
         # Create job with EXACTLY_ONCE
         job = Job(
             job_id="test_config_flow",
@@ -460,13 +480,13 @@ class TestConfigPropagation:
             )
         )
 
-        # Create runner and check _build_stage_config
+        # Create runner and check _build_stage_runtime
         runner = job.create_ray_runner()
         stage = job.stages["sink"]
-        stage_config = runner._build_stage_config(stage)
+        stage_runtime = runner._build_stage_runtime(stage)
 
         # Verify semantic_guarantee was passed
-        assert stage_config.semantic_guarantee == SemanticGuarantee.EXACTLY_ONCE
+        assert stage_runtime.semantic_guarantee == SemanticGuarantee.EXACTLY_ONCE
 
     def test_at_least_once_default(self):
         """Verify AT_LEAST_ONCE is the default."""
@@ -485,9 +505,9 @@ class TestConfigPropagation:
 
         runner = job.create_ray_runner()
         stage = job.stages["sink"]
-        stage_config = runner._build_stage_config(stage)
+        stage_runtime = runner._build_stage_runtime(stage)
 
-        assert stage_config.semantic_guarantee == SemanticGuarantee.AT_LEAST_ONCE
+        assert stage_runtime.semantic_guarantee == SemanticGuarantee.AT_LEAST_ONCE
 
 
 if __name__ == "__main__":

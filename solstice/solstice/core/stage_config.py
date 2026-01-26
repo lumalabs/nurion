@@ -12,10 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Configuration and data classes for Stage Master v2.
+"""Data classes for Stage Master.
 
 This module contains:
-- StageConfig: Configuration for stage execution
 - FailurePolicy/FailureTracker: Worker fault tolerance
 - QueueMessage: Inter-stage message format
 - StageStatus: Stage runtime status
@@ -27,103 +26,12 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, final
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from solstice.queue import QueueType
-from solstice.core.operator import SemanticGuarantee
 
 if TYPE_CHECKING:
     pass
-
-
-@final
-@dataclass
-class StageConfig:
-    """Configuration for Stage Master v2.
-
-    Attributes:
-        queue_type: Type of queue backend:
-            - MEMORY: In-process only (single-worker testing)
-            - RAY: Shared via Ray actor (distributed testing)
-            - TANSU: Persistent broker (production)
-        max_workers: Maximum number of workers
-        min_workers: Minimum number of workers
-        batch_size: Number of messages to fetch per batch
-        commit_interval_ms: Interval between offset commits (ms) - legacy, not actively used
-        commit_batch_size: Commit offset after every N messages processed.
-            Lower values = better exactly-once guarantees but more overhead.
-            Higher values = better throughput but larger duplicate window on crash.
-            Default: 5 (balance between safety and performance)
-        partition_count: Number of partitions for the output queue.
-            If None, automatically set based on max_workers.
-            For single worker, uses 1 partition. For multiple workers,
-            uses min(max_workers, actual_worker_count) partitions.
-        upstream_endpoint: Queue endpoint for upstream stage (None for source stages)
-        upstream_topic: Topic name for upstream queue (None for source stages)
-        state_endpoint: Queue endpoint for push-based state/metrics (WebUI)
-        state_topic: Topic name for state messages (WebUI)
-    """
-
-    queue_type: QueueType = QueueType.TANSU  # Default to Tansu for persistence
-
-    max_workers: int = 4
-    min_workers: int = 1
-
-    batch_size: int = 100
-    commit_interval_ms: int = 5000
-    commit_batch_size: int = 5  # Commit offset after every N messages for exactly-once
-
-    # Partition configuration
-    partition_count: Optional[int] = None  # None = auto based on workers
-
-    # Backpressure thresholds
-    backpressure_threshold_lag: int = 5000
-    backpressure_threshold_queue_size: int = 1000
-
-    # Worker resources
-    num_cpus: float = 1.0
-    num_gpus: float = 0.0
-    memory_mb: int = 0
-
-    # Resource backoff configuration
-    worker_ready_timeout_seconds: float = 30.0  # Max time to wait for worker to be ready
-    worker_spawn_retry_delay_seconds: float = 2.0  # Delay between spawn retries
-
-    # Upstream queue connection (set by runner for non-source stages)
-    upstream_endpoint: Optional["QueueEndpoint"] = None
-    upstream_topic: Optional[str] = None
-    # TODO: Add multi-upstream support
-    # upstream_endpoints: List["QueueEndpoint"] = field(default_factory=list)
-    # upstream_topics: List[str] = field(default_factory=list)
-
-    # Shared broker endpoint (set by runner, required for TANSU queue type)
-    # All stages connect to this single broker instead of creating their own
-    shared_broker_endpoint: Optional["QueueEndpoint"] = None
-
-    # State push connection (for WebUI metrics)
-    state_endpoint: Optional["QueueEndpoint"] = None
-    state_topic: Optional[str] = None
-
-    # Lineage tracking (for WebUI)
-    lineage_sample_rate: float = 0.0  # 0=off, 1=full, 0.x=sampling
-
-    # Semantic guarantee for processing
-    semantic_guarantee: SemanticGuarantee = SemanticGuarantee.AT_LEAST_ONCE
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "queue_type": self.queue_type.value,
-            "max_workers": self.max_workers,
-            "min_workers": self.min_workers,
-            "batch_size": self.batch_size,
-            "commit_interval_ms": self.commit_interval_ms,
-            "commit_batch_size": self.commit_batch_size,
-            "partition_count": self.partition_count,
-            "backpressure_threshold_lag": self.backpressure_threshold_lag,
-            "backpressure_threshold_queue_size": self.backpressure_threshold_queue_size,
-            "upstream_topic": self.upstream_topic,
-            "state_topic": self.state_topic,
-        }
 
 
 @dataclass

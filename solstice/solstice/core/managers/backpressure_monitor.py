@@ -29,11 +29,12 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Dict, Mapping, Optional, Protocol
 
 from solstice.queue import QueueType, QueueClient, TansuQueueClient
-from solstice.core.stage_config import StageConfig, QueueEndpoint
+from solstice.core.stage_config import QueueEndpoint
 from solstice.core.managers.partition_manager import PartitionManager
 from solstice.core.managers.worker_manager import WorkerManager
 
 if TYPE_CHECKING:
+    from solstice.core.stage import Stage
     from solstice.core.stage_master import StageStatus
 
 
@@ -90,7 +91,7 @@ class BackpressureMonitor:
     def __init__(
         self,
         stage_id: str,
-        config: StageConfig,
+        stage: "Stage",
         partition_manager: PartitionManager,
         worker_manager: WorkerManager,
         upstream_endpoint: Optional[QueueEndpoint],
@@ -99,7 +100,7 @@ class BackpressureMonitor:
         logger: logging.Logger,
     ):
         self._stage_id = stage_id
-        self._config = config
+        self._stage = stage
         self._partition_manager = partition_manager
         self._worker_manager = worker_manager
         self._upstream_endpoint = upstream_endpoint
@@ -267,11 +268,11 @@ class BackpressureMonitor:
         """
         # Check input queue lag
         input_lag = self.get_input_lag()
-        if input_lag > self._config.backpressure_threshold_lag:
+        if input_lag > self._stage.backpressure_threshold_lag:
             if not self._backpressure_active:
                 self._logger.warning(
                     f"Backpressure activated for {self._stage_id}: "
-                    f"input_lag={input_lag} > threshold={self._config.backpressure_threshold_lag}"
+                    f"input_lag={input_lag} > threshold={self._stage.backpressure_threshold_lag}"
                 )
             self._backpressure_active = True
             return True
@@ -280,12 +281,12 @@ class BackpressureMonitor:
         if output_queue:
             try:
                 output_size = output_queue.get_latest_offset(output_topic)
-                if output_size > self._config.backpressure_threshold_queue_size:
+                if output_size > self._stage.backpressure_threshold_queue_size:
                     if not self._backpressure_active:
                         self._logger.warning(
                             f"Backpressure activated for {self._stage_id}: "
                             f"output_queue_size={output_size} > "
-                            f"threshold={self._config.backpressure_threshold_queue_size}"
+                            f"threshold={self._stage.backpressure_threshold_queue_size}"
                         )
                     self._backpressure_active = True
                     return True
@@ -294,7 +295,7 @@ class BackpressureMonitor:
 
         # Deactivate with hysteresis (only when well below threshold)
         if self._backpressure_active:
-            if input_lag < self._config.backpressure_threshold_lag * 0.7:
+            if input_lag < self._stage.backpressure_threshold_lag * 0.7:
                 self._logger.info(f"Backpressure deactivated for {self._stage_id}: lag={input_lag}")
                 self._backpressure_active = False
 
@@ -332,7 +333,7 @@ class BackpressureMonitor:
                     self._logger.debug(f"Backpressure detected from downstream stage {stage_id}")
                     return True
 
-                if status.output_queue_size > self._config.backpressure_threshold_queue_size * 0.8:
+                if status.output_queue_size > self._stage.backpressure_threshold_queue_size * 0.8:
                     self._logger.debug(
                         f"Downstream queue size {status.output_queue_size} approaching threshold"
                     )
@@ -355,7 +356,7 @@ class BackpressureMonitor:
             return 0
 
         current = self._worker_manager.worker_count
-        min_workers = self._config.min_workers
+        min_workers = self._stage.min_parallelism
         safe_to_remove = max(0, current - min_workers)
         actual_remove = min(count, safe_to_remove)
 
@@ -397,7 +398,7 @@ class BackpressureMonitor:
             return 0
 
         current = self._worker_manager.worker_count
-        max_workers = self._config.max_workers
+        max_workers = self._stage.max_parallelism
         safe_to_add = max(0, max_workers - current)
         actual_add = min(count, safe_to_add)
 

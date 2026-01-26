@@ -24,6 +24,7 @@ import pytest
 import pyarrow as pa
 import ray
 
+from tests.conftest import make_operator_runtime, make_stage_runtime
 from solstice.core.models import Split
 from solstice.core.stage import Stage
 from solstice.operators.filter import FilterOperatorConfig
@@ -32,8 +33,6 @@ from solstice.operators.sources.spark import (
     SparkSourceConfig,
     SparkSourceMaster,
 )
-from solstice.operators.sources.source import SourceConfig
-from solstice.queue import QueueType
 
 
 # Test data path
@@ -81,7 +80,7 @@ class TestSparkSourceOperator:
 
         # Create source and read
         config = SparkSourceConfig()
-        source = config.setup()
+        source = config.setup(make_operator_runtime())
 
         split = Split(
             split_id="test_split_0",
@@ -118,7 +117,7 @@ class TestSparkSourceOperator:
         object_ref = ray.put(test_batch)
 
         config = SparkSourceConfig()
-        source = config.setup()
+        source = config.setup(make_operator_runtime())
 
         split = Split(
             split_id="test_split_batch",
@@ -143,7 +142,7 @@ class TestSparkSourceOperator:
         object_ref = ray.put(empty_table)
 
         config = SparkSourceConfig()
-        source = config.setup()
+        source = config.setup(make_operator_runtime())
 
         split = Split(
             split_id="test_split_empty",
@@ -160,7 +159,7 @@ class TestSparkSourceOperator:
     def test_spark_source_missing_object_ref(self):
         """Test error when object_ref is missing."""
         config = SparkSourceConfig()
-        source = config.setup()
+        source = config.setup(make_operator_runtime())
 
         split = Split(
             split_id="test_split_no_ref",
@@ -188,7 +187,7 @@ class TestSparkSourcePipeline:
 
         # Create source operator and read
         source_config = SparkSourceConfig()
-        source = source_config.setup()
+        source = source_config.setup(make_operator_runtime())
 
         split = Split(
             split_id="spark_split_0",
@@ -207,7 +206,7 @@ class TestSparkSourcePipeline:
         filter_config = FilterOperatorConfig(
             filter_fn=lambda row: row.get("department") == "engineering",
         )
-        filter_op = filter_config.setup()
+        filter_op = filter_config.setup(make_operator_runtime())
 
         filtered = filter_op.process_split(split, payload)
         assert filtered is not None
@@ -246,7 +245,7 @@ class TestSparkSourcePipeline:
                 "doubled": row["value"] * 2,
             },
         )
-        map_op = map_config.setup()
+        map_op = map_config.setup(make_operator_runtime())
 
         mapped = map_op.process_split(split, payload)
         assert mapped is not None
@@ -270,7 +269,7 @@ class TestSparkSourcePipeline:
         map_config = MapOperatorConfig(
             map_fn=lambda row: {**row, "processed": True},
         )
-        map_op = map_config.setup()
+        map_op = map_config.setup(make_operator_runtime())
 
         total_records = 0
         for idx, block_ref in enumerate(blocks):
@@ -603,12 +602,12 @@ class TestSparkSourceMaster:
         from solstice.core.split_payload_store import RaySplitPayloadStore
 
         payload_store = RaySplitPayloadStore(name="test-full-pipeline_store")
-        source_config = SourceConfig(queue_type=QueueType.MEMORY)
+        runtime = make_stage_runtime()
         master = SparkSourceMaster(
             job_id="test-full-pipeline",
             stage=source_stage,
             payload_store=payload_store,
-            config=source_config,
+            runtime=runtime,
         )
 
         # Start the full pipeline (creates queues, spawns workers)
