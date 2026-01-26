@@ -62,6 +62,7 @@ from abc import abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Iterator, Optional
 
+from confluent_kafka import KafkaException
 from tenacity import (
     retry,
     stop_after_attempt,
@@ -91,6 +92,14 @@ from solstice.utils.logging import create_ray_logger
 if TYPE_CHECKING:
     from solstice.core.stage import Stage
     from solstice.core.split_payload_store import SplitPayloadStore
+
+# Import InjectedFaultError for testing - this is raised by FaultInjector
+from solstice.testing.fault_injection import InjectedFaultError
+
+# Exceptions that indicate transient failures and should be retried.
+# InjectedFaultError is included for fault injection testing.
+# In production, Kafka/Tansu errors raise KafkaException.
+_RETRYABLE_EXCEPTIONS = (KafkaException, OSError, TimeoutError, InjectedFaultError)
 
 
 @dataclass
@@ -368,7 +377,7 @@ class SourceMaster(StageMaster):
         @retry(
             stop=stop_after_attempt(3),
             wait=wait_exponential(multiplier=0.1, min=0.1, max=1.0),
-            retry=retry_if_exception_type(Exception),
+            retry=retry_if_exception_type(_RETRYABLE_EXCEPTIONS),
             before_sleep=before_sleep_callback,
             reraise=True,
         )
@@ -447,7 +456,7 @@ class SourceMaster(StageMaster):
         @retry(
             stop=stop_after_attempt(3),
             wait=wait_exponential(multiplier=0.1, min=0.1, max=1.0),
-            retry=retry_if_exception_type(Exception),
+            retry=retry_if_exception_type(_RETRYABLE_EXCEPTIONS),
             before_sleep=before_sleep_callback,
             reraise=True,
         )
