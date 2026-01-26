@@ -456,7 +456,7 @@ class EmbeddedLLMOperator(Operator):
         )
         return [output["text"] for output in outputs]
 
-    def teardown(self) -> None:
+    def close(self) -> None:
         """Clean up the inference engine."""
         if self._engine is not None:
             # SGLang has explicit shutdown
