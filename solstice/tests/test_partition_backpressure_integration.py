@@ -135,28 +135,6 @@ class TestPartitionSkewScenario:
         import asyncio
         from confluent_kafka import Producer, Consumer, TopicPartition
 
-        runtime = _make_runtime(
-            queue_type=QueueType.TANSU,
-            shared_broker_endpoint=QueueEndpoint(
-                queue_type=QueueType.TANSU,
-                host="127.0.0.1",
-                port=tansu_backend.port,
-                storage_url="memory://tansu/",
-            ),
-        )
-        stage = Stage(
-            stage_id="test_stage",
-            operator_config=_TestOperatorConfig(),
-            parallelism=4,
-            output_partitions=3,
-        )
-        master = StageMaster(
-            job_id="test_job",
-            stage=stage,
-            runtime=runtime,
-            payload_store=payload_store,
-        )
-
         topic = "test_topic"
         tansu_backend.create_topic(topic, partitions=3)
 
@@ -196,14 +174,35 @@ class TestPartitionSkewScenario:
 
         await asyncio.to_thread(_commit_offsets)
 
-        master.upstream_endpoint = QueueEndpoint(
+        # Create runtime with upstream info included
+        upstream_endpoint = QueueEndpoint(
             queue_type=QueueType.TANSU,
             host="127.0.0.1",
             port=tansu_backend.port,
             storage_url="memory://tansu/",
         )
-        master.upstream_topic = topic
-        master._consumer_group = consumer_group
+        runtime = StageRuntime(
+            queue_type=QueueType.TANSU,
+            shared_broker_endpoint=upstream_endpoint,
+            upstream_endpoint=upstream_endpoint,
+            upstream_topic=topic,
+            state_endpoint=None,
+            state_topic=None,
+            semantic_guarantee=SemanticGuarantee.AT_LEAST_ONCE,
+            lineage_sample_rate=0.0,
+        )
+        stage = Stage(
+            stage_id="test_stage",
+            operator_config=_TestOperatorConfig(),
+            parallelism=4,
+            output_partitions=3,
+        )
+        master = StageMaster(
+            job_id="test_job",
+            stage=stage,
+            runtime=runtime,
+            payload_store=payload_store,
+        )
 
         # Initialize backpressure monitor with the upstream config
         await master.start()

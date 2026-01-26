@@ -225,7 +225,7 @@ class TestSparkSourcePipeline:
         object_ref = ray.put(test_data)
 
         # Create source and read
-        source = SparkSourceConfig().setup()
+        source = SparkSourceConfig().setup(make_operator_runtime())
         split = Split(
             split_id="spark_split_0",
             stage_id="spark_source",
@@ -265,7 +265,7 @@ class TestSparkSourcePipeline:
             )
             blocks.append(ray.put(block_data))
 
-        source = SparkSourceConfig().setup()
+        source = SparkSourceConfig().setup(make_operator_runtime())
         map_config = MapOperatorConfig(
             map_fn=lambda row: {**row, "processed": True},
         )
@@ -341,6 +341,7 @@ class TestSparkSourceMaster:
             job_id="test-plan-splits",
             stage=source_stage,
             payload_store=payload_store,
+            runtime=make_stage_runtime(),
         )
 
         # Fetch splits using the master
@@ -357,7 +358,7 @@ class TestSparkSourceMaster:
             assert split.stage_id == "spark_source"
 
         # Use SparkSource operator to read the splits
-        source = SparkSourceConfig().setup()
+        source = SparkSourceConfig().setup(make_operator_runtime())
         all_records = []
         for split in splits:
             payload = source.read(split)
@@ -402,6 +403,7 @@ class TestSparkSourceMaster:
             job_id="test-sql-query",
             stage=source_stage,
             payload_store=payload_store,
+            runtime=make_stage_runtime(),
         )
 
         # Fetch splits - this triggers Spark init via raydp.init_spark()
@@ -412,7 +414,7 @@ class TestSparkSourceMaster:
         print(f"SQL query returned {total_records} records")
 
         # Read and verify
-        source = SparkSourceConfig().setup()
+        source = SparkSourceConfig().setup(make_operator_runtime())
         all_records = []
         for split in splits:
             payload = source.read(split)
@@ -455,6 +457,7 @@ class TestSparkSourceMaster:
             job_id="test-1000-records",
             stage=source_stage,
             payload_store=payload_store,
+            runtime=make_stage_runtime(),
         )
 
         splits = list(master.plan_splits())
@@ -463,7 +466,7 @@ class TestSparkSourceMaster:
         print(f"Fetched {len(splits)} splits with {total_records} total records")
 
         # Read all splits and verify data
-        source = SparkSourceConfig().setup()
+        source = SparkSourceConfig().setup(make_operator_runtime())
         all_records = []
         for split in splits:
             payload = source.read(split)
@@ -510,6 +513,7 @@ class TestSparkSourceMaster:
             job_id="test-parallelism",
             stage=source_stage,
             payload_store=payload_store,
+            runtime=make_stage_runtime(),
         )
 
         splits = list(master.plan_splits())
@@ -558,6 +562,7 @@ class TestSparkSourceMaster:
             job_id="test-complex-df",
             stage=source_stage,
             payload_store=payload_store,
+            runtime=make_stage_runtime(),
         )
 
         splits = list(master.plan_splits())
@@ -567,7 +572,7 @@ class TestSparkSourceMaster:
         assert total_records <= 50
 
         # Verify all records have age > 30
-        source = SparkSourceConfig().setup()
+        source = SparkSourceConfig().setup(make_operator_runtime())
         for split in splits:
             payload = source.read(split)
             if payload:

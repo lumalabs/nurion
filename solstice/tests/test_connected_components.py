@@ -467,10 +467,11 @@ class TestCCIterateStateStore:
             num_partitions=num_partitions,
             state_store_path=temp_state_store_path,
         )
-        config.job_id = "test_job"
-        config.stage_id = "cc_iterate"
-        config.worker_id = "worker_0"
-        operator = config.setup(make_operator_runtime())
+        operator = config.setup(make_operator_runtime(
+            job_id="test_job",
+            stage_id="cc_iterate",
+            worker_id="worker_0",
+        ))
 
         # Create data that will hash to MULTIPLE partitions
         # Using many docs increases chance of hitting multiple partitions
@@ -494,6 +495,9 @@ class TestCCIterateStateStore:
             f"Test requires multiple partitions, got {len(partitions_touched)}"
         )
 
+        # Close operator FIRST to flush its state store writes
+        operator.close()
+
         # Now read __changes__ from ALL partitions via state store
         state_store = SlateDBPartitionStateStore(
             base_path=temp_state_store_path,
@@ -513,7 +517,6 @@ class TestCCIterateStateStore:
                 pass  # Partition may not have been used
 
         state_store.close()
-        operator.close()
 
         # Key assertion: __changes__ should only be in ONE partition
         assert len(changes_found) == 1, (

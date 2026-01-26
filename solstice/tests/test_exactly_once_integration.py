@@ -37,6 +37,7 @@ from solstice.core import (
     OperatorConfig,
     SemanticGuarantee,
 )
+from solstice.core.operator import OperatorRuntime
 from tests.conftest import make_operator_runtime
 from solstice.core.models import Split, SplitPayload
 from solstice.core.sink_operator import SinkOperator
@@ -47,6 +48,7 @@ from solstice.testing import (
     reset_fault_injector,
     FAULT_BEFORE_MARK_PROCESSED,
 )
+from solstice.testing.fault_injection import InjectedFaultError
 
 
 # Mark all tests as integration tests
@@ -88,8 +90,8 @@ class _IdempotentSinkConfig(OperatorConfig):
 class _IdempotentSink(SinkOperator):
     """Sink that stores unique values (idempotent by value)."""
 
-    def __init__(self, config: _IdempotentSinkConfig):
-        super().__init__(config)
+    def __init__(self, config: _IdempotentSinkConfig, runtime: OperatorRuntime):
+        super().__init__(config, runtime)
         self._config = config
 
     def process_split(
@@ -188,12 +190,15 @@ class TestOperatorExactlyOnce:
             storage_id=storage_id,
             state_store_path=temp_state_dir,
         )
-        config1.job_id = "test"
-        config1.stage_id = "sink"
-        config1.partition_id = 0
-        config1.semantic_guarantee = SemanticGuarantee.EXACTLY_ONCE
+        runtime1 = OperatorRuntime(
+            job_id="test",
+            stage_id="sink",
+            worker_id="worker_0",
+            partition_id=0,
+            semantic_guarantee=SemanticGuarantee.EXACTLY_ONCE,
+        )
 
-        op1 = config1.setup()
+        op1 = config1.setup(runtime1)
         op1.init_from_state_store()
 
         for offset in range(5):
@@ -217,12 +222,15 @@ class TestOperatorExactlyOnce:
             storage_id=storage_id,
             state_store_path=temp_state_dir,
         )
-        config2.job_id = "test"
-        config2.stage_id = "sink"
-        config2.partition_id = 0
-        config2.semantic_guarantee = SemanticGuarantee.EXACTLY_ONCE
+        runtime2 = OperatorRuntime(
+            job_id="test",
+            stage_id="sink",
+            worker_id="worker_0",
+            partition_id=0,
+            semantic_guarantee=SemanticGuarantee.EXACTLY_ONCE,
+        )
 
-        op2 = config2.setup()
+        op2 = config2.setup(runtime2)
         op2.init_from_state_store()
 
         # Should have recovered last_offset = 4
@@ -280,12 +288,15 @@ class TestFaultInjection:
                 storage_id=storage_id,
                 state_store_path=temp_state_dir,
             )
-            config1.job_id = "test"
-            config1.stage_id = "sink"
-            config1.partition_id = 0
-            config1.semantic_guarantee = SemanticGuarantee.EXACTLY_ONCE
+            runtime1 = OperatorRuntime(
+                job_id="test",
+                stage_id="sink",
+                worker_id="worker_0",
+                partition_id=0,
+                semantic_guarantee=SemanticGuarantee.EXACTLY_ONCE,
+            )
 
-            op1 = config1.setup()
+            op1 = config1.setup(runtime1)
             op1.init_from_state_store()
 
             processed_before_crash = 0
@@ -305,7 +316,7 @@ class TestFaultInjection:
                         check_fault(FAULT_BEFORE_MARK_PROCESSED)
                         op1.mark_processed(offset)
                         processed_before_crash += 1
-            except RuntimeError:
+            except InjectedFaultError:
                 pass  # Expected - fault injected
 
             op1.close()
@@ -328,12 +339,15 @@ class TestFaultInjection:
                 storage_id=storage_id,
                 state_store_path=temp_state_dir,
             )
-            config2.job_id = "test"
-            config2.stage_id = "sink"
-            config2.partition_id = 0
-            config2.semantic_guarantee = SemanticGuarantee.EXACTLY_ONCE
+            runtime2 = OperatorRuntime(
+                job_id="test",
+                stage_id="sink",
+                worker_id="worker_0",
+                partition_id=0,
+                semantic_guarantee=SemanticGuarantee.EXACTLY_ONCE,
+            )
 
-            op2 = config2.setup()
+            op2 = config2.setup(runtime2)
             op2.init_from_state_store()
 
             # last_offset should be 4 (5 was not marked)
