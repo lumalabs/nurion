@@ -62,6 +62,7 @@ from abc import abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Iterator, Optional
 
+from confluent_kafka import KafkaException
 from tenacity import (
     retry,
     stop_after_attempt,
@@ -368,7 +369,7 @@ class SourceMaster(StageMaster):
         @retry(
             stop=stop_after_attempt(3),
             wait=wait_exponential(multiplier=0.1, min=0.1, max=1.0),
-            retry=retry_if_exception_type(Exception),
+            retry=retry_if_exception_type(KafkaException),
             before_sleep=before_sleep_callback,
             reraise=True,
         )
@@ -447,7 +448,7 @@ class SourceMaster(StageMaster):
         @retry(
             stop=stop_after_attempt(3),
             wait=wait_exponential(multiplier=0.1, min=0.1, max=1.0),
-            retry=retry_if_exception_type(Exception),
+            retry=retry_if_exception_type(KafkaException),
             before_sleep=before_sleep_callback,
             reraise=True,
         )
