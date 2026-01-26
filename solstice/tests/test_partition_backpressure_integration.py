@@ -32,7 +32,7 @@ from solstice.core.stage_master import (
     QueueMessage,
 )
 from solstice.core.stage import Stage, StageRuntime
-from solstice.core.operator import OperatorConfig, Operator, SemanticGuarantee
+from solstice.core.operator import OperatorConfig, Operator, OperatorRuntime, SemanticGuarantee
 from solstice.queue import QueueType
 
 
@@ -46,8 +46,8 @@ class _TestOperatorConfig(OperatorConfig):
 class _TestOperator(Operator):
     """Test operator that passes through data (prefixed with _ to avoid pytest collection)."""
 
-    def __init__(self, config: _TestOperatorConfig):
-        super().__init__(config)
+    def __init__(self, config: _TestOperatorConfig, runtime: OperatorRuntime):
+        super().__init__(config, runtime)
         self._closed = False
 
     def process_split(self, split, payload):

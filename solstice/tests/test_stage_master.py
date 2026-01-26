@@ -32,7 +32,7 @@ from solstice.core.stage_master import (
     QueueMessage,
     QueueEndpoint,
 )
-from solstice.core.operator import OperatorConfig, Operator, SemanticGuarantee
+from solstice.core.operator import OperatorConfig, Operator, OperatorRuntime, SemanticGuarantee
 from solstice.core.stage import StageRuntime
 
 # Note: Only async test classes/functions should use @pytest.mark.asyncio decorator
@@ -46,8 +46,8 @@ from solstice.core.stage import StageRuntime
 class MockOperator(Operator):
     """Mock operator that passes through data."""
 
-    def __init__(self, config: "MockOperatorConfig"):
-        super().__init__(config)
+    def __init__(self, config: "MockOperatorConfig", runtime: OperatorRuntime):
+        super().__init__(config, runtime)
         self._closed = False
 
     def process_split(self, split, payload):
