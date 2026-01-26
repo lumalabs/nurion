@@ -268,8 +268,7 @@ class HttpOperator(Operator):
         def before_sleep_callback(retry_state: RetryCallState) -> None:
             exc = retry_state.outcome.exception() if retry_state.outcome else None
             self.logger.warning(
-                f"Retry {retry_state.attempt_number}/{self._http_config.max_retries} "
-                f"failed: {exc}"
+                f"Retry {retry_state.attempt_number}/{self._http_config.max_retries} failed: {exc}"
             )
 
         return retry(
