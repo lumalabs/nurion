@@ -65,8 +65,8 @@ class JobWebUI:
 
         # Prometheus collector (optional)
         self.prometheus_collector: Optional[PrometheusCollector] = None
-        if prometheus_enabled and state_manager:
-            self.prometheus_collector = PrometheusCollector(state_manager, self.job_id)
+        if prometheus_enabled:
+            self.prometheus_collector = PrometheusCollector(storage, self.job_id)
 
         # Background tasks
         self._collector_tasks: list = []
@@ -92,13 +92,14 @@ class JobWebUI:
             # Build stage configs
             stage_configs = {}
             for stage_id, master in job_runner._masters.items():
+                stage = master.stage
                 stage_configs[stage_id] = {
-                    "operator_type": type(master.stage.operator_config).__name__,
-                    "min_parallelism": master.config.min_workers,
-                    "max_parallelism": master.config.max_workers,
-                    "num_cpus": master.config.num_cpus,
-                    "num_gpus": master.config.num_gpus,
-                    "memory_mb": master.config.memory_mb,
+                    "operator_type": type(stage.operator_config).__name__,
+                    "min_parallelism": stage.min_parallelism,
+                    "max_parallelism": stage.max_parallelism,
+                    "num_cpus": stage.num_cpus,
+                    "num_gpus": stage.num_gpus,
+                    "memory_mb": stage.memory_mb,
                 }
 
             config_data = {

@@ -15,10 +15,7 @@
 """Prometheus metrics exporter for WebUI.
 
 This module exports metrics to Prometheus for real-time monitoring.
-Metrics are obtained from JobStateManager (push-based architecture).
-
-Note: Worker tracking and SlateDB snapshots are handled by JobStateManager.
-This collector only handles Prometheus export.
+Metrics are read from storage (SlateDB).
 """
 
 import asyncio
@@ -28,33 +25,27 @@ from solstice.webui.storage.prometheus_exporter import PrometheusMetricsExporter
 from solstice.utils.logging import create_ray_logger
 
 if TYPE_CHECKING:
-    from solstice.webui.state.manager import JobStateManager
+    from solstice.webui.storage import JobStorage
 
 
 class PrometheusCollector:
-    """Export metrics to Prometheus from JobStateManager.
+    """Export metrics to Prometheus from storage.
 
-    Responsibilities:
-    1. Read metrics from JobStateManager (push-based)
-    2. Export to Prometheus for real-time monitoring
-
-    Usage:
-        collector = PrometheusCollector(state_manager)
-        asyncio.create_task(collector.run_loop())
+    Reads metrics from SlateDB and exports to Prometheus.
     """
 
     def __init__(
         self,
-        state_manager: "JobStateManager",
+        storage: "JobStorage",
         job_id: str,
     ):
         """Initialize Prometheus collector.
 
         Args:
-            state_manager: JobStateManager instance to read metrics from
+            storage: JobStorage instance to read metrics from
             job_id: Job identifier
         """
-        self.state_manager = state_manager
+        self.storage = storage
         self.job_id = job_id
         self.logger = create_ray_logger(f"PrometheusCollector-{job_id}")
 
@@ -64,12 +55,7 @@ class PrometheusCollector:
         self._last_metrics: Dict[str, Dict[str, Any]] = {}
 
     async def run_loop(self) -> None:
-        """Main export loop.
-
-        Runs until stopped:
-        - Read metrics from JobStateManager every 1 second
-        - Export to Prometheus
-        """
+        """Main export loop."""
         self._running = True
         self.logger.info("Prometheus collector started")
 
@@ -89,10 +75,13 @@ class PrometheusCollector:
         self._running = False
 
     def _export_metrics(self) -> None:
-        """Export metrics from JobStateManager to Prometheus."""
+        """Export metrics from storage to Prometheus."""
         try:
-            # Get all stage info from state manager
-            job_info = self.state_manager.get_job_info()
+            # Get job info from storage
+            job_info = self.storage.get_job_archive(self.job_id)
+            if not job_info:
+                return
+
             stages = job_info.get("stages", [])
 
             for stage_data in stages:
@@ -106,16 +95,15 @@ class PrometheusCollector:
                     "input_records": stage_data.get("input_records", 0),
                     "output_records": stage_data.get("output_records", 0),
                     "output_queue_size": stage_data.get("output_queue_size", 0),
-                    "is_running": stage_data.get("is_running", False),
-                    "is_finished": stage_data.get("is_finished", False),
+                    "is_running": stage_data.get("status") == "RUNNING",
+                    "is_finished": stage_data.get("status") == "COMPLETED",
                 }
 
-                # Calculate throughput if we have previous data
+                # Calculate throughput from previous data
                 if stage_id in self._last_metrics:
                     last = self._last_metrics[stage_id]
                     input_delta = metrics_dict["input_records"] - last.get("input_records", 0)
                     output_delta = metrics_dict["output_records"] - last.get("output_records", 0)
-                    # Assuming 1 second interval
                     metrics_dict["input_throughput"] = max(0, input_delta)
                     metrics_dict["output_throughput"] = max(0, output_delta)
 

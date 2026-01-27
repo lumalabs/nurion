@@ -362,7 +362,6 @@ class RayJobRunner:
             state_endpoint=self._state_push.endpoint,
             state_topic=self._state_push.topic,
             semantic_guarantee=self.job.config.semantic_guarantee,
-            lineage_sample_rate=self.job.config.webui.lineage_sample_rate,
         )
 
     def _stage_info(self, stage: "Stage") -> Dict[str, Any]:

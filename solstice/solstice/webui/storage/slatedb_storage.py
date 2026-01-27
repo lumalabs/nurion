@@ -1,4 +1,4 @@
-# Copyright 2025 nurion team
+# Copyright 2025-2026 nurion team
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@
 import json
 import os
 import tempfile
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional, Tuple
@@ -334,23 +335,61 @@ class JobStorage:
         start_time: float,
         end_time: float,
     ) -> List[Dict[str, Any]]:
-        """Query metrics history for a stage."""
+        """Query metrics history for a stage.
+
+        Aggregates from split metrics stored by JobStateManager.
+        """
         if not self._matches_job_id(job_id):
             return []
+
+        # First try legacy metrics:{stage_id}: format
         prefix = f"metrics:{stage_id}:"
         results = self._scan_prefix(prefix.encode())
 
-        # Filter by time range and parse
         metrics_list = []
         for key, value in results:
-            # Extract timestamp from key: metrics:{stage_id}:{timestamp}
             parts = key.decode().split(":")
             if len(parts) >= 3:
                 ts = float(parts[2])
                 if start_time <= ts <= end_time:
                     metrics_list.append(json.loads(value.decode()))
 
-        return sorted(metrics_list, key=lambda x: x.get("timestamp", 0))
+        if metrics_list:
+            return sorted(metrics_list, key=lambda x: x.get("timestamp", 0))
+
+        # Aggregate from split metrics: split:{stage_id}:{partition}:{offset}
+        split_prefix = f"split:{stage_id}:"
+        split_results = self._scan_prefix(split_prefix.encode())
+
+        if not split_results:
+            return []
+
+        # Group by time buckets (10 second intervals)
+        bucket_size = 10.0
+        buckets: Dict[int, Dict[str, Any]] = {}
+
+        for _, value in split_results:
+            try:
+                data = json.loads(value.decode())
+                ts = data.get("ts", 0)
+                if start_time <= ts <= end_time:
+                    bucket_key = int(ts / bucket_size)
+                    if bucket_key not in buckets:
+                        buckets[bucket_key] = {
+                            "timestamp": bucket_key * bucket_size,
+                            "input_records": 0,
+                            "output_records": 0,
+                            "process_time_ms": 0,
+                            "split_count": 0,
+                        }
+                    buckets[bucket_key]["input_records"] += data.get("input_records", 0)
+                    buckets[bucket_key]["output_records"] += data.get("output_records", 0)
+                    buckets[bucket_key]["process_time_ms"] += data.get("process_time_ms", 0)
+                    buckets[bucket_key]["split_count"] += 1
+            except Exception:
+                continue
+
+        return sorted(buckets.values(), key=lambda x: x.get("timestamp", 0))
 
     def get_latest_stage_metrics(self, stage_id: str) -> Optional[Dict[str, Any]]:
         """Get the best metrics snapshot for a stage.
@@ -751,6 +790,232 @@ class JobStorage:
         sorted_workers = sorted(workers, key=lambda x: x.get("start_time", 0), reverse=True)
 
         return sorted_workers[offset : offset + limit]
+
+    # === Time-Series Metrics (Prometheus-style) ===
+
+    def get_metrics_samples(
+        self,
+        job_id: Optional[str],
+        worker_id: str,
+        start_time: float,
+        end_time: float,
+    ) -> List[Dict[str, Any]]:
+        """Query raw time-series samples for a worker.
+
+        Returns raw Counter/Gauge values. Use rate() for throughput.
+
+        Args:
+            job_id: Job identifier (for validation)
+            worker_id: Worker identifier
+            start_time: Start timestamp (Unix seconds)
+            end_time: End timestamp (Unix seconds)
+
+        Returns:
+            List of samples sorted by timestamp
+        """
+        if not self._matches_job_id(job_id):
+            return []
+
+        prefix = f"metrics:{worker_id}:"
+        results = self._scan_prefix(prefix.encode())
+
+        samples = []
+        start_ms = int(start_time * 1000)
+        end_ms = int(end_time * 1000)
+
+        for key, value in results:
+            parts = key.decode().split(":")
+            if len(parts) >= 3:
+                ts_ms = int(parts[2])
+                if start_ms <= ts_ms <= end_ms:
+                    samples.append(json.loads(value.decode()))
+
+        return sorted(samples, key=lambda x: x.get("ts", 0))
+
+    def rate(
+        self,
+        job_id: Optional[str],
+        worker_id: str,
+        metric_name: str,
+        time_range_s: float = 60.0,
+    ) -> float:
+        """Calculate rate for a Counter metric (Prometheus-style).
+
+        rate = (v2 - v1) / (t2 - t1)
+
+        Args:
+            job_id: Job identifier
+            worker_id: Worker identifier
+            metric_name: Counter metric name (e.g., "input_records")
+            time_range_s: Time range to look back
+
+        Returns:
+            Rate per second, or 0.0 if insufficient data
+        """
+        now = time.time()
+        samples = self.get_metrics_samples(job_id, worker_id, now - time_range_s, now)
+
+        if len(samples) < 2:
+            return 0.0
+
+        # Get first and last samples in range
+        first = samples[0]
+        last = samples[-1]
+
+        v1 = first.get(metric_name, 0)
+        v2 = last.get(metric_name, 0)
+        t1 = first.get("ts", 0)
+        t2 = last.get("ts", 0)
+
+        if t2 <= t1:
+            return 0.0
+
+        return (v2 - v1) / (t2 - t1)
+
+    def get_partition_offsets(
+        self,
+        job_id: Optional[str],
+        stage_id: Optional[str] = None,
+    ) -> Dict[str, Dict[int, int]]:
+        """Get latest partition offsets for all workers (Gauge metric).
+
+        Args:
+            job_id: Job identifier
+            stage_id: Optional stage filter
+
+        Returns:
+            Dict mapping worker_id -> {partition_id: offset}
+        """
+        if not self._matches_job_id(job_id):
+            return {}
+
+        # Get latest worker state from worker: prefix
+        prefix = b"worker:"
+        results = self._scan_prefix(prefix, limit=1000)
+
+        offsets: Dict[str, Dict[int, int]] = {}
+        for _, value in results:
+            worker = json.loads(value.decode())
+            if stage_id and worker.get("stage_id") != stage_id:
+                continue
+            worker_id = worker.get("worker_id", "")
+            partition_offsets = worker.get("partition_offsets", {})
+            if partition_offsets:
+                offsets[worker_id] = {int(k): v for k, v in partition_offsets.items()}
+
+        return offsets
+
+    def get_throughput(
+        self,
+        job_id: Optional[str],
+        stage_id: Optional[str] = None,
+        time_range_s: float = 60.0,
+    ) -> Dict[str, Any]:
+        """Calculate throughput from split metrics.
+
+        Args:
+            job_id: Job identifier
+            stage_id: Optional stage filter
+            time_range_s: Time range for rate calculation
+
+        Returns:
+            Summary with per-worker and aggregated rates
+        """
+        if not self._matches_job_id(job_id):
+            return {"workers": [], "total": {}}
+
+        now = time.time()
+        start_time = now - time_range_s
+
+        # Get all workers
+        prefix = b"worker:"
+        results = self._scan_prefix(prefix, limit=1000)
+
+        # Build worker info map
+        worker_info: Dict[str, Dict[str, Any]] = {}
+        for _, value in results:
+            worker = json.loads(value.decode())
+            if stage_id and worker.get("stage_id") != stage_id:
+                continue
+            worker_id = worker.get("worker_id", "")
+            worker_info[worker_id] = {
+                "stage_id": worker.get("stage_id"),
+                "input_records": 0,
+                "output_records": 0,
+                "split_count": 0,
+                "first_ts": now,
+                "last_ts": start_time,
+            }
+
+        # Aggregate from split metrics
+        if stage_id:
+            split_prefix = f"split:{stage_id}:".encode()
+        else:
+            split_prefix = b"split:"
+
+        split_results = self._scan_prefix(split_prefix, limit=10000)
+
+        for _, value in split_results:
+            try:
+                data = json.loads(value.decode())
+                ts = data.get("ts", 0)
+                if ts < start_time:
+                    continue
+
+                worker_id = data.get("worker_id", "")
+                if worker_id not in worker_info:
+                    # Worker not in our filter, skip
+                    continue
+
+                info = worker_info[worker_id]
+                info["input_records"] += data.get("input_records", 0)
+                info["output_records"] += data.get("output_records", 0)
+                info["split_count"] += 1
+                info["first_ts"] = min(info["first_ts"], ts)
+                info["last_ts"] = max(info["last_ts"], ts)
+            except Exception:
+                continue
+
+        # Calculate rates
+        workers = []
+        total_input_rate = 0.0
+        total_output_rate = 0.0
+        total_splits_rate = 0.0
+
+        for worker_id, info in worker_info.items():
+            duration = info["last_ts"] - info["first_ts"]
+            if duration > 0:
+                input_rate = info["input_records"] / duration
+                output_rate = info["output_records"] / duration
+                splits_rate = info["split_count"] / duration
+            else:
+                input_rate = 0.0
+                output_rate = 0.0
+                splits_rate = 0.0
+
+            workers.append(
+                {
+                    "worker_id": worker_id,
+                    "stage_id": info["stage_id"],
+                    "input_records_per_sec": input_rate,
+                    "output_records_per_sec": output_rate,
+                    "splits_per_sec": splits_rate,
+                }
+            )
+
+            total_input_rate += input_rate
+            total_output_rate += output_rate
+            total_splits_rate += splits_rate
+
+        return {
+            "workers": workers,
+            "total": {
+                "input_records_per_sec": total_input_rate,
+                "output_records_per_sec": total_output_rate,
+                "splits_per_sec": total_splits_rate,
+                "worker_count": len(workers),
+            },
+        }
 
     # === Worker Events ===
 
