@@ -124,7 +124,6 @@ def main(job_id: str, wait_time: int):
         enabled=True,
         storage_path=webui_storage,
         port=5000,
-        lineage_sample_rate=1.0,  # Full lineage tracking
     )
     
     logger.info("=" * 80)

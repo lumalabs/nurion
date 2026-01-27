@@ -340,7 +340,7 @@ async function renderLineageDag() {
         console.error('Failed to render DAG:', e);
         document.getElementById('lineage-dag').innerHTML = `
             <p class="text-center" style="padding: 4rem; color: var(--pico-muted-color);">
-                No lineage data available. Enable with lineage_sample_rate > 0.
+                No lineage data available.
             </p>
         `;
     }
