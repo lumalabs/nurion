@@ -816,21 +816,39 @@ class JobStorage:
         if not self._matches_job_id(job_id):
             return []
 
-        prefix = f"metrics:{worker_id}:"
-        results = self._scan_prefix(prefix.encode())
+        # Query split metrics and aggregate by worker_id
+        split_prefix = b"split:"
+        split_results = self._scan_prefix(split_prefix, limit=10000)
 
-        samples = []
-        start_ms = int(start_time * 1000)
-        end_ms = int(end_time * 1000)
+        # Aggregate metrics by timestamp buckets (1 second intervals)
+        bucket_size = 1.0
+        buckets: Dict[int, Dict[str, Any]] = {}
 
-        for key, value in results:
-            parts = key.decode().split(":")
-            if len(parts) >= 3:
-                ts_ms = int(parts[2])
-                if start_ms <= ts_ms <= end_ms:
-                    samples.append(json.loads(value.decode()))
+        for _, value in split_results:
+            try:
+                data = json.loads(value.decode())
+                if data.get("worker_id") != worker_id:
+                    continue
+                
+                ts = data.get("ts", 0)
+                if not (start_time <= ts <= end_time):
+                    continue
 
-        return sorted(samples, key=lambda x: x.get("ts", 0))
+                bucket_key = int(ts / bucket_size)
+                if bucket_key not in buckets:
+                    buckets[bucket_key] = {
+                        "ts": bucket_key * bucket_size,
+                        "input_records": 0,
+                        "output_records": 0,
+                        "processed_count": 0,
+                    }
+                buckets[bucket_key]["input_records"] += data.get("input_records", 0)
+                buckets[bucket_key]["output_records"] += data.get("output_records", 0)
+                buckets[bucket_key]["processed_count"] += 1
+            except Exception:
+                continue
+
+        return sorted(buckets.values(), key=lambda x: x.get("ts", 0))
 
     def rate(
         self,

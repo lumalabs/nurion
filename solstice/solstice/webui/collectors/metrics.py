@@ -89,12 +89,19 @@ class PrometheusCollector:
                 if not stage_id:
                     continue
 
+                # Get runtime metrics from storage
+                workers = self.storage.list_workers(self.job_id, stage_id=stage_id, limit=1000)
+                worker_count = len(workers)
+
+                # Get latest stage metrics (aggregated from splits)
+                latest_metrics = self.storage.get_latest_stage_metrics(stage_id) or {}
+
                 metrics_dict = {
                     "stage_id": stage_id,
-                    "worker_count": stage_data.get("worker_count", 0),
-                    "input_records": stage_data.get("input_records", 0),
-                    "output_records": stage_data.get("output_records", 0),
-                    "output_queue_size": stage_data.get("output_queue_size", 0),
+                    "worker_count": worker_count,
+                    "input_records": latest_metrics.get("input_records", 0),
+                    "output_records": latest_metrics.get("output_records", 0),
+                    "output_queue_size": 0,  # Not tracked in new model
                     "is_running": stage_data.get("status") == "RUNNING",
                     "is_finished": stage_data.get("status") == "COMPLETED",
                 }
