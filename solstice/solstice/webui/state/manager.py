@@ -111,7 +111,9 @@ class JobStateManager:
                 )
 
                 if fetch_count <= 5:
-                    self.logger.info(f"Fetch #{fetch_count}: got {len(records) if records else 0} records")
+                    self.logger.info(
+                        f"Fetch #{fetch_count}: got {len(records) if records else 0} records"
+                    )
 
                 if records:
                     # Process all records into a single batch

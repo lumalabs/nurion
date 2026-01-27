@@ -738,7 +738,6 @@ class RayJobRunner:
             from solstice.webui.runtime_server import EmbeddedWebUIServer
 
             # Create JobWebUI using pre-created storage
-            # Pass state_manager for Prometheus export (push-based metrics)
             assert self._webui_storage is not None, "webui_storage not initialized"
             assert self._webui_attempt_id is not None, "webui_attempt_id not initialized"
             self._webui = JobWebUI(
@@ -746,7 +745,6 @@ class RayJobRunner:
                 self._webui_storage,
                 attempt_id=self._webui_attempt_id,
                 state_manager=self._state_push.state_manager,
-                prometheus_enabled=self.job.config.webui.prometheus_enabled,
             )
 
             # Start WebUI

@@ -609,8 +609,7 @@ class TansuQueueClient:
                 # No group_id - always start from beginning (for state consumers)
                 consumer.seek(TopicPartition(topic, partition, 0))
                 self.logger.debug(
-                    f"Consumer for {topic}:{partition} (group=None) "
-                    f"starting from offset 0"
+                    f"Consumer for {topic}:{partition} (group=None) starting from offset 0"
                 )
 
             self.logger.debug(f"Created consumer for {topic}:{partition} (group={group_id})")

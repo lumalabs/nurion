@@ -802,7 +802,8 @@ class JobStorage:
     ) -> List[Dict[str, Any]]:
         """Query raw time-series samples for a worker.
 
-        Returns raw Counter/Gauge values. Use rate() for throughput.
+        Aggregates from split metrics (split:{stage_id}:{partition}:{offset})
+        filtered by worker_id.
 
         Args:
             job_id: Job identifier (for validation)
@@ -816,19 +817,28 @@ class JobStorage:
         if not self._matches_job_id(job_id):
             return []
 
-        prefix = f"metrics:{worker_id}:"
-        results = self._scan_prefix(prefix.encode())
+        # Get worker's stage_id for more efficient prefix scan
+        worker_data = self.get_worker_history(job_id, worker_id)
+        if worker_data:
+            stage_id = worker_data.get("stage_id", "")
+            prefix = f"split:{stage_id}:".encode() if stage_id else b"split:"
+        else:
+            prefix = b"split:"
+
+        results = self._scan_prefix(prefix, limit=10000)
 
         samples = []
-        start_ms = int(start_time * 1000)
-        end_ms = int(end_time * 1000)
-
-        for key, value in results:
-            parts = key.decode().split(":")
-            if len(parts) >= 3:
-                ts_ms = int(parts[2])
-                if start_ms <= ts_ms <= end_ms:
-                    samples.append(json.loads(value.decode()))
+        for _, value in results:
+            try:
+                data = json.loads(value.decode())
+                # Filter by worker_id
+                if data.get("worker_id") != worker_id:
+                    continue
+                ts = data.get("ts", 0)
+                if start_time <= ts <= end_time:
+                    samples.append(data)
+            except Exception:
+                continue
 
         return sorted(samples, key=lambda x: x.get("ts", 0))
 
@@ -839,14 +849,18 @@ class JobStorage:
         metric_name: str,
         time_range_s: float = 60.0,
     ) -> float:
-        """Calculate rate for a Counter metric (Prometheus-style).
+        """Calculate rate for a metric from split data.
 
-        rate = (v2 - v1) / (t2 - t1)
+        Since split metrics are per-split increments (not cumulative counters),
+        we sum all values in the time range and divide by the duration.
+
+        rate = sum(values) / (last_ts - first_ts)
 
         Args:
             job_id: Job identifier
             worker_id: Worker identifier
-            metric_name: Counter metric name (e.g., "input_records")
+            metric_name: Metric name (e.g., "input_records", "output_records")
+                        Use "processed_count" to count splits processed.
             time_range_s: Time range to look back
 
         Returns:
@@ -855,22 +869,26 @@ class JobStorage:
         now = time.time()
         samples = self.get_metrics_samples(job_id, worker_id, now - time_range_s, now)
 
-        if len(samples) < 2:
+        if len(samples) < 1:
             return 0.0
 
-        # Get first and last samples in range
-        first = samples[0]
-        last = samples[-1]
+        # Get time range from samples
+        first_ts = samples[0].get("ts", 0)
+        last_ts = samples[-1].get("ts", 0)
 
-        v1 = first.get(metric_name, 0)
-        v2 = last.get(metric_name, 0)
-        t1 = first.get("ts", 0)
-        t2 = last.get("ts", 0)
-
-        if t2 <= t1:
+        if last_ts <= first_ts:
+            # Single sample or no time range - return 0
             return 0.0
 
-        return (v2 - v1) / (t2 - t1)
+        # Sum all values in the time range
+        # For "processed_count", count the number of samples (each sample = 1 split)
+        if metric_name == "processed_count":
+            total = len(samples)
+        else:
+            total = sum(s.get(metric_name, 0) for s in samples)
+
+        duration = last_ts - first_ts
+        return total / duration if duration > 0 else 0.0
 
     def get_partition_offsets(
         self,
