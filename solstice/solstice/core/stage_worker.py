@@ -649,6 +649,8 @@ class StageWorker:
                     await self._emit_worker_state()
                     await self._emit_split_metrics_batch()
             except asyncio.CancelledError:
+                # Flush any pending metrics before exiting
+                await self._emit_split_metrics_batch()
                 break
             except Exception as e:
                 self.logger.debug(f"Error in periodic metrics loop: {e}")

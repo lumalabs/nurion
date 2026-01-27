@@ -1009,12 +1009,10 @@ class JobStorage:
 
         return {
             "workers": workers,
-            "total": {
-                "input_records_per_sec": total_input_rate,
-                "output_records_per_sec": total_output_rate,
-                "splits_per_sec": total_splits_rate,
-                "worker_count": len(workers),
-            },
+            "total_input_rate": total_input_rate,
+            "total_output_rate": total_output_rate,
+            "total_splits_rate": total_splits_rate,
+            "worker_count": len(workers),
         }
 
     # === Worker Events ===

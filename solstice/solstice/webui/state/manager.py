@@ -182,16 +182,28 @@ class JobStateManager:
         """Add job event to batch."""
         # Key is just "job" - each storage instance is per-job
         key = "job"
+        
+        # Read existing data if available to preserve metadata
+        existing_data = {}
+        existing_bytes = self.storage.db.get(key.encode())
+        if existing_bytes:
+            existing_data = json.loads(existing_bytes.decode())
+        
+        # Merge with new data, preserving existing fields not in payload
         data = {
             "job_id": self.job_id,
             "status": status,
             "timestamp": msg.timestamp,
-            "dag_edges": msg.payload.get("dag_edges", {}),
-            "stages": msg.payload.get("stages", []),
-            "config": msg.payload.get("config", {}),
+            "dag_edges": msg.payload.get("dag_edges", existing_data.get("dag_edges", {})),
+            "stages": msg.payload.get("stages", existing_data.get("stages", [])),
+            "config": msg.payload.get("config", existing_data.get("config", {})),
         }
+        
+        # Preserve start_time from existing data if not a start event
         if status in ("COMPLETED", "FAILED"):
             data["end_time"] = msg.timestamp
+            if "start_time" in existing_data:
+                data["start_time"] = existing_data["start_time"]
         else:
             data["start_time"] = msg.timestamp
 
@@ -201,16 +213,28 @@ class JobStateManager:
         """Add stage event to batch."""
         stage_id = msg.source_id
         key = f"stage:{stage_id}"
+        
+        # Read existing data if available to preserve metadata
+        existing_data = {}
+        existing_bytes = self.storage.db.get(key.encode())
+        if existing_bytes:
+            existing_data = json.loads(existing_bytes.decode())
+        
+        # Merge with new data, preserving existing fields not in payload
         data = {
             "stage_id": stage_id,
             "status": status,
             "timestamp": msg.timestamp,
-            "operator_type": msg.payload.get("operator_type", ""),
-            "min_parallelism": msg.payload.get("min_parallelism", 1),
-            "max_parallelism": msg.payload.get("max_parallelism", 1),
+            "operator_type": msg.payload.get("operator_type", existing_data.get("operator_type", "")),
+            "min_parallelism": msg.payload.get("min_parallelism", existing_data.get("min_parallelism", 1)),
+            "max_parallelism": msg.payload.get("max_parallelism", existing_data.get("max_parallelism", 1)),
         }
+        
+        # Preserve start_time from existing data if this is a completion event
         if status == "COMPLETED":
             data["end_time"] = msg.timestamp
+            if "start_time" in existing_data:
+                data["start_time"] = existing_data["start_time"]
         else:
             data["start_time"] = msg.timestamp
 
