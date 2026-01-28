@@ -115,8 +115,7 @@ jobs:
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
       run: |
         cd lib/raydp
-        uv pip install build
-        uv run python -m build --wheel
+        uvx build --wheel
         echo "Built wheel:"
         ls -la dist/
     
@@ -160,15 +159,17 @@ jobs:
       with:
         workspaces: "lib/tansu-py -> target"
     
-    - name: Install maturin
+    - name: Install uv
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
-      run: pip install maturin
+      uses: astral-sh/setup-uv@v4
+      with:
+        version: "latest"
     
     - name: Build tansu-py wheel
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
       run: |
         cd lib/tansu-py
-        maturin build --release
+        uvx maturin build --release
         echo "Built wheel:"
         ls -la target/wheels/
     
@@ -248,9 +249,8 @@ jobs:
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
       run: |
         cd solstice
-        # CI mode: use --no-sources to skip editable builds, install pre-built wheels
-        uv sync --dev --no-sources
-        uv pip install /tmp/tansu-py-wheels/*.whl
+        # CI mode: use pre-built wheels via --find-links, skip editable sources
+        uv sync --dev --no-sources --find-links /tmp/tansu-py-wheels/
         uv run ruff check solstice/
         uv run ruff format --check solstice/
     
@@ -373,9 +373,8 @@ jobs:
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
       run: |
         cd solstice
-        # CI mode: use --no-sources to skip editable builds, install pre-built wheels
-        uv sync --dev --python 3.12 --no-sources
-        uv pip install /tmp/tansu-py-wheels/*.whl
+        # CI mode: use pre-built wheels via --find-links, skip editable sources
+        uv sync --dev --python 3.12 --no-sources --find-links /tmp/tansu-py-wheels/
     
     - name: Run unit tests
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
@@ -477,9 +476,8 @@ jobs:
     - name: Install dependencies
       run: |
         cd solstice
-        # CI mode: use --no-sources to skip editable builds, install pre-built wheels
-        uv sync --dev --python 3.12 --no-sources
-        uv pip install /tmp/tansu-py-wheels/*.whl /tmp/raydp-wheels/*.whl
+        # CI mode: use pre-built wheels via --find-links, skip editable sources
+        uv sync --dev --python 3.12 --no-sources --find-links /tmp/tansu-py-wheels/ --find-links /tmp/raydp-wheels/
     
     - name: Run integration tests
       run: |
@@ -556,9 +554,8 @@ jobs:
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
       run: |
         cd solstice
-        # CI mode: use --no-sources to skip editable builds, install pre-built wheels
-        uv sync --dev --python 3.12 --no-sources
-        uv pip install /tmp/tansu-py-wheels/*.whl
+        # CI mode: use pre-built wheels via --find-links, skip editable sources
+        uv sync --dev --python 3.12 --no-sources --find-links /tmp/tansu-py-wheels/
     
     - name: Run distributed tests
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
@@ -630,9 +627,8 @@ jobs:
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
       run: |
         cd solstice
-        # CI mode: use --no-sources to skip editable builds, install pre-built wheels
-        uv sync --dev --python 3.12 --no-sources
-        uv pip install /tmp/tansu-py-wheels/*.whl
+        # CI mode: use pre-built wheels via --find-links, skip editable sources
+        uv sync --dev --python 3.12 --no-sources --find-links /tmp/tansu-py-wheels/
     
     - name: Run stability tests
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
@@ -724,9 +720,8 @@ jobs:
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
       run: |
         cd solstice
-        # CI mode: use --no-sources to skip editable builds, install pre-built wheels
-        uv sync --dev --python 3.12 --no-sources
-        uv pip install /tmp/tansu-py-wheels/*.whl
+        # CI mode: use pre-built wheels via --find-links, skip editable sources
+        uv sync --dev --python 3.12 --no-sources --find-links /tmp/tansu-py-wheels/
     
     - name: Run workflow tests
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
@@ -807,10 +802,9 @@ jobs:
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
       run: |
         cd solstice
-        # CI mode: use --no-sources to skip editable builds, install pre-built wheels
-        uv sync --dev --python 3.12 --no-sources
-        uv pip install /tmp/tansu-py-wheels/*.whl
-    
+        # CI mode: use pre-built wheels via --find-links, skip editable sources
+        uv sync --dev --python 3.12 --no-sources --find-links /tmp/tansu-py-wheels/
+
     - name: Run chaos tests
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
       run: |
