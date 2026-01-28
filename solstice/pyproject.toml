@@ -67,6 +67,8 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.dynamic]
 dependencies = {file = ["requirements.txt"]}
 
+# Local development: editable sources for tansu-py and raydp
+# CI uses `uv sync --no-sources` to skip these and install pre-built wheels instead
 [tool.uv.sources]
 tansu-py = { path = "../lib/tansu-py", editable = true }
 raydp = { path = "../lib/raydp", editable = true }
