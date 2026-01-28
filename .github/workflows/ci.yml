@@ -373,7 +373,7 @@ jobs:
     name: Solstice Integration Tests
     runs-on: ubuntu-latest
     needs: [build-raydp, build-tansu-py]
-    if: always() && !cancelled() && (needs.build-raydp.outputs.should_run == 'true' || needs.build-tansu-py.outputs.should_run == 'true')
+    if: always() && !cancelled()
     
     steps:
     - name: Free up disk space
