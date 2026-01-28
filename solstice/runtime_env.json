@@ -27,8 +27,7 @@
     "fastapi",
     "sse-starlette",
     "jinja2",
-    "prometheus-client",
-    "ray[serve]"
+    "prometheus-client"
   ],
   "env_vars": {
     "AWS_DEFAULT_REGION": "ap-southeast-2",

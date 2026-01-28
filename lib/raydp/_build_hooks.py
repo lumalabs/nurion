@@ -44,6 +44,12 @@ class BuildWithJars(_build_py):
 
     def setup_jars(self):
         """Set up JAR files for packaging."""
+        # Check if JAR files already exist in jars/ directory (from sdist)
+        existing_jars_in_target = glob.glob(os.path.join(JARS_TARGET, "raydp-*.jar"))
+        if existing_jars_in_target:
+            print(f"Found existing JAR files in {JARS_TARGET}, skipping build: {existing_jars_in_target}")
+            return
+
         # Java directory is a subdirectory of the raydp package
         CORE_DIR = os.path.abspath(
             os.path.join(os.path.dirname(os.path.abspath(__file__)), "java")
@@ -91,6 +97,14 @@ class BuildWithJars(_build_py):
 
     def build_jars(self, core_dir):
         """Build JAR files using Maven."""
+        # Check if JAR files already exist in target directories
+        existing_jars = glob.glob(
+            os.path.join(core_dir, "**/target/raydp-*.jar"), recursive=True
+        )
+        if existing_jars:
+            print(f"Found existing JAR files, skipping Maven build: {existing_jars}")
+            return
+
         # Check if Maven is available
         try:
             subprocess.run(["mvn", "--version"], check=True, capture_output=True)
@@ -105,11 +119,12 @@ class BuildWithJars(_build_py):
 
         try:
             # Change to core directory and run Maven build
+            # Use 'package' without 'clean' to avoid rebuilding if already built
             os.chdir(core_dir)
-            print("Running: mvn clean package -DskipTests")
+            print("Running: mvn package -DskipTests")
 
             subprocess.run(
-                ["mvn", "clean", "package", "-DskipTests"],
+                ["mvn", "package", "-DskipTests"],
                 check=True,
                 capture_output=False,  # Let Maven output be visible
             )
