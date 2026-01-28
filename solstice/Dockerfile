@@ -102,7 +102,7 @@ RUN cd /app/build/raydp && \
 RUN python -c "import ray; print(f'Ray: {ray.__version__}')" && \
     python -c "import tansu_py; print('tansu_py: OK')" && \
     python -c "import pyarrow; print(f'PyArrow: {pyarrow.__version__}')" && \
-    python -c "import raydp; print(f'RayDP: {raydp.__version__}')" && \
+    python -c "import raydp; print('raydp: OK')" && \
     ffmpeg -version | head -1 && \
     java -version 2>&1 | head -1 
 
