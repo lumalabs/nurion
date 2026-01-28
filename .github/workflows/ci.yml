@@ -189,7 +189,7 @@ jobs:
     name: Code Quality Check
     runs-on: ubuntu-latest
     needs: [build-tansu-py]
-    if: always() && !cancelled()
+    if: always() && !cancelled() && needs.build-tansu-py.outputs.should_run == 'true'
     
     steps:
     - uses: actions/checkout@v4
@@ -330,7 +330,7 @@ jobs:
     name: Solstice Unit Tests
     runs-on: ubuntu-latest
     needs: [build-tansu-py]
-    if: always() && !cancelled()
+    if: always() && !cancelled() && needs.build-tansu-py.outputs.should_run == 'true'
     
     steps:
     - uses: actions/checkout@v4
@@ -511,7 +511,7 @@ jobs:
     name: Solstice Distributed Tests
     runs-on: ubuntu-latest
     needs: [build-tansu-py]
-    if: always() && !cancelled()
+    if: always() && !cancelled() && needs.build-tansu-py.outputs.should_run == 'true'
     
     steps:
     - uses: actions/checkout@v4
@@ -584,7 +584,7 @@ jobs:
     name: Solstice Stability Tests
     runs-on: ubuntu-latest
     needs: [build-tansu-py]
-    if: always() && !cancelled()
+    if: always() && !cancelled() && needs.build-tansu-py.outputs.should_run == 'true'
     
     steps:
     - uses: actions/checkout@v4
@@ -657,7 +657,7 @@ jobs:
     name: Solstice Workflow Tests
     runs-on: ubuntu-latest
     needs: [build-tansu-py]
-    if: always() && !cancelled()
+    if: always() && !cancelled() && needs.build-tansu-py.outputs.should_run == 'true'
     # Workflow tests are slow - doesn't block PR merge
     continue-on-error: true
     
@@ -757,7 +757,7 @@ jobs:
     name: Solstice Chaos Tests
     runs-on: ubuntu-latest
     needs: [build-tansu-py]
-    if: always() && !cancelled()
+    if: always() && !cancelled() && needs.build-tansu-py.outputs.should_run == 'true'
     # Chaos tests are experimental and may be flaky - doesn't block PR merge
     continue-on-error: true
     
