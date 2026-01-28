@@ -1,0 +1,43 @@
+# Rust build artifacts
+**/target/
+**/*.rs.bk
+
+# Python cache
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.egg-info/
+**/.eggs/
+**/dist/
+**/build/
+**/*.whl
+
+# Pre-built JARs (will be rebuilt in Docker)
+lib/raydp/jars/*.jar
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Node
+**/node_modules/
+
+# Test and docs
+**/tests/
+**/*.md
+**/docs/
+
+# Virtual environments
+**/.venv/
+**/venv/
+**/.env
+
+# OS files
+.DS_Store
+Thumbs.db

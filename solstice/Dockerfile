@@ -12,6 +12,10 @@ FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+# Use mirrors to avoid network issues with archive.ubuntu.com
+RUN sed -i 's|http://archive.ubuntu.com|http://mirrors.edge.kernel.org|g' /etc/apt/sources.list.d/ubuntu.sources && \
+    sed -i 's|http://security.ubuntu.com|http://mirrors.edge.kernel.org|g' /etc/apt/sources.list.d/ubuntu.sources
+
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     # Basic tools
@@ -24,6 +28,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     # Build dependencies for Rust packages
     build-essential pkg-config libssl-dev \
+    # Network debugging tools
+    net-tools iproute2 iputils-ping dnsutils tcpdump netcat-openbsd \
+    # System monitoring tools
+    htop sysstat strace lsof procps \
     && rm -rf /var/lib/apt/lists/*
 
 # Setup Python alternatives and remove externally-managed marker
@@ -39,10 +47,25 @@ ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
 ENV PATH="/root/.local/bin:${JAVA_HOME}/bin:${PATH}"
 
 WORKDIR /app
+# Install Python runtime dependencies (minimal set for Ray + data processing)
+RUN uv pip install --system --no-cache \
+    "ray[all]>=2.52.0" \
+    pyspark==3.5.6 \
+    pyarrow>=18.1.0 \
+    pandas>=2.0.0 \
+    click>=8.1.7 \
+    "fsspec[s3]>=2024.6.0" \
+    pylance>=0.38.0 \
+    s3fs>=2024.6.0 \
+    confluent-kafka>=2.3.0 \
+    # Python profiling and monitoring tools
+    py-spy \
+    memray \
+    psutil
 
-# Copy only what's needed for building (tansu-py and java from lib/)
+# Copy only what's needed for building (tansu-py and raydp from lib/)
 COPY lib/tansu-py /app/build/tansu-py
-COPY lib/raydp/java /app/build/java
+COPY lib/raydp /app/build/raydp
 
 # Install Rust, build tansu-py, then cleanup Rust completely (all in one layer)
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && \
@@ -56,21 +79,6 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && \
     rm -rf /root/.cargo && \
     rm -rf /root/.rustup
 
-# Build RayDP JARs, then cleanup Maven artifacts (all in one layer)
-RUN cd /app/build/java && \
-    mvn clean package -DskipTests -q && \
-    mkdir -p /app/lib/raydp/jars && \
-    cp raydp-main/target/raydp-*.jar /app/lib/raydp/jars/ && \
-    cp shims/common/target/raydp-shims-*.jar /app/lib/raydp/jars/ && \
-    cp shims/spark340/target/raydp-shims-*.jar /app/lib/raydp/jars/ && \
-    cp shims/spark350/target/raydp-shims-*.jar /app/lib/raydp/jars/ && \
-    # Cleanup Maven build and source
-    rm -rf /app/build && \
-    rm -rf /root/.m2
-
-# Install pyspark
-RUN uv pip install --system --no-cache "pyspark==3.5.6"
-
 # Download extra JARs for Spark S3/Lance support
 ENV M=https://repo1.maven.org/maven2
 RUN PYSPARK_JARS=$(python -c "import pyspark; print(pyspark.__path__[0])")/jars && \
@@ -81,21 +89,20 @@ RUN PYSPARK_JARS=$(python -c "import pyspark; print(pyspark.__path__[0])")/jars 
          ${M}/org/lance/lance-spark-bundle-3.5_2.12/0.1.3-beta.7/lance-spark-bundle-3.5_2.12-0.1.3-beta.7.jar \
          -P ${PYSPARK_JARS}/
 
-# Install Python runtime dependencies (minimal set for Ray + data processing)
-RUN uv pip install --system --no-cache \
-    "ray[all]>=2.52.0" \
-    pyarrow>=18.1.0 \
-    pandas>=2.0.0 \
-    click>=8.1.7 \
-    "fsspec[s3]>=2024.6.0" \
-    pylance>=0.38.0 \
-    s3fs>=2024.6.0 \
-    confluent-kafka>=2.3.0
+# Build and install RayDP (uv build will automatically run Maven via _build_hooks.py)
+RUN cd /app/build/raydp && \
+    uv build && \
+    uv pip install --system --no-cache dist/*.whl && \
+    # Cleanup build artifacts
+    rm -rf /app/build && \
+    rm -rf /root/.m2
+
 
 # Verify installations and remove build dependencies
 RUN python -c "import ray; print(f'Ray: {ray.__version__}')" && \
     python -c "import tansu_py; print('tansu_py: OK')" && \
     python -c "import pyarrow; print(f'PyArrow: {pyarrow.__version__}')" && \
+    python -c "import raydp; print(f'RayDP: {raydp.__version__}')" && \
     ffmpeg -version | head -1 && \
     java -version 2>&1 | head -1 
 
