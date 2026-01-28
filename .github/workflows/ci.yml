@@ -115,7 +115,7 @@ jobs:
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
       run: |
         cd lib/raydp
-        uvx build --wheel
+        uvx --from build pyproject-build --wheel
         echo "Built wheel:"
         ls -la dist/
     
@@ -228,9 +228,9 @@ jobs:
         enable-cache: true
         cache-dependency-glob: "uv.lock"
     
-    - name: Set up Python 3.13
+    - name: Set up Python 3.12
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
-      run: uv python install 3.13
+      run: uv python install 3.12
     
     - name: Check license headers
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
@@ -241,18 +241,18 @@ jobs:
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
       run: |
         cd aether
-        uv sync --dev
-        uv run ruff check .
-        uv run ruff format --check .
+        uv sync --dev --python 3.12
+        uv run --no-sync ruff check .
+        uv run --no-sync ruff format --check .
 
     - name: Check solstice
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
       run: |
         cd solstice
         # CI mode: use pre-built wheels via --find-links, skip editable sources
-        uv sync --dev --no-sources --find-links /tmp/tansu-py-wheels/
-        uv run ruff check solstice/
-        uv run ruff format --check solstice/
+        uv sync --dev --python 3.12 --no-sources --find-links /tmp/tansu-py-wheels/
+        uv run --no-sync ruff check solstice/
+        uv run --no-sync ruff format --check solstice/
     
     - name: Type check solstice (mypy)
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
@@ -260,10 +260,10 @@ jobs:
       continue-on-error: true
       run: |
         cd solstice
-        uv run mypy solstice/ || echo "::warning::mypy found type errors (see above)"
+        uv run --no-sync mypy solstice/ || echo "::warning::mypy found type errors (see above)"
 
   # ============================================================================
-  # Aether tests (Python 3.13, no Rust/Java dependencies)
+  # Aether tests (Python 3.12, no Rust/Java dependencies)
   # ============================================================================
 
   test-aether:
@@ -297,9 +297,9 @@ jobs:
         enable-cache: true
         cache-dependency-glob: "uv.lock"
     
-    - name: Set up Python 3.13
+    - name: Set up Python 3.12
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
-      run: uv python install 3.13
+      run: uv python install 3.12
     
     - name: Install dependencies
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
@@ -311,7 +311,7 @@ jobs:
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
       run: |
         cd aether
-        uv run pytest tests/ -v
+        uv run --no-sync pytest tests/ -v
     
     - name: Upload coverage to Codecov
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
@@ -380,7 +380,7 @@ jobs:
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
       run: |
         cd solstice
-        uv run pytest tests/ -v --tb=short -m "not integration and not distributed and not workflow and not chaos and not stability"
+        uv run --no-sync pytest tests/ -v --tb=short -m "not integration and not distributed and not workflow and not chaos and not stability"
     
     - name: Print Ray logs on failure
       if: failure()
@@ -482,7 +482,7 @@ jobs:
     - name: Run integration tests
       run: |
         cd solstice
-        uv run pytest tests/ -v --tb=short -m "integration"
+        uv run --no-sync pytest tests/ -v --tb=short -m "integration"
     
     - name: Print Ray logs on failure
       if: failure()
@@ -561,7 +561,7 @@ jobs:
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
       run: |
         cd solstice
-        uv run pytest tests/ -v --tb=short -m "distributed"
+        uv run --no-sync pytest tests/ -v --tb=short -m "distributed"
     
     - name: Print Ray logs on failure
       if: failure()
@@ -634,7 +634,7 @@ jobs:
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
       run: |
         cd solstice
-        uv run pytest tests/ -v --tb=short -m "stability" --timeout=1200
+        uv run --no-sync pytest tests/ -v --tb=short -m "stability" --timeout=1200
     
     - name: Print Ray logs on failure
       if: failure()
@@ -727,7 +727,7 @@ jobs:
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
       run: |
         cd solstice
-        uv run pytest tests/ -v --tb=short -m "workflow" --timeout=1200
+        uv run --no-sync pytest tests/ -v --tb=short -m "workflow" --timeout=1200
     
     - name: Print Ray logs on failure
       if: failure()
@@ -809,7 +809,7 @@ jobs:
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
       run: |
         cd solstice
-        uv run pytest tests/ -v --tb=short -m "chaos" --timeout=600
+        uv run --no-sync pytest tests/ -v --tb=short -m "chaos" --timeout=600
     
     - name: Print Ray logs on failure
       if: failure()
