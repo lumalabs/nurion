@@ -71,11 +71,11 @@ jobs:
       uses: tj-actions/changed-files@v45
       with:
         files: |
-          solstice/**
+          lib/raydp/java/**
     
-    - name: Skip if no Solstice changes
+    - name: Skip if no Java changes
       if: steps.changed-files.outputs.any_changed == 'false' && github.event_name == 'pull_request'
-      run: echo "No Solstice files changed, skipping JAR build..."
+      run: echo "No RayDP Java files changed, skipping JAR build..."
     
     - name: Set up Java 11
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
@@ -84,29 +84,81 @@ jobs:
         distribution: 'temurin'
         java-version: '11'
         cache: 'maven'
-        cache-dependency-path: 'solstice/java/pom.xml'
+        cache-dependency-path: 'lib/raydp/java/pom.xml'
     
     - name: Build raydp JARs
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
       run: |
-        cd solstice/java
+        cd lib/raydp/java
         mvn clean package -DskipTests -q
         
-        mkdir -p ../raydp/jars
-        cp raydp-main/target/raydp-1.7.0-SNAPSHOT.jar ../raydp/jars/
-        cp shims/common/target/raydp-shims-common-1.7.0-SNAPSHOT.jar ../raydp/jars/
-        cp shims/spark340/target/raydp-shims-spark340-1.7.0-SNAPSHOT.jar ../raydp/jars/
-        cp shims/spark350/target/raydp-shims-spark350-1.7.0-SNAPSHOT.jar ../raydp/jars/
+        mkdir -p ../jars
+        cp raydp-main/target/raydp-1.7.0-SNAPSHOT.jar ../jars/
+        cp shims/common/target/raydp-shims-common-1.7.0-SNAPSHOT.jar ../jars/
+        cp shims/spark340/target/raydp-shims-spark340-1.7.0-SNAPSHOT.jar ../jars/
+        cp shims/spark350/target/raydp-shims-spark350-1.7.0-SNAPSHOT.jar ../jars/
         
         echo "Built JARs:"
-        ls -la ../raydp/jars/
+        ls -la ../jars/
     
     - name: Upload JARs artifact
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
       uses: actions/upload-artifact@v4
       with:
         name: raydp-jars
-        path: solstice/raydp/jars/
+        path: lib/raydp/jars/
+        retention-days: 1
+
+  build-tansu-py:
+    name: Build tansu-py Wheel
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push' }}
+    
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Get changed files
+      id: changed-files
+      uses: tj-actions/changed-files@v45
+      with:
+        files: |
+          lib/tansu-py/**
+    
+    - name: Skip if no tansu-py changes
+      if: steps.changed-files.outputs.any_changed == 'false' && github.event_name == 'pull_request'
+      run: echo "No tansu-py files changed, skipping wheel build..."
+    
+    - name: Set up Rust
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      uses: dtolnay/rust-toolchain@stable
+    
+    - name: Rust cache
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: "lib/tansu-py -> target"
+    
+    - name: Install maturin
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      run: pip install maturin
+    
+    - name: Build tansu-py wheel
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      run: |
+        cd lib/tansu-py
+        maturin build --release
+        echo "Built wheel:"
+        ls -la target/wheels/
+    
+    - name: Upload wheel artifact
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      uses: actions/upload-artifact@v4
+      with:
+        name: tansu-py-wheel
+        path: lib/tansu-py/target/wheels/*.whl
         retention-days: 1
 
   # ============================================================================
@@ -129,6 +181,7 @@ jobs:
         files: |
           aether/**
           solstice/**
+          lib/**
           scripts/**
           pyproject.toml
           uv.lock
@@ -170,7 +223,7 @@ jobs:
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
       uses: Swatinem/rust-cache@v2
       with:
-        workspaces: "solstice/tansu-py -> target"
+        workspaces: "lib/tansu-py -> target"
 
     - name: Check solstice
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
@@ -255,6 +308,8 @@ jobs:
   test-solstice-unit:
     name: Solstice Unit Tests
     runs-on: ubuntu-latest
+    needs: [build-tansu-py]
+    if: always() && !cancelled()
     
     steps:
     - uses: actions/checkout@v4
@@ -267,20 +322,29 @@ jobs:
       with:
         files: |
           solstice/**
+          lib/**
     
-    - name: Skip if no Solstice changes
+    - name: Skip if no Solstice/lib changes
       if: steps.changed-files.outputs.any_changed == 'false' && github.event_name == 'pull_request'
-      run: echo "No Solstice files changed, skipping..."
+      run: echo "No Solstice/lib files changed, skipping..."
     
-    - name: Set up Rust
+    - name: Download tansu-py wheel
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      uses: actions/download-artifact@v4
+      with:
+        name: tansu-py-wheel
+        path: /tmp/tansu-py-wheels/
+      continue-on-error: true
+    
+    - name: Set up Rust (only if no pre-built wheel)
+      if: (steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push') && needs.build-tansu-py.outputs.should_run != 'true'
       uses: dtolnay/rust-toolchain@stable
     
-    - name: Rust cache
-      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+    - name: Rust cache (only if no pre-built wheel)
+      if: (steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push') && needs.build-tansu-py.outputs.should_run != 'true'
       uses: Swatinem/rust-cache@v2
       with:
-        workspaces: "solstice/tansu-py -> target"
+        workspaces: "lib/tansu-py -> target"
     
     - name: Install uv
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
@@ -298,6 +362,11 @@ jobs:
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
       run: |
         cd solstice
+        # If pre-built wheel exists, install it first to skip Rust compilation
+        if ls /tmp/tansu-py-wheels/*.whl 1>/dev/null 2>&1; then
+          echo "Using pre-built tansu-py wheel"
+          uv pip install /tmp/tansu-py-wheels/*.whl
+        fi
         uv sync --dev --python 3.12
     
     - name: Run unit tests
@@ -326,8 +395,8 @@ jobs:
   test-solstice-integration:
     name: Solstice Integration Tests
     runs-on: ubuntu-latest
-    needs: [build-raydp-jars]
-    if: needs.build-raydp-jars.outputs.should_run == 'true'
+    needs: [build-raydp-jars, build-tansu-py]
+    if: always() && !cancelled() && (needs.build-raydp-jars.outputs.should_run == 'true' || needs.build-tansu-py.outputs.should_run == 'true')
     
     steps:
     - name: Free up disk space
@@ -350,20 +419,30 @@ jobs:
       uses: actions/download-artifact@v4
       with:
         name: raydp-jars
-        path: solstice/raydp/jars/
+        path: lib/raydp/jars/
+      continue-on-error: true
     
     - name: Verify JARs
       run: |
         echo "Downloaded JARs:"
-        ls -la solstice/raydp/jars/
+        ls -la lib/raydp/jars/ || echo "No JARs downloaded"
     
-    - name: Set up Rust
+    - name: Download tansu-py wheel
+      uses: actions/download-artifact@v4
+      with:
+        name: tansu-py-wheel
+        path: /tmp/tansu-py-wheels/
+      continue-on-error: true
+    
+    - name: Set up Rust (only if no pre-built wheel)
+      if: needs.build-tansu-py.outputs.should_run != 'true'
       uses: dtolnay/rust-toolchain@stable
     
-    - name: Rust cache
+    - name: Rust cache (only if no pre-built wheel)
+      if: needs.build-tansu-py.outputs.should_run != 'true'
       uses: Swatinem/rust-cache@v2
       with:
-        workspaces: "solstice/tansu-py -> target"
+        workspaces: "lib/tansu-py -> target"
     
     - name: Set up Java 11
       uses: actions/setup-java@v4
@@ -405,6 +484,10 @@ jobs:
     - name: Install dependencies
       run: |
         cd solstice
+        if ls /tmp/tansu-py-wheels/*.whl 1>/dev/null 2>&1; then
+          echo "Using pre-built tansu-py wheel"
+          uv pip install /tmp/tansu-py-wheels/*.whl
+        fi
         uv sync --dev --python 3.12
     
     - name: Run integration tests
@@ -438,6 +521,8 @@ jobs:
   test-solstice-distributed:
     name: Solstice Distributed Tests
     runs-on: ubuntu-latest
+    needs: [build-tansu-py]
+    if: always() && !cancelled()
     
     steps:
     - uses: actions/checkout@v4
@@ -450,20 +535,29 @@ jobs:
       with:
         files: |
           solstice/**
+          lib/**
     
-    - name: Skip if no Solstice changes
+    - name: Skip if no Solstice/lib changes
       if: steps.changed-files.outputs.any_changed == 'false' && github.event_name == 'pull_request'
-      run: echo "No Solstice files changed, skipping..."
+      run: echo "No Solstice/lib files changed, skipping..."
     
-    - name: Set up Rust
+    - name: Download tansu-py wheel
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      uses: actions/download-artifact@v4
+      with:
+        name: tansu-py-wheel
+        path: /tmp/tansu-py-wheels/
+      continue-on-error: true
+    
+    - name: Set up Rust (only if no pre-built wheel)
+      if: (steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push') && needs.build-tansu-py.outputs.should_run != 'true'
       uses: dtolnay/rust-toolchain@stable
     
-    - name: Rust cache
-      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+    - name: Rust cache (only if no pre-built wheel)
+      if: (steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push') && needs.build-tansu-py.outputs.should_run != 'true'
       uses: Swatinem/rust-cache@v2
       with:
-        workspaces: "solstice/tansu-py -> target"
+        workspaces: "lib/tansu-py -> target"
     
     - name: Install uv
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
@@ -481,6 +575,10 @@ jobs:
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
       run: |
         cd solstice
+        if ls /tmp/tansu-py-wheels/*.whl 1>/dev/null 2>&1; then
+          echo "Using pre-built tansu-py wheel"
+          uv pip install /tmp/tansu-py-wheels/*.whl
+        fi
         uv sync --dev --python 3.12
     
     - name: Run distributed tests
@@ -509,6 +607,8 @@ jobs:
   test-solstice-stability:
     name: Solstice Stability Tests
     runs-on: ubuntu-latest
+    needs: [build-tansu-py]
+    if: always() && !cancelled()
     
     steps:
     - uses: actions/checkout@v4
@@ -521,20 +621,29 @@ jobs:
       with:
         files: |
           solstice/**
+          lib/**
     
-    - name: Skip if no Solstice changes
+    - name: Skip if no Solstice/lib changes
       if: steps.changed-files.outputs.any_changed == 'false' && github.event_name == 'pull_request'
-      run: echo "No Solstice files changed, skipping..."
+      run: echo "No Solstice/lib files changed, skipping..."
     
-    - name: Set up Rust
+    - name: Download tansu-py wheel
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      uses: actions/download-artifact@v4
+      with:
+        name: tansu-py-wheel
+        path: /tmp/tansu-py-wheels/
+      continue-on-error: true
+    
+    - name: Set up Rust (only if no pre-built wheel)
+      if: (steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push') && needs.build-tansu-py.outputs.should_run != 'true'
       uses: dtolnay/rust-toolchain@stable
     
-    - name: Rust cache
-      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+    - name: Rust cache (only if no pre-built wheel)
+      if: (steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push') && needs.build-tansu-py.outputs.should_run != 'true'
       uses: Swatinem/rust-cache@v2
       with:
-        workspaces: "solstice/tansu-py -> target"
+        workspaces: "lib/tansu-py -> target"
     
     - name: Install uv
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
@@ -552,6 +661,10 @@ jobs:
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
       run: |
         cd solstice
+        if ls /tmp/tansu-py-wheels/*.whl 1>/dev/null 2>&1; then
+          echo "Using pre-built tansu-py wheel"
+          uv pip install /tmp/tansu-py-wheels/*.whl
+        fi
         uv sync --dev --python 3.12
     
     - name: Run stability tests
@@ -580,6 +693,8 @@ jobs:
   test-solstice-workflow:
     name: Solstice Workflow Tests
     runs-on: ubuntu-latest
+    needs: [build-tansu-py]
+    if: always() && !cancelled()
     # Workflow tests are slow - doesn't block PR merge
     continue-on-error: true
     
@@ -606,10 +721,11 @@ jobs:
       with:
         files: |
           solstice/**
+          lib/**
     
-    - name: Skip if no Solstice changes
+    - name: Skip if no Solstice/lib changes
       if: steps.changed-files.outputs.any_changed == 'false' && github.event_name == 'pull_request'
-      run: echo "No Solstice files changed, skipping..."
+      run: echo "No Solstice/lib files changed, skipping..."
     
     - name: Install system dependencies
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
@@ -617,15 +733,23 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y ffmpeg
     
-    - name: Set up Rust
+    - name: Download tansu-py wheel
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      uses: actions/download-artifact@v4
+      with:
+        name: tansu-py-wheel
+        path: /tmp/tansu-py-wheels/
+      continue-on-error: true
+    
+    - name: Set up Rust (only if no pre-built wheel)
+      if: (steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push') && needs.build-tansu-py.outputs.should_run != 'true'
       uses: dtolnay/rust-toolchain@stable
     
-    - name: Rust cache
-      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+    - name: Rust cache (only if no pre-built wheel)
+      if: (steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push') && needs.build-tansu-py.outputs.should_run != 'true'
       uses: Swatinem/rust-cache@v2
       with:
-        workspaces: "solstice/tansu-py -> target"
+        workspaces: "lib/tansu-py -> target"
     
     - name: Install uv
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
@@ -643,6 +767,10 @@ jobs:
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
       run: |
         cd solstice
+        if ls /tmp/tansu-py-wheels/*.whl 1>/dev/null 2>&1; then
+          echo "Using pre-built tansu-py wheel"
+          uv pip install /tmp/tansu-py-wheels/*.whl
+        fi
         uv sync --dev --python 3.12
     
     - name: Run workflow tests
@@ -678,6 +806,8 @@ jobs:
   test-solstice-chaos:
     name: Solstice Chaos Tests
     runs-on: ubuntu-latest
+    needs: [build-tansu-py]
+    if: always() && !cancelled()
     # Chaos tests are experimental and may be flaky - doesn't block PR merge
     continue-on-error: true
     
@@ -692,20 +822,29 @@ jobs:
       with:
         files: |
           solstice/**
+          lib/**
     
-    - name: Skip if no Solstice changes
+    - name: Skip if no Solstice/lib changes
       if: steps.changed-files.outputs.any_changed == 'false' && github.event_name == 'pull_request'
-      run: echo "No Solstice files changed, skipping..."
+      run: echo "No Solstice/lib files changed, skipping..."
     
-    - name: Set up Rust
+    - name: Download tansu-py wheel
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      uses: actions/download-artifact@v4
+      with:
+        name: tansu-py-wheel
+        path: /tmp/tansu-py-wheels/
+      continue-on-error: true
+    
+    - name: Set up Rust (only if no pre-built wheel)
+      if: (steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push') && needs.build-tansu-py.outputs.should_run != 'true'
       uses: dtolnay/rust-toolchain@stable
     
-    - name: Rust cache
-      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+    - name: Rust cache (only if no pre-built wheel)
+      if: (steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push') && needs.build-tansu-py.outputs.should_run != 'true'
       uses: Swatinem/rust-cache@v2
       with:
-        workspaces: "solstice/tansu-py -> target"
+        workspaces: "lib/tansu-py -> target"
     
     - name: Install uv
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
@@ -723,6 +862,10 @@ jobs:
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
       run: |
         cd solstice
+        if ls /tmp/tansu-py-wheels/*.whl 1>/dev/null 2>&1; then
+          echo "Using pre-built tansu-py wheel"
+          uv pip install /tmp/tansu-py-wheels/*.whl
+        fi
         uv sync --dev --python 3.12
     
     - name: Run chaos tests
