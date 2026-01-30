@@ -341,6 +341,11 @@ class SourceMaster(StageMaster):
             f"Source {self.stage_id} sent EOF marker to {source_partitions} partition(s)"
         )
 
+        # Notify worker manager that upstream is finished
+        # This allows workers (including recovered workers) to exit after consuming all splits
+        if self._worker_manager:
+            await self._worker_manager.notify_upstream_finished()
+
     async def _produce_eof_with_retry(self, eof_message: "QueueMessage", partition: int) -> None:
         """Produce EOF message with retry logic."""
 

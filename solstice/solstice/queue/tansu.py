@@ -528,10 +528,7 @@ class TansuQueueClient:
         """Get latest offsets for all partitions of a topic.
 
         Returns:
-            Dict mapping partition id to latest offset.
-            Note: This method returns partition count info, not actual offsets.
-            The offsets are set to 0 as placeholders since we only need
-            the partition count for worker assignment.
+            Dict mapping partition id to latest offset (high watermark).
 
         Raises:
             ValueError: If admin client is not initialized or topic not found.
@@ -552,9 +549,20 @@ class TansuQueueClient:
             f"Topic {topic} has {len(partition_ids)} partitions from admin metadata"
         )
 
-        # Return partition IDs with offset 0 as placeholder
-        # We only need the partition count, not actual offsets
-        return {p: 0 for p in partition_ids}
+        # Get actual watermark offsets for each partition
+        # This is required for backpressure monitoring (lag calculation)
+        consumer = self._get_consumer(topic, partition=0)
+        result: Dict[int, int] = {}
+        for partition_id in partition_ids:
+            tp = TopicPartition(topic, partition_id)
+            try:
+                low, high = consumer.get_watermark_offsets(tp, timeout=10.0)
+                result[partition_id] = high
+            except Exception as e:
+                self.logger.warning(f"Failed to get watermark for partition {partition_id}: {e}")
+                result[partition_id] = 0
+
+        return result
 
     # -------------------------------------------------------------------------
     # Internal Methods

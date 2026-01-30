@@ -355,6 +355,14 @@ class StageMaster:
                             partition_count=partition_count,
                         )
 
+                        if result.should_give_up:
+                            self._failed = True
+                            self._failure_message = result.give_up_reason
+                            self.logger.error(
+                                f"Stage {self.stage_id} giving up on pending partitions: {result.give_up_reason}"
+                            )
+                            break
+
                 if self._failed:
                     break
 
