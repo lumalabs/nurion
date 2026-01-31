@@ -176,10 +176,11 @@ class WorkerManager:
 
         # Use explicit partitions if provided (recovery), otherwise compute
         if explicit_partitions is not None:
-            assigned_partitions = explicit_partitions
-            # Register in partition manager
+            assigned_partitions = []
+            # Register in partition manager, only include successfully assigned partitions
             for p in explicit_partitions:
-                self._partition_manager.assign_orphaned_partition(worker_id, p)
+                if self._partition_manager.assign_orphaned_partition(worker_id, p):
+                    assigned_partitions.append(p)
         else:
             assigned_partitions = self._partition_manager.assign_worker(
                 worker_id=worker_id,
