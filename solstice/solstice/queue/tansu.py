@@ -548,9 +548,7 @@ class TansuQueueClient:
         topic_metadata = metadata.topics[topic]
         partition_ids = list(topic_metadata.partitions.keys())
 
-        self.logger.debug(
-            f"Topic {topic} has {len(partition_ids)} partitions from admin metadata"
-        )
+        self.logger.debug(f"Topic {topic} has {len(partition_ids)} partitions from admin metadata")
 
         # Return partition IDs with offset 0 as placeholder
         # We only need the partition count, not actual offsets

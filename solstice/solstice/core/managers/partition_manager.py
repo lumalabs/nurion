@@ -126,8 +126,7 @@ class PartitionManager:
             offsets = queue.get_all_partition_offsets(upstream_topic)
             self._upstream_partition_count = max(1, len(offsets))
             self._logger.debug(
-                f"Upstream topic {upstream_topic} has "
-                f"{self._upstream_partition_count} partition(s)"
+                f"Upstream topic {upstream_topic} has {self._upstream_partition_count} partition(s)"
             )
         except Exception as e:
             self._logger.warning(f"Failed to get upstream partition count: {e}")
