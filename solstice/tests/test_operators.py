@@ -22,7 +22,7 @@ import pytest
 import json
 
 from solstice.core.models import Record, Split, SplitPayload
-from solstice.core.operator import OperatorRuntime, SemanticGuarantee
+from solstice.core.operator import OperatorRuntime
 from solstice.operators.filter import FilterOperatorConfig
 from solstice.operators.map import (
     FlatMapOperatorConfig,
@@ -42,7 +42,6 @@ def make_runtime(
         job_id=job_id,
         stage_id=stage_id,
         worker_id=worker_id,
-        semantic_guarantee=SemanticGuarantee.AT_LEAST_ONCE,
     )
 
 

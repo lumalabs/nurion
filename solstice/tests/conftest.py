@@ -30,7 +30,7 @@ import pytest_asyncio
 import ray
 
 from solstice.core.split_payload_store import RaySplitPayloadStore
-from solstice.core.operator import OperatorRuntime, SemanticGuarantee
+from solstice.core.operator import OperatorRuntime
 from solstice.core.stage import StageRuntime
 from solstice.queue import (
     WorkQueueBrokerManager,
@@ -51,7 +51,6 @@ def make_operator_runtime(
     worker_id: str = "test_worker",
     job_id: str = "test_job",
     stage_id: str = "test_stage",
-    semantic_guarantee: SemanticGuarantee = SemanticGuarantee.AT_LEAST_ONCE,
 ) -> OperatorRuntime:
     """Create a test OperatorRuntime for unit tests.
 
@@ -62,13 +61,10 @@ def make_operator_runtime(
         job_id=job_id,
         stage_id=stage_id,
         worker_id=worker_id,
-        semantic_guarantee=semantic_guarantee,
     )
 
 
-def make_stage_runtime(
-    semantic_guarantee: SemanticGuarantee = SemanticGuarantee.AT_LEAST_ONCE,
-) -> StageRuntime:
+def make_stage_runtime() -> StageRuntime:
     """Create a test StageRuntime for unit tests.
 
     This helper simplifies creating StageRuntime instances in tests
@@ -78,7 +74,6 @@ def make_stage_runtime(
         broker_endpoint=None,
         upstream_queue_name=None,
         state_queue_name=None,
-        semantic_guarantee=semantic_guarantee,
     )
 
 

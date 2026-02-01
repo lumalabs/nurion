@@ -30,7 +30,7 @@ from solstice.core.stage_master import (
     StageMaster,
     QueueMessage,
 )
-from solstice.core.operator import OperatorConfig, Operator, OperatorRuntime, SemanticGuarantee
+from solstice.core.operator import OperatorConfig, Operator, OperatorRuntime
 from solstice.core.stage import StageRuntime
 
 # Note: Only async test classes/functions should use @pytest.mark.asyncio decorator
@@ -121,7 +121,6 @@ def stage_runtime():
         broker_endpoint=None,
         upstream_queue_name=None,
         state_queue_name=None,
-        semantic_guarantee=SemanticGuarantee.AT_LEAST_ONCE,
     )
 
 

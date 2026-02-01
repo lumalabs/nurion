@@ -162,7 +162,6 @@ class WorkerManager:
             worker_id=worker_id,
             job_id=self._job_id,
             stage_id=self._stage_id,
-            semantic_guarantee=self._runtime.semantic_guarantee,
             broker_endpoint=self._broker_endpoint,
             upstream_queue_name=self._upstream_queue_name,
             output_queue_name=self._output_queue_name,

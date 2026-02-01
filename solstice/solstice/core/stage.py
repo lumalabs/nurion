@@ -24,7 +24,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
 
-from solstice.core.operator import OperatorConfig, SemanticGuarantee
+from solstice.core.operator import OperatorConfig
 
 if TYPE_CHECKING:
     from solstice.core.models import QueueEndpoint
@@ -46,13 +46,11 @@ class StageRuntime:
         broker_endpoint: WorkQueue broker endpoint
         upstream_queue_name: Upstream queue name (None for source stages)
         state_queue_name: WebUI state queue name
-        semantic_guarantee: AT_LEAST_ONCE or EXACTLY_ONCE
     """
 
     broker_endpoint: Optional["QueueEndpoint"] = None
     upstream_queue_name: Optional[str] = None
     state_queue_name: Optional[str] = None
-    semantic_guarantee: SemanticGuarantee = SemanticGuarantee.AT_LEAST_ONCE
 
 
 # =============================================================================

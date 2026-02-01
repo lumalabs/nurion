@@ -34,7 +34,6 @@ from solstice.operators.sources.sparkv2 import (
     SparkSourceV2Config,
     SparkSourceV2Master,
 )
-from solstice.core.operator import SemanticGuarantee
 from solstice.core.stage import StageRuntime
 from solstice.core.stage_master import QueueEndpoint
 
@@ -116,7 +115,6 @@ class TestSparkSourceV2Integration:
             ),
             upstream_queue_name=None,
             state_queue_name=None,
-            semantic_guarantee=SemanticGuarantee.AT_LEAST_ONCE,
         )
         master = SparkSourceV2Master(
             job_id="test-v2-output",
@@ -187,7 +185,6 @@ class TestSparkSourceV2Integration:
             ),
             upstream_queue_name=None,
             state_queue_name=None,
-            semantic_guarantee=SemanticGuarantee.AT_LEAST_ONCE,
         )
         master = SparkSourceV2Master(
             job_id="test-v2-parallel",
@@ -235,7 +232,6 @@ class TestSparkSourceV2Integration:
             ),
             upstream_queue_name=None,
             state_queue_name=None,
-            semantic_guarantee=SemanticGuarantee.AT_LEAST_ONCE,
         )
         master = SparkSourceV2Master(
             job_id="test-v2-large",

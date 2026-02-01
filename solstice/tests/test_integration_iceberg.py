@@ -33,7 +33,6 @@ from pyiceberg.types import LongType, NestedField, StringType
 
 from tests.conftest import make_operator_runtime
 from solstice.core.models import Split
-from solstice.core.operator import SemanticGuarantee
 from solstice.core.stage import Stage
 from solstice.operators.sources import IcebergSourceConfig
 
@@ -221,7 +220,6 @@ class TestIcebergPipeline:
             broker_endpoint=None,
             upstream_queue_name=None,
             state_queue_name=None,
-            semantic_guarantee=SemanticGuarantee.AT_LEAST_ONCE,
         )
 
         payload_store = RaySplitPayloadStore(name="test-iceberg-store")

@@ -18,7 +18,6 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
-from solstice.core.operator import SemanticGuarantee
 from solstice.core.stage import Stage
 
 if TYPE_CHECKING:
@@ -53,7 +52,6 @@ class JobConfig:
 
     Attributes:
         workqueue_db_path: Storage path for WorkQueue backend (file://, memory://)
-        semantic_guarantee: AT_LEAST_ONCE (default, no dedup) or EXACTLY_ONCE (with dedup)
         ray_init_kwargs: Arguments to pass to ray.init()
         autoscale_config: Configuration for autoscaling (None to disable)
         webui: WebUI debugging interface configuration
@@ -62,7 +60,6 @@ class JobConfig:
     """
 
     workqueue_db_path: str = "memory://"
-    semantic_guarantee: SemanticGuarantee = SemanticGuarantee.AT_LEAST_ONCE
     ray_init_kwargs: Dict[str, Any] = field(default_factory=dict)
     autoscale_config: Optional["AutoscaleConfig"] = None
     webui: WebUIConfig = field(default_factory=WebUIConfig)

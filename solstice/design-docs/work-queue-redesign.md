@@ -1188,12 +1188,201 @@ class RebuildPolicy(Enum):
 
 ## Changelog
 
+- **2026-02-01 (continued)**: CC operator refactoring for 10B+ scale
+  - Removed local SlateDB state store from operators (shuffle.py, connected_components.py)
+  - Edges now flow through payload (Arrow tables) - scales to 10B+ records
+  - Labels tracked via @master_callable aggregation
+  - Future: labels stored via WorkQueue state API (state_get/state_put)
+  - Removed: state_store, _ensure_partition_acquired(), SlateDB imports from operators
+  - Updated: CCIterateOperator, CCIterateMaster, related tests
+  - See "Connected Components Operator Redesign" section below
 - **2026-02-01**: Implementation complete
   - Added GC-based ack mechanism (safer than immediate delete)
   - Added unified worker exit (replaced EOF messages)
   - State API fully implemented
   - Solstice integration complete
 - **2026-01-31**: Initial design proposed
+
+---
+
+## Connected Components Operator Redesign (2026-02-01)
+
+### Problem Statement
+
+The original CC operator design used local SlateDB partition state stores for labels and edges:
+- `label:{doc_id}` → current label
+- `edges:{doc_id}` → comma-separated neighbor doc_ids
+- `__doc_ids__` → set of all doc_ids per partition
+
+This design had critical issues:
+
+1. **Doesn't scale to 10B+ records**: SlateDB per partition means N partitions × M records = very large state
+2. **Partition conflicts with WorkQueue work-stealing**: When workers can process any message, partition-based state leads to multi-writer conflicts (SlateDB is single-writer)
+3. **Complexity**: `_ensure_partition_acquired()` calls throughout the codebase
+
+### New Design: Payload-Based Iteration
+
+**Key insight**: Edges are the bulk of the data (10B-100B for dedup). Labels are small (one per doc, 1-10B).
+
+**Solution**:
+- **Edges → Payload**: Flow through Arrow tables, scales to any size
+- **Labels → Tracked via iteration**: No external state needed for basic convergence
+- **Future: Labels → WorkQueue State API**: For advanced use cases
+
+### Architecture
+
+```
+Old Design (SlateDB partitions):
+  CCIterateOperator
+    │
+    ├── state_store (SlateDB per partition)
+    │     ├── label:{doc_id} → label
+    │     └── edges:{doc_id} → neighbors
+    │
+    └── _ensure_partition_acquired()
+
+New Design (Payload-based):
+  CCIterateOperator
+    │
+    ├── process_data(table) → table with edges column
+    │     Input:  (doc_id, neighbor_label, current_label?, edges?)
+    │     Output: (doc_id, label, edges, changed)
+    │
+    ├── @master_callable get_iteration_changes() → int
+    │
+    └── @master_callable recompute_labels(edges_data) → int
+```
+
+### Data Flow
+
+**Iteration 1**:
+```
+Input:  Candidate pairs (doc_id_1, doc_id_2)
+        ↓
+CCInitOperator: Generate bidirectional messages
+        ↓
+Output: (doc_id, neighbor_label)  ← neighbor's label (initially = doc_id)
+        ↓
+CCIterateOperator: Compute labels, collect edges
+        ↓
+Output: (doc_id, label, edges, changed)  ← edges in payload!
+```
+
+**Iteration N (N > 1)**:
+```
+Input:  Output from iteration N-1 (doc_id, label, edges)
+        ↓
+CCIterateOperator.recompute_labels(): New labels from edges
+        ↓
+Output: Updated labels, convergence check via @master_callable
+```
+
+### Implementation Changes
+
+**CCIterateConfig**:
+```python
+@dataclass
+class CCIterateConfig(ShuffleOperatorConfig):
+    doc_id_column: str = "doc_id"
+    neighbor_label_column: str = "neighbor_label"
+    current_label_column: str = "current_label"
+    edges_column: str = "edges"  # NEW: edges in payload
+    max_iterations: int = 100
+    convergence_threshold: int = 0
+    # REMOVED: state_store_path
+```
+
+**CCIterateOperator**:
+```python
+@operator(CCIterateConfig)
+class CCIterateOperator(ShuffleOperator):
+    def __init__(self, config, runtime):
+        super().__init__(config, runtime)
+        self._iteration_changes: int = 0  # In-memory counter
+        # REMOVED: state_store, _acquired_partitions
+
+    def process_data(self, table) -> pa.Table:
+        # Input: (doc_id, neighbor_label, current_label?, edges?)
+        # Output: (doc_id, label, edges, changed)
+        #
+        # Edges are merged and output for next iteration
+        ...
+        return pa.table({
+            "doc_id": ...,
+            "label": ...,
+            "edges": ...,  # Comma-separated, flows to next iteration
+            "changed": ...,
+        })
+
+    @master_callable
+    def get_iteration_changes(self) -> int:
+        return self._iteration_changes
+
+    @master_callable
+    def recompute_labels(self, edges_data: List[Dict]) -> int:
+        # For iteration 2+, compute new labels from edges
+        ...
+```
+
+**CCIterateMaster**:
+```python
+class CCIterateMaster(StageMaster):
+    async def run(self):
+        # Iteration 1: normal queue processing
+        await super().run()
+        total_changes = await self._aggregate_worker_changes()
+
+        # Iteration 2+: coordinate recomputation
+        while not converged and iteration < max:
+            await self._reset_worker_iterations()
+            total_changes = await self._recompute_worker_iterations()
+            # Check convergence
+
+    async def _aggregate_worker_changes(self) -> int:
+        # Sum get_iteration_changes() from all workers
+        ...
+
+    # REMOVED: _read_state_changes() (no more SlateDB reading)
+```
+
+### Benefits
+
+1. **Scales to 10B+ records**: Edges flow through Arrow tables, no single-node state limit
+2. **Works with WorkQueue work-stealing**: No partition ownership, any worker processes any message
+3. **Simpler code**: No `_ensure_partition_acquired()`, no SlateDB lifecycle management
+4. **Future-proof**: Can add WorkQueue state API for labels when needed
+
+### Trade-offs
+
+1. **Iteration 2+ coordination**: Master needs to coordinate data flow back to workers
+   - Mitigation: Output queue becomes input for next iteration (queue loopback)
+
+2. **State persistence**: Labels not persisted between iterations (in-memory only)
+   - Mitigation: For checkpointing, can output labels to queue or external storage
+
+3. **Large gRPC payloads**: Edges data in payload may be large
+   - Mitigation: Already using payload store (Ray Object Store) for large data
+
+### Future: WorkQueue State API for Labels
+
+For use cases requiring label persistence:
+```python
+# Worker gets label from state
+label = await self.queue_client.state_get(f"job1/cc", f"label:{doc_id}")
+
+# Atomic: ack message + update label
+await self.queue_client.ack_with_state(
+    queue="cc_input",
+    msg_ids=[msg.msg_id],
+    state_namespace="job1/cc",
+    state_puts={f"label:{doc_id}": new_label.encode()},
+)
+```
+
+This would require:
+1. WorkQueue state API integration in operators
+2. State cleanup after job completion
+3. State size limits (labels are small, ~100 bytes per doc)
 
 ---
 

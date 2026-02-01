@@ -41,7 +41,7 @@ from solstice.core.models import (
     make_split_id,
 )
 from solstice.core.split_payload_store import SplitPayloadStore
-from solstice.core.operator import Operator, OperatorRuntime, SemanticGuarantee
+from solstice.core.operator import Operator, OperatorRuntime
 from solstice.testing.fault_injection import (
     check_fault,
     FAULT_BEFORE_MARK_PROCESSED,
@@ -61,7 +61,6 @@ class WorkerRuntime:
     worker_id: str
     job_id: str
     stage_id: str
-    semantic_guarantee: SemanticGuarantee
 
     # Single broker endpoint (all queues use the same broker)
     broker_endpoint: Optional[QueueEndpoint] = None
@@ -87,7 +86,6 @@ class StageWorker:
         self.worker_id = runtime.worker_id
         self.job_id = runtime.job_id
         self.stage_id = runtime.stage_id
-        self.semantic_guarantee = runtime.semantic_guarantee
 
         # Single broker endpoint for all queues
         self.broker_endpoint = runtime.broker_endpoint
@@ -127,11 +125,9 @@ class StageWorker:
             job_id=self.job_id,
             stage_id=self.stage_id,
             worker_id=self.worker_id,
-            semantic_guarantee=self.semantic_guarantee,
         )
 
         self._operator = self.stage.operator_config.setup(runtime)
-        self._operator.init_from_state_store()
         self.logger.debug("Initialized Operator")
 
     def _create_queue_client(self) -> WorkQueueQueueClient:
@@ -236,13 +232,6 @@ class StageWorker:
                 # Process each claimed message
                 for record in records:
                     message = QueueMessage.from_bytes(record.value)
-
-                    # Check for duplicate (using operator's dedup)
-                    if self._operator.is_duplicate_by_id(message.message_id):
-                        self.logger.debug(f"Skipping duplicate message: {message.message_id}")
-                        self.upstream_queue.ack(self.upstream_queue_name, [record.msg_id])
-                        continue
-
                     split_id = make_split_id(self.job_id, self.stage_id, record.msg_id)
 
                     check_fault(FAULT_BEFORE_PROCESS)
@@ -250,7 +239,7 @@ class StageWorker:
                     check_fault(FAULT_AFTER_PROCESS)
 
                     check_fault(FAULT_BEFORE_MARK_PROCESSED)
-                    self._operator.mark_processed_by_id(message.message_id)
+                    self._operator.processed_count += 1
                     check_fault(FAULT_AFTER_MARK_PROCESSED)
 
                     # Ack the message after successful processing
