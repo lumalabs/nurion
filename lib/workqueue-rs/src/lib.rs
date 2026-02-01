@@ -48,7 +48,10 @@ impl BrokerError {
     }
 
     fn __repr__(&self) -> String {
-        format!("BrokerError(kind='{}', message='{}')", self.kind, self.message)
+        format!(
+            "BrokerError(kind='{}', message='{}')",
+            self.kind, self.message
+        )
     }
 
     fn __str__(&self) -> String {
@@ -91,8 +94,30 @@ impl BrokerConfig {
         max_queue_depth: usize,
         acked_retention_secs: f64,
         gc_interval_secs: f64,
-    ) -> Self {
-        Self {
+    ) -> PyResult<Self> {
+        // Validate timing parameters to prevent panic in Duration::from_secs_f64
+        let validate_timing = |value: f64, name: &str| -> PyResult<()> {
+            if !value.is_finite() {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "{} must be finite (got {})",
+                    name, value
+                )));
+            }
+            if value < 0.0 {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "{} must be non-negative (got {})",
+                    name, value
+                )));
+            }
+            Ok(())
+        };
+
+        validate_timing(claim_timeout_secs, "claim_timeout_secs")?;
+        validate_timing(recovery_interval_secs, "recovery_interval_secs")?;
+        validate_timing(acked_retention_secs, "acked_retention_secs")?;
+        validate_timing(gc_interval_secs, "gc_interval_secs")?;
+
+        Ok(Self {
             db_path,
             host,
             port,
@@ -101,7 +126,7 @@ impl BrokerConfig {
             max_queue_depth,
             acked_retention_secs,
             gc_interval_secs,
-        }
+        })
     }
 
     fn __repr__(&self) -> String {
