@@ -138,6 +138,8 @@ class WorkQueueClient:
                 return
             time.sleep(0.1)
 
+        # Cleanup resources before raising timeout error
+        self.stop()
         raise RuntimeError(
             f"Failed to acquire lease from server within {self.connect_timeout}s"
         )

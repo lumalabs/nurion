@@ -145,6 +145,18 @@ impl WorkQueueBroker {
             ));
         }
 
+        // Validate interval configuration
+        if self.config.recovery_interval_secs <= 0.0 {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                format!("recovery_interval_secs must be positive, got {}", self.config.recovery_interval_secs),
+            ));
+        }
+        if self.config.gc_interval_secs <= 0.0 {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                format!("gc_interval_secs must be positive, got {}", self.config.gc_interval_secs),
+            ));
+        }
+
         self.running.store(true, Ordering::SeqCst);
 
         let config: WorkQueueConfig = self.config.clone().into();

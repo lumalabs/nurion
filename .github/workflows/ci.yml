@@ -145,11 +145,11 @@ jobs:
       if: steps.cache-workqueue.outputs.cache-hit != 'true'
       run: |
         cd lib/workqueue-rs
+        # Generate gRPC stubs before building wheel
+        uv run --with grpcio-tools python -m grpc_tools.protoc -I proto --python_out=python/workqueue_py --grpc_python_out=python/workqueue_py proto/workqueue.proto
         uvx maturin build --release
         echo "Built wheel:"
         ls -la target/wheels/
-        # Generate gRPC stubs
-        uv run --with grpcio-tools python -m grpc_tools.protoc -I proto --python_out=python/workqueue_py --grpc_python_out=python/workqueue_py proto/workqueue.proto
         # Copy to cache directory
         mkdir -p /tmp/workqueue-rs-wheel/
         cp target/wheels/*.whl /tmp/workqueue-rs-wheel/
