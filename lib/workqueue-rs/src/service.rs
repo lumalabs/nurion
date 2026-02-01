@@ -67,7 +67,10 @@ impl WorkQueue for WorkQueueService {
     // Consumer API
     // =========================================================================
 
-    async fn claim(&self, request: Request<ClaimRequest>) -> Result<Response<ClaimResponse>, Status> {
+    async fn claim(
+        &self,
+        request: Request<ClaimRequest>,
+    ) -> Result<Response<ClaimResponse>, Status> {
         let req = request.into_inner();
 
         let batch_size = if req.batch_size > 0 {
@@ -93,10 +96,8 @@ impl WorkQueue for WorkQueueService {
             }
         };
 
-        let proto_messages: Vec<proto::Message> = claimed
-            .iter()
-            .map(Self::to_proto_message)
-            .collect();
+        let proto_messages: Vec<proto::Message> =
+            claimed.iter().map(Self::to_proto_message).collect();
 
         // Check if there are more messages
         let has_more = match self.storage.get_meta(&req.queue).await {
@@ -280,7 +281,11 @@ impl WorkQueue for WorkQueueService {
             return Err(Status::invalid_argument("namespace is required"));
         }
 
-        match self.storage.state_get_batch(&req.namespace, &req.keys).await {
+        match self
+            .storage
+            .state_get_batch(&req.namespace, &req.keys)
+            .await
+        {
             Ok(values) => Ok(Response::new(StateGetResponse { values })),
             Err(e) => {
                 tracing::error!("Failed to get state: {}", e);
@@ -321,8 +326,7 @@ impl WorkQueue for WorkQueueService {
     // Heartbeat (simplified - no lease tracking for now)
     // =========================================================================
 
-    type HeartbeatStreamStream =
-        Pin<Box<dyn Stream<Item = Result<HeartbeatPong, Status>> + Send>>;
+    type HeartbeatStreamStream = Pin<Box<dyn Stream<Item = Result<HeartbeatPong, Status>> + Send>>;
 
     async fn heartbeat_stream(
         &self,

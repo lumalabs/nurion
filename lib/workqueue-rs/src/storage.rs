@@ -22,8 +22,8 @@
 //   acked:{queue}:{ts:020d}:{msg_id} -> ""
 //   state:{namespace}:{key} -> value bytes
 
-use std::collections::HashMap;
 use slatedb::{Db, WriteBatch};
+use std::collections::HashMap;
 
 use crate::types::{now_nanos, ClaimInfo, Message};
 
@@ -38,7 +38,10 @@ pub struct QueueMeta {
 
 impl Default for QueueMeta {
     fn default() -> Self {
-        Self { claim_seq: 0, push_seq: 0 }
+        Self {
+            claim_seq: 0,
+            push_seq: 0,
+        }
     }
 }
 
@@ -102,7 +105,9 @@ impl WorkQueueStorage {
     pub async fn create_queue(&self, queue: &str) -> Result<(), StorageError> {
         let key = Self::meta_key(queue);
         if self.db.get(&key).await?.is_none() {
-            self.db.put(&key, &serde_json::to_vec(&QueueMeta::default())?).await?;
+            self.db
+                .put(&key, &serde_json::to_vec(&QueueMeta::default())?)
+                .await?;
             self.db.flush().await?;
         }
         Ok(())
@@ -111,7 +116,11 @@ impl WorkQueueStorage {
     // === Push Operations ===
 
     /// Push messages to queue (single or batch)
-    pub async fn push_messages(&self, queue: &str, messages: &[Message]) -> Result<(), StorageError> {
+    pub async fn push_messages(
+        &self,
+        queue: &str,
+        messages: &[Message],
+    ) -> Result<(), StorageError> {
         if messages.is_empty() {
             return Ok(());
         }
@@ -121,7 +130,10 @@ impl WorkQueueStorage {
 
         for (i, msg) in messages.iter().enumerate() {
             let seq = meta.push_seq + i as u64;
-            batch.put(&Self::msg_key(queue, &msg.msg_id), &serde_json::to_vec(msg)?);
+            batch.put(
+                &Self::msg_key(queue, &msg.msg_id),
+                &serde_json::to_vec(msg)?,
+            );
             batch.put(&Self::pending_key(queue, seq), msg.msg_id.as_bytes());
         }
 
@@ -174,8 +186,12 @@ impl WorkQueueStorage {
 
                     batch.delete(&pending_key);
 
-                    let claim_info = ClaimInfo::new(msg_id.clone(), worker_id.to_string(), lease_id.to_string());
-                    batch.put(&Self::claimed_key(queue, &msg_id), &serde_json::to_vec(&claim_info)?);
+                    let claim_info =
+                        ClaimInfo::new(msg_id.clone(), worker_id.to_string(), lease_id.to_string());
+                    batch.put(
+                        &Self::claimed_key(queue, &msg_id),
+                        &serde_json::to_vec(&claim_info)?,
+                    );
 
                     claimed.push(msg);
                 }
@@ -184,7 +200,10 @@ impl WorkQueueStorage {
         }
 
         if !claimed.is_empty() {
-            let new_meta = QueueMeta { claim_seq: new_claim_seq, ..meta };
+            let new_meta = QueueMeta {
+                claim_seq: new_claim_seq,
+                ..meta
+            };
             batch.put(&Self::meta_key(queue), &serde_json::to_vec(&new_meta)?);
             self.db.write(batch).await?;
         }
@@ -215,21 +234,32 @@ impl WorkQueueStorage {
         }
 
         // 2. Push downstream messages if provided
-        if let (Some(downstream_queue), Some(messages)) = (opts.downstream_queue, opts.downstream_messages) {
+        if let (Some(downstream_queue), Some(messages)) =
+            (opts.downstream_queue, opts.downstream_messages)
+        {
             if !messages.is_empty() {
                 let downstream_meta = self.get_meta(downstream_queue).await?;
 
                 for (i, msg) in messages.iter().enumerate() {
                     let seq = downstream_meta.push_seq + i as u64;
-                    batch.put(&Self::msg_key(downstream_queue, &msg.msg_id), &serde_json::to_vec(msg)?);
-                    batch.put(&Self::pending_key(downstream_queue, seq), msg.msg_id.as_bytes());
+                    batch.put(
+                        &Self::msg_key(downstream_queue, &msg.msg_id),
+                        &serde_json::to_vec(msg)?,
+                    );
+                    batch.put(
+                        &Self::pending_key(downstream_queue, seq),
+                        msg.msg_id.as_bytes(),
+                    );
                 }
 
                 let new_meta = QueueMeta {
                     push_seq: downstream_meta.push_seq + messages.len() as u64,
                     ..downstream_meta
                 };
-                batch.put(&Self::meta_key(downstream_queue), &serde_json::to_vec(&new_meta)?);
+                batch.put(
+                    &Self::meta_key(downstream_queue),
+                    &serde_json::to_vec(&new_meta)?,
+                );
             }
         }
 
@@ -253,7 +283,8 @@ impl WorkQueueStorage {
 
     /// Acknowledge messages (move to acked)
     pub async fn ack_messages(&self, queue: &str, msg_ids: &[String]) -> Result<(), StorageError> {
-        self.ack_internal(queue, msg_ids, AckOptions::default()).await
+        self.ack_internal(queue, msg_ids, AckOptions::default())
+            .await
     }
 
     /// Acknowledge with state updates
@@ -265,12 +296,17 @@ impl WorkQueueStorage {
         state_puts: &HashMap<String, Vec<u8>>,
         state_deletes: &[String],
     ) -> Result<(), StorageError> {
-        self.ack_internal(queue, msg_ids, AckOptions {
-            state_namespace: Some(namespace),
-            state_puts: Some(state_puts),
-            state_deletes: Some(state_deletes),
-            ..Default::default()
-        }).await
+        self.ack_internal(
+            queue,
+            msg_ids,
+            AckOptions {
+                state_namespace: Some(namespace),
+                state_puts: Some(state_puts),
+                state_deletes: Some(state_deletes),
+                ..Default::default()
+            },
+        )
+        .await
     }
 
     /// Acknowledge upstream and push to downstream
@@ -281,11 +317,16 @@ impl WorkQueueStorage {
         downstream_queue: &str,
         downstream_messages: &[Message],
     ) -> Result<(), StorageError> {
-        self.ack_internal(upstream_queue, upstream_msg_ids, AckOptions {
-            downstream_queue: Some(downstream_queue),
-            downstream_messages: Some(downstream_messages),
-            ..Default::default()
-        }).await
+        self.ack_internal(
+            upstream_queue,
+            upstream_msg_ids,
+            AckOptions {
+                downstream_queue: Some(downstream_queue),
+                downstream_messages: Some(downstream_messages),
+                ..Default::default()
+            },
+        )
+        .await
     }
 
     /// Acknowledge upstream, push downstream, and update state
@@ -299,13 +340,18 @@ impl WorkQueueStorage {
         state_puts: &HashMap<String, Vec<u8>>,
         state_deletes: &[String],
     ) -> Result<(), StorageError> {
-        self.ack_internal(upstream_queue, upstream_msg_ids, AckOptions {
-            downstream_queue: Some(downstream_queue),
-            downstream_messages: Some(downstream_messages),
-            state_namespace: Some(namespace),
-            state_puts: Some(state_puts),
-            state_deletes: Some(state_deletes),
-        }).await
+        self.ack_internal(
+            upstream_queue,
+            upstream_msg_ids,
+            AckOptions {
+                downstream_queue: Some(downstream_queue),
+                downstream_messages: Some(downstream_messages),
+                state_namespace: Some(namespace),
+                state_puts: Some(state_puts),
+                state_deletes: Some(state_deletes),
+            },
+        )
+        .await
     }
 
     // === Nack Operations ===
@@ -321,7 +367,10 @@ impl WorkQueueStorage {
 
         for (i, msg_id) in msg_ids.iter().enumerate() {
             batch.delete(&Self::claimed_key(queue, msg_id));
-            batch.put(&Self::pending_key(queue, meta.push_seq + i as u64), msg_id.as_bytes());
+            batch.put(
+                &Self::pending_key(queue, meta.push_seq + i as u64),
+                msg_id.as_bytes(),
+            );
         }
 
         let new_meta = QueueMeta {
@@ -337,7 +386,10 @@ impl WorkQueueStorage {
     // === Scan Operations ===
 
     /// Scan all claimed messages (optionally filtered by queue)
-    pub async fn scan_claimed(&self, queue: Option<&str>) -> Result<Vec<(String, String, ClaimInfo)>, StorageError> {
+    pub async fn scan_claimed(
+        &self,
+        queue: Option<&str>,
+    ) -> Result<Vec<(String, String, ClaimInfo)>, StorageError> {
         let prefix = match queue {
             Some(q) => format!("claimed:{}:", q).into_bytes(),
             None => b"claimed:".to_vec(),
@@ -361,7 +413,10 @@ impl WorkQueueStorage {
     }
 
     /// Scan all acked messages (optionally filtered by queue)
-    pub async fn scan_acked(&self, queue: Option<&str>) -> Result<Vec<(String, u64, String)>, StorageError> {
+    pub async fn scan_acked(
+        &self,
+        queue: Option<&str>,
+    ) -> Result<Vec<(String, u64, String)>, StorageError> {
         let prefix = match queue {
             Some(q) => format!("acked:{}:", q).into_bytes(),
             None => b"acked:".to_vec(),
@@ -534,7 +589,9 @@ mod tests {
         let counter = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
         let temp_dir = std::env::temp_dir().join(format!("workqueue_test_{}", counter));
         let _ = std::fs::remove_dir_all(&temp_dir);
-        WorkQueueStorage::new(&format!("file://{}", temp_dir.display())).await.unwrap()
+        WorkQueueStorage::new(&format!("file://{}", temp_dir.display()))
+            .await
+            .unwrap()
     }
 
     #[tokio::test]
@@ -554,7 +611,10 @@ mod tests {
         assert_eq!(meta.claim_seq, 0);
         assert_eq!(meta.push_seq, 2);
 
-        let claimed = storage.claim_messages(queue, 2, "worker-1", "lease-1").await.unwrap();
+        let claimed = storage
+            .claim_messages(queue, 2, "worker-1", "lease-1")
+            .await
+            .unwrap();
         assert_eq!(claimed.len(), 2);
         assert_eq!(claimed[0].payload, b"hello");
         assert_eq!(claimed[1].payload, b"world");
@@ -580,7 +640,10 @@ mod tests {
         let meta = storage.get_meta(queue).await.unwrap();
         assert_eq!(meta.push_seq, 5);
 
-        let claimed = storage.claim_messages(queue, 5, "worker-1", "lease-1").await.unwrap();
+        let claimed = storage
+            .claim_messages(queue, 5, "worker-1", "lease-1")
+            .await
+            .unwrap();
         assert_eq!(claimed.len(), 5);
     }
 
@@ -595,8 +658,14 @@ mod tests {
         let msg_id = msg.msg_id.clone();
 
         storage.push_message(queue, &msg).await.unwrap();
-        storage.claim_messages(queue, 1, "worker-1", "lease-1").await.unwrap();
-        storage.ack_messages(queue, &[msg_id.clone()]).await.unwrap();
+        storage
+            .claim_messages(queue, 1, "worker-1", "lease-1")
+            .await
+            .unwrap();
+        storage
+            .ack_messages(queue, &[msg_id.clone()])
+            .await
+            .unwrap();
 
         // Claim info should be gone, message in acked
         let claimed = storage.scan_claimed(Some(queue)).await.unwrap();
@@ -617,19 +686,28 @@ mod tests {
         let msg_id = msg.msg_id.clone();
 
         storage.push_message(queue, &msg).await.unwrap();
-        storage.claim_messages(queue, 1, "worker-1", "lease-1").await.unwrap();
+        storage
+            .claim_messages(queue, 1, "worker-1", "lease-1")
+            .await
+            .unwrap();
 
         let meta = storage.get_meta(queue).await.unwrap();
         assert_eq!(meta.claim_seq, 1);
         assert_eq!(meta.push_seq, 1);
 
-        storage.nack_messages(queue, &[msg_id.clone()]).await.unwrap();
+        storage
+            .nack_messages(queue, &[msg_id.clone()])
+            .await
+            .unwrap();
 
         let meta = storage.get_meta(queue).await.unwrap();
         assert_eq!(meta.claim_seq, 1);
         assert_eq!(meta.push_seq, 2);
 
-        let claimed_again = storage.claim_messages(queue, 1, "worker-1", "lease-1").await.unwrap();
+        let claimed_again = storage
+            .claim_messages(queue, 1, "worker-1", "lease-1")
+            .await
+            .unwrap();
         assert_eq!(claimed_again.len(), 1);
         assert_eq!(claimed_again[0].msg_id, msg_id);
     }
@@ -643,14 +721,23 @@ mod tests {
 
         let upstream_msg = Message::new("upstream".to_string(), b"input".to_vec());
         let upstream_id = upstream_msg.msg_id.clone();
-        storage.push_message("upstream", &upstream_msg).await.unwrap();
-        storage.claim_messages("upstream", 1, "worker-1", "lease-1").await.unwrap();
+        storage
+            .push_message("upstream", &upstream_msg)
+            .await
+            .unwrap();
+        storage
+            .claim_messages("upstream", 1, "worker-1", "lease-1")
+            .await
+            .unwrap();
 
         let downstream_msgs: Vec<Message> = (0..2)
             .map(|i| Message::new("downstream".to_string(), format!("out{}", i).into_bytes()))
             .collect();
 
-        storage.ack_and_forward("upstream", &[upstream_id], "downstream", &downstream_msgs).await.unwrap();
+        storage
+            .ack_and_forward("upstream", &[upstream_id], "downstream", &downstream_msgs)
+            .await
+            .unwrap();
 
         let acked = storage.scan_acked(Some("upstream")).await.unwrap();
         assert_eq!(acked.len(), 1);
@@ -658,7 +745,10 @@ mod tests {
         let meta = storage.get_meta("downstream").await.unwrap();
         assert_eq!(meta.push_seq, 2);
 
-        let downstream_claimed = storage.claim_messages("downstream", 2, "worker-2", "lease-2").await.unwrap();
+        let downstream_claimed = storage
+            .claim_messages("downstream", 2, "worker-2", "lease-2")
+            .await
+            .unwrap();
         assert_eq!(downstream_claimed.len(), 2);
     }
 
@@ -673,7 +763,10 @@ mod tests {
             let msg = Message::new(queue.to_string(), format!("msg{}", i).into_bytes());
             let msg_id = msg.msg_id.clone();
             storage.push_message(queue, &msg).await.unwrap();
-            storage.claim_messages(queue, 1, "worker-1", "lease-1").await.unwrap();
+            storage
+                .claim_messages(queue, 1, "worker-1", "lease-1")
+                .await
+                .unwrap();
             storage.ack_messages(queue, &[msg_id]).await.unwrap();
         }
 
@@ -703,7 +796,10 @@ mod tests {
         assert_eq!(pending, 5);
         assert_eq!(claimed, 0);
 
-        storage.claim_messages(queue, 3, "worker-1", "lease-1").await.unwrap();
+        storage
+            .claim_messages(queue, 3, "worker-1", "lease-1")
+            .await
+            .unwrap();
 
         let (pending, claimed) = storage.get_queue_stats(queue).await.unwrap();
         assert_eq!(pending, 2);
@@ -719,7 +815,10 @@ mod tests {
         puts.insert("key1".to_string(), b"value1".to_vec());
         puts.insert("key2".to_string(), b"value2".to_vec());
 
-        storage.state_put_batch(namespace, &puts, &[]).await.unwrap();
+        storage
+            .state_put_batch(namespace, &puts, &[])
+            .await
+            .unwrap();
 
         let keys = vec!["key1".to_string(), "key2".to_string(), "key3".to_string()];
         let values = storage.state_get_batch(namespace, &keys).await.unwrap();
@@ -739,14 +838,23 @@ mod tests {
         let msg_id = msg.msg_id.clone();
 
         storage.push_message(queue, &msg).await.unwrap();
-        storage.claim_messages(queue, 1, "worker-1", "lease-1").await.unwrap();
+        storage
+            .claim_messages(queue, 1, "worker-1", "lease-1")
+            .await
+            .unwrap();
 
         let mut state_puts = HashMap::new();
         state_puts.insert("seen_key".to_string(), b"1".to_vec());
 
-        storage.ack_with_state(queue, &[msg_id], namespace, &state_puts, &[]).await.unwrap();
+        storage
+            .ack_with_state(queue, &[msg_id], namespace, &state_puts, &[])
+            .await
+            .unwrap();
 
-        let values = storage.state_get_batch(namespace, &["seen_key".to_string()]).await.unwrap();
+        let values = storage
+            .state_get_batch(namespace, &["seen_key".to_string()])
+            .await
+            .unwrap();
         assert_eq!(values.get("seen_key"), Some(&b"1".to_vec()));
     }
 
@@ -761,7 +869,10 @@ mod tests {
             let msg = Message::new(queue.to_string(), format!("msg{}", i).into_bytes());
             storage.push_message(queue, &msg).await.unwrap();
         }
-        storage.claim_messages(queue, 2, "worker-1", "lease-1").await.unwrap();
+        storage
+            .claim_messages(queue, 2, "worker-1", "lease-1")
+            .await
+            .unwrap();
 
         let deleted = storage.delete_queue(queue).await.unwrap();
         assert!(deleted > 0);
@@ -780,12 +891,18 @@ mod tests {
 
         let msg = Message::new(queue.to_string(), b"hello".to_vec());
         storage.push_message(queue, &msg).await.unwrap();
-        storage.claim_messages(queue, 1, "worker-1", "lease-1").await.unwrap();
+        storage
+            .claim_messages(queue, 1, "worker-1", "lease-1")
+            .await
+            .unwrap();
 
         let recovered = storage.recover_expired_claims(0.0).await.unwrap();
         assert_eq!(recovered, 1);
 
-        let claimed = storage.claim_messages(queue, 1, "worker-2", "lease-2").await.unwrap();
+        let claimed = storage
+            .claim_messages(queue, 1, "worker-2", "lease-2")
+            .await
+            .unwrap();
         assert_eq!(claimed.len(), 1);
     }
 }

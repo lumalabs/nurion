@@ -58,7 +58,11 @@ impl Message {
     }
 
     /// Create a message with metadata
-    pub fn with_metadata(queue: String, payload: Vec<u8>, metadata: HashMap<String, String>) -> Self {
+    pub fn with_metadata(
+        queue: String,
+        payload: Vec<u8>,
+        metadata: HashMap<String, String>,
+    ) -> Self {
         Self {
             msg_id: uuid::Uuid::now_v7().to_string(),
             queue,

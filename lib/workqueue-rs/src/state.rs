@@ -18,8 +18,8 @@
 // - Claim locks: serialize concurrent claims per queue
 // - Queue registry: track known queues for stats
 
-use std::sync::Arc;
 use dashmap::DashMap;
+use std::sync::Arc;
 use tokio::sync::Mutex;
 
 /// Per-queue state - just a lock for claim serialization
