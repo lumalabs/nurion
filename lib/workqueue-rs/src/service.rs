@@ -22,7 +22,9 @@
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc;
+use tokio::time::timeout;
 use tokio_stream::{wrappers::ReceiverStream, Stream, StreamExt};
 use tonic::{Request, Response, Status, Streaming};
 
@@ -332,13 +334,17 @@ impl WorkQueue for WorkQueueService {
 
         let (tx, rx) = mpsc::channel(16);
 
+        // Heartbeat receive timeout: close connection if no ping received within 30s
+        const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(30);
+
         tokio::spawn(async move {
             // Generate a lease ID for this connection
             let lease_id = uuid::Uuid::now_v7().to_string();
 
-            while let Some(result) = stream.next().await {
-                match result {
-                    Ok(_ping) => {
+            loop {
+                // Wait for next ping with timeout
+                match timeout(HEARTBEAT_TIMEOUT, stream.next()).await {
+                    Ok(Some(Ok(_ping))) => {
                         // Simple pong response - always use the generated lease_id
                         let pong = HeartbeatPong {
                             lease_id: lease_id.clone(),
@@ -350,8 +356,17 @@ impl WorkQueue for WorkQueueService {
                             break;
                         }
                     }
-                    Err(e) => {
+                    Ok(Some(Err(e))) => {
                         tracing::warn!("Heartbeat stream error: {}", e);
+                        break;
+                    }
+                    Ok(None) => {
+                        // Stream ended normally
+                        break;
+                    }
+                    Err(_) => {
+                        // Timeout - no heartbeat received within timeout period
+                        tracing::debug!("Heartbeat timeout, closing connection");
                         break;
                     }
                 }

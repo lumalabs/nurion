@@ -47,6 +47,7 @@ WorkQueue Model:
 
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
@@ -206,6 +207,36 @@ class StageMaster:
             logger=self.logger,
         )
 
+    def _has_unprocessed_messages(self) -> bool:
+        """Check if upstream queue still has unprocessed messages.
+
+        Returns True if there are pending or claimed (in-flight) messages,
+        meaning we shouldn't finish the stage yet.
+        """
+        if not self.upstream_queue_name:
+            # Source stages have no upstream queue
+            return False
+
+        if not self._output_queue:
+            return False
+
+        try:
+            stats = self._output_queue.get_stats(self.upstream_queue_name)
+            pending = stats.get("pending_count", 0)
+            claimed = stats.get("claimed_count", 0)
+
+            if pending > 0 or claimed > 0:
+                self.logger.debug(
+                    f"Stage {self.stage_id} upstream queue has unprocessed messages: "
+                    f"pending={pending}, claimed={claimed}"
+                )
+                return True
+            return False
+        except Exception as e:
+            self.logger.warning(f"Error checking upstream queue stats: {e}")
+            # On error, assume there might be messages (safer)
+            return True
+
     async def start(self) -> None:
         """Start the stage master."""
         if self._running:
@@ -263,8 +294,24 @@ class StageMaster:
             while self._running and not self._finished:
                 # Check if all workers done
                 if self._worker_manager.worker_count == 0:
-                    self._finished = True
-                    break
+                    # Before finishing, check if upstream queue still has messages
+                    # This prevents premature exit when all workers crash
+                    if self._has_unprocessed_messages():
+                        self.logger.info(
+                            f"Stage {self.stage_id}: no workers but queue has unprocessed messages, spawning worker"
+                        )
+                        # Spawn at least one worker to process remaining messages
+                        worker_id = await self._worker_manager.spawn_worker(is_min_worker=False)
+                        if worker_id is None:
+                            self.logger.warning(
+                                f"Stage {self.stage_id}: could not spawn worker for remaining messages"
+                            )
+                            # Wait a bit and try again
+                            await asyncio.sleep(0.5)
+                            continue
+                    else:
+                        self._finished = True
+                        break
 
                 # Event-driven wait for any worker to complete
                 completed, failed = await self._worker_manager.wait_for_completion(timeout=1.0)
@@ -354,7 +401,7 @@ class StageMaster:
             self._state_producer = StateProducer(
                 job_id=self.job_id,
                 queue_client=state_queue,
-                state_topic=self.state_queue_name,
+                state_queue_name=self.state_queue_name,
             )
             await self._state_producer.start()
             self.logger.debug("Stage state producer initialized")

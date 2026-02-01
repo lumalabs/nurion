@@ -472,6 +472,8 @@ def create_test_pipeline(
     job_id: Optional[str] = None,
     transform_config: Optional[OperatorConfig] = None,
     workqueue_db_path: str = "memory://",
+    claim_timeout_secs: float = 2.0,  # Fast recovery for tests (default 2s)
+    recovery_interval_secs: float = 0.5,  # Fast recovery interval for tests (default 0.5s)
 ) -> Job:
     """Create a standard test pipeline for distributed correctness tests.
 
@@ -488,6 +490,8 @@ def create_test_pipeline(
         job_id: Optional job ID (auto-generated if not provided)
         transform_config: Optional custom transform config
         workqueue_db_path: Storage URL for WorkQueue backend (memory://, file://)
+        claim_timeout_secs: Seconds before reclaiming messages from dead workers
+        recovery_interval_secs: Interval between recovery task runs
 
     Returns:
         Configured Job instance
@@ -501,7 +505,11 @@ def create_test_pipeline(
 
     job = Job(
         job_id=job_id,
-        config=JobConfig(workqueue_db_path=workqueue_db_path),
+        config=JobConfig(
+            workqueue_db_path=workqueue_db_path,
+            claim_timeout_secs=claim_timeout_secs,
+            recovery_interval_secs=recovery_interval_secs,
+        ),
     )
 
     # Source stage

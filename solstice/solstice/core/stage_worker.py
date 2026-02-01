@@ -425,7 +425,7 @@ class StageWorker:
             self._state_producer = StateProducer(
                 job_id=self.job_id,
                 queue_client=state_queue,
-                state_topic=self.state_queue_name,
+                state_queue_name=self.state_queue_name,
             )
             await self._state_producer.start()
             self.logger.debug("State producer initialized")

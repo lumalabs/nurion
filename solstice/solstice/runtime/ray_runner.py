@@ -161,9 +161,12 @@ class RayJobRunner:
         """
         from solstice.utils.network import get_node_ip
 
+        config = self.job.config
         self._shared_broker = WorkQueueBrokerManager(
             db_path=self.workqueue_db_path or "memory://",
             host=get_node_ip(),  # Use actual IP instead of 127.0.0.1 for cross-node access
+            claim_timeout_secs=config.claim_timeout_secs,
+            recovery_interval_secs=config.recovery_interval_secs,
         )
         self._shared_broker.start()
 

@@ -19,6 +19,7 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio_stream::wrappers::TcpListenerStream;
 use tonic::transport::Server;
@@ -100,9 +101,14 @@ impl WorkQueueBrokerInner {
         // Convert to stream for tonic
         let incoming = TcpListenerStream::new(listener);
 
-        // Spawn server task
+        // Spawn server task with HTTP2 keepalive settings
         tokio::spawn(async move {
             if let Err(e) = Server::builder()
+                // HTTP2 keepalive: ping every 10s, timeout after 20s without response
+                .http2_keepalive_interval(Some(Duration::from_secs(10)))
+                .http2_keepalive_timeout(Some(Duration::from_secs(20)))
+                // Allow keepalive pings even without active streams
+                .tcp_keepalive(Some(Duration::from_secs(30)))
                 .add_service(WorkQueueServer::new(service))
                 .serve_with_incoming(incoming)
                 .await

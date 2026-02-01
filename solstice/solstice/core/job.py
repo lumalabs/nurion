@@ -52,6 +52,8 @@ class JobConfig:
 
     Attributes:
         workqueue_db_path: Storage path for WorkQueue backend (file://, memory://)
+        claim_timeout_secs: Seconds before claimed messages are reclaimed from dead workers
+        recovery_interval_secs: Interval between recovery task runs
         ray_init_kwargs: Arguments to pass to ray.init()
         autoscale_config: Configuration for autoscaling (None to disable)
         webui: WebUI debugging interface configuration
@@ -60,6 +62,8 @@ class JobConfig:
     """
 
     workqueue_db_path: str = "memory://"
+    claim_timeout_secs: float = 60.0  # Default: 60s before reclaiming from dead workers
+    recovery_interval_secs: float = 10.0  # Default: check every 10s for expired claims
     ray_init_kwargs: Dict[str, Any] = field(default_factory=dict)
     autoscale_config: Optional["AutoscaleConfig"] = None
     webui: WebUIConfig = field(default_factory=WebUIConfig)
