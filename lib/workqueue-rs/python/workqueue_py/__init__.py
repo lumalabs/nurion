@@ -45,14 +45,6 @@ class BrokerEventHandler:
         """Called when broker stops normally."""
         pass
 
-    def on_error(self, error: "BrokerError") -> None:
-        """Called when a recoverable error occurs.
-
-        Args:
-            error: The error that occurred
-        """
-        pass
-
     def on_fatal(self, error: "BrokerError") -> None:
         """Called when a fatal error occurs (broker will crash).
 

@@ -10,8 +10,12 @@ requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
 dependencies = [
     "grpcio>=1.68.0",
-    "grpcio-tools>=1.68.0",
     "protobuf>=5.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "grpcio-tools>=1.68.0",
 ]
 
 [tool.maturin]
