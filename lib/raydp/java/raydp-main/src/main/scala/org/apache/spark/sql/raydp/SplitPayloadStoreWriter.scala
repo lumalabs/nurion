@@ -62,10 +62,8 @@ class SplitPayloadStoreWriter(
    * Must be called once before storeAndSend().
    */
   def start(): Unit = {
-    // Parse endpoint (host:port)
-    val parts = queueEndpoint.split(":")
-    val host = parts(0)
-    val port = parts(1).toInt
+    // Parse endpoint (host:port or [ipv6]:port)
+    val (host, port) = parseEndpoint(queueEndpoint)
 
     // Initialize gRPC channel
     channel = ManagedChannelBuilder
@@ -74,6 +72,66 @@ class SplitPayloadStoreWriter(
       .build()
 
     stub = WorkQueueGrpc.newBlockingStub(channel)
+  }
+
+  /**
+   * Parse gRPC endpoint, supporting both IPv4/hostname and IPv6 formats.
+   *
+   * @param endpoint Endpoint string (e.g., "localhost:50051", "[::1]:50051")
+   * @return Tuple of (host, port)
+   * @throws IllegalArgumentException if endpoint format is invalid
+   */
+  private def parseEndpoint(endpoint: String): (String, Int) = {
+    if (endpoint.startsWith("[")) {
+      // IPv6 format: [host]:port
+      val closeBracket = endpoint.indexOf(']')
+      if (closeBracket == -1) {
+        throw new IllegalArgumentException(s"Invalid IPv6 endpoint format (missing closing bracket): $endpoint")
+      }
+      val host = endpoint.substring(1, closeBracket)
+      val remainder = endpoint.substring(closeBracket + 1)
+      if (!remainder.startsWith(":")) {
+        throw new IllegalArgumentException(s"Invalid IPv6 endpoint format (missing port after bracket): $endpoint")
+      }
+      val portStr = remainder.substring(1)
+      if (portStr.isEmpty) {
+        throw new IllegalArgumentException(s"Invalid endpoint format (empty port): $endpoint")
+      }
+      try {
+        val port = portStr.toInt
+        if (port <= 0 || port > 65535) {
+          throw new IllegalArgumentException(s"Invalid port number (must be 1-65535): $port")
+        }
+        (host, port)
+      } catch {
+        case _: NumberFormatException =>
+          throw new IllegalArgumentException(s"Invalid port format (not a number): $portStr")
+      }
+    } else {
+      // IPv4/hostname format: host:port
+      val lastColon = endpoint.lastIndexOf(':')
+      if (lastColon == -1) {
+        throw new IllegalArgumentException(s"Invalid endpoint format (missing port): $endpoint")
+      }
+      val host = endpoint.substring(0, lastColon)
+      val portStr = endpoint.substring(lastColon + 1)
+      if (host.isEmpty) {
+        throw new IllegalArgumentException(s"Invalid endpoint format (empty host): $endpoint")
+      }
+      if (portStr.isEmpty) {
+        throw new IllegalArgumentException(s"Invalid endpoint format (empty port): $endpoint")
+      }
+      try {
+        val port = portStr.toInt
+        if (port <= 0 || port > 65535) {
+          throw new IllegalArgumentException(s"Invalid port number (must be 1-65535): $port")
+        }
+        (host, port)
+      } catch {
+        case _: NumberFormatException =>
+          throw new IllegalArgumentException(s"Invalid port format (not a number): $portStr")
+      }
+    }
   }
 
   /**
