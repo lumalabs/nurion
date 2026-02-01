@@ -286,25 +286,31 @@ class CCIterateOperator(ShuffleOperator):
             existing = existing_edges_from_table.get(doc_id, set())
             all_edges = existing | new_edges_by_doc[doc_id]
 
-            results.append({
-                "doc_id": doc_id,
-                "label": new_label,
-                "edges": ",".join(sorted(all_edges)),
-                "changed": changed,
-            })
+            results.append(
+                {
+                    "doc_id": doc_id,
+                    "label": new_label,
+                    "edges": ",".join(sorted(all_edges)),
+                    "changed": changed,
+                }
+            )
 
         if not results:
             return None
 
         self._iteration_changes += changes
-        self.logger.debug(f"CC iteration: {changes} label changes (total: {self._iteration_changes})")
+        self.logger.debug(
+            f"CC iteration: {changes} label changes (total: {self._iteration_changes})"
+        )
 
-        return pa.table({
-            "doc_id": [r["doc_id"] for r in results],
-            "label": [r["label"] for r in results],
-            "edges": [r["edges"] for r in results],
-            "changed": [r["changed"] for r in results],
-        })
+        return pa.table(
+            {
+                "doc_id": [r["doc_id"] for r in results],
+                "label": [r["label"] for r in results],
+                "edges": [r["edges"] for r in results],
+                "changed": [r["changed"] for r in results],
+            }
+        )
 
     @master_callable
     def recompute_labels(self, edges_data: List[Dict[str, str]]) -> int:
@@ -350,7 +356,9 @@ class CCIterateOperator(ShuffleOperator):
                 labels[doc_id] = new_label
 
         self._iteration_changes += changes
-        self.logger.debug(f"CC recompute: {changes} label changes (total: {self._iteration_changes})")
+        self.logger.debug(
+            f"CC recompute: {changes} label changes (total: {self._iteration_changes})"
+        )
 
         return changes
 

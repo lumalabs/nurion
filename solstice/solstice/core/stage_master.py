@@ -157,6 +157,7 @@ class StageMaster:
         else:
             # Create local broker for this stage
             import tempfile
+
             db_path = f"file://{tempfile.gettempdir()}/workqueue_{self.job_id}_{self.stage_id}"
 
             self._output_broker = WorkQueueBrokerManager(db_path=db_path)

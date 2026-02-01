@@ -152,9 +152,7 @@ class SourceMaster(StageMaster):
         """
         endpoint = self.runtime.broker_endpoint
         if not endpoint:
-            raise RuntimeError(
-                f"Source {self.stage_id}: broker_endpoint is required"
-            )
+            raise RuntimeError(f"Source {self.stage_id}: broker_endpoint is required")
 
         broker_url = f"{endpoint.host}:{endpoint.port}"
         client = WorkQueueQueueClient(broker_url, worker_id=f"source-{self.stage_id}")

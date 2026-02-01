@@ -81,7 +81,6 @@ Example:
 """
 
 import logging
-import os
 from typing import Any, Dict
 
 from solstice.core.job import Job, JobConfig
@@ -242,12 +241,8 @@ def create_job(
     # =========================================================================
     # Stage 5: CC Iterate - Label propagation (iterative)
     # =========================================================================
-    # State store path for CC iteration (derived from output path)
-    state_store_path = config.get(
-        "state_store_path",
-        os.path.join(os.path.dirname(output_path), f".{job_id}_cc_state"),
-    )
-
+    # Edges flow through payload (Arrow tables) for scale to 10B+ records
+    # Labels tracked via @master_callable aggregation
     cc_iterate_stage = Stage(
         stage_id="cc_iterate",
         operator_config=CCIterateConfig(
@@ -256,7 +251,6 @@ def create_job(
             partition_keys=["doc_id"],
             num_partitions=config.get("num_partitions", 32),
             max_iterations=max_iterations,  # Iteration handled by CCIterateMaster
-            state_store_path=state_store_path,  # Enable multi-iteration via state store
         ),
         parallelism=cc_parallelism,
         worker_resources=worker_resources,

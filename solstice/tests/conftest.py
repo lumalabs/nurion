@@ -168,7 +168,7 @@ class WorkQueueTestBackend:
 async def workqueue_backend():
     """Start a WorkQueue broker and client wrapped for easy testing."""
     port = find_free_port()
-    broker = WorkQueueBrokerManager(db_path="memory://workqueue", port=port, startup_timeout=5.0)
+    broker = WorkQueueBrokerManager(db_path="memory://", port=port, startup_timeout=5.0)
     broker.start()
     client = WorkQueueQueueClient(broker.get_broker_url(), worker_id="test-worker")
     client.start()

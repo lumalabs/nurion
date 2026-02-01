@@ -33,7 +33,6 @@ from typing import Any, Dict, List, Optional, Sequence, Union
 import pyarrow as pa
 
 
-
 @dataclass
 class Split:
     """Represents a logical split of data for processing.

@@ -163,6 +163,7 @@ class _BrokerEventHandler:
 @dataclass
 class WorkQueueRecord:
     """A record from WorkQueue."""
+
     msg_id: str
     value: bytes
     queue: str
@@ -230,7 +231,9 @@ class WorkQueueQueueClient:
         return self._client.push_batch(queue, values)
 
     # Consumer
-    def claim(self, queue: str, batch_size: int = 1, timeout_ms: int = 5000) -> List[WorkQueueRecord]:
+    def claim(
+        self, queue: str, batch_size: int = 1, timeout_ms: int = 5000
+    ) -> List[WorkQueueRecord]:
         self._check()
         messages = self._client.claim(queue, batch_size, timeout_ms)
         return [WorkQueueRecord.from_message(m) for m in messages]
@@ -245,7 +248,8 @@ class WorkQueueQueueClient:
     ) -> int:
         self._check()
         return self._client.ack(
-            queue, msg_ids,
+            queue,
+            msg_ids,
             state_namespace=state_namespace,
             state_puts=state_puts,
             state_deletes=state_deletes,
@@ -267,8 +271,10 @@ class WorkQueueQueueClient:
     ) -> List[str]:
         self._check()
         return self._client.ack_and_forward(
-            upstream_queue, upstream_msg_ids,
-            downstream_queue, downstream_payloads,
+            upstream_queue,
+            upstream_msg_ids,
+            downstream_queue,
+            downstream_payloads,
             state_namespace=state_namespace,
             state_puts=state_puts,
             state_deletes=state_deletes,

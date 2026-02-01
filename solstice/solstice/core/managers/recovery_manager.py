@@ -136,9 +136,7 @@ class RecoveryManager:
         delay = self.get_recovery_delay()
         failure_count = len(failed_worker_ids)
 
-        self._logger.info(
-            f"Recovering {failure_count} failed workers (backoff: {delay:.1f}s)"
-        )
+        self._logger.info(f"Recovering {failure_count} failed workers (backoff: {delay:.1f}s)")
 
         # Remove from worker manager tracking
         self._worker_manager.cleanup_workers(failed_worker_ids)
