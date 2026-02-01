@@ -109,7 +109,12 @@ impl WorkQueueBrokerInner {
                 .http2_keepalive_timeout(Some(Duration::from_secs(20)))
                 // Allow keepalive pings even without active streams
                 .tcp_keepalive(Some(Duration::from_secs(30)))
-                .add_service(WorkQueueServer::new(service))
+                // Set max message size to 16MB to handle large Arrow batches (matches old Kafka config)
+                .add_service(
+                    WorkQueueServer::new(service)
+                        .max_decoding_message_size(16 * 1024 * 1024)  // 16MB
+                        .max_encoding_message_size(16 * 1024 * 1024)  // 16MB
+                )
                 .serve_with_incoming(incoming)
                 .await
             {

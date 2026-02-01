@@ -68,9 +68,11 @@ class SplitPayloadStoreWriter(
     val port = parts(1).toInt
 
     // Initialize gRPC channel
+    // Set max message size to 16MB to handle large Arrow batches (matches old Kafka config)
     channel = ManagedChannelBuilder
       .forAddress(host, port)
       .usePlaintext()
+      .maxInboundMessageSize(16 * 1024 * 1024)  // 16MB
       .build()
 
     stub = WorkQueueGrpc.newBlockingStub(channel)
