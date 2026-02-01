@@ -174,6 +174,7 @@ class WorkQueueClient:
 
     def _heartbeat_loop(self) -> None:
         """Background thread for heartbeat streaming."""
+        reconnect_attempts = 0
 
         def ping_generator() -> Iterator[Any]:
             while self._heartbeat_running:
@@ -192,12 +193,18 @@ class WorkQueueClient:
                         break
                     with self._heartbeat_lock:
                         self._lease_id = pong.lease_id
+                        reconnect_attempts = 0  # Reset on successful connection
                         if not pong.ok:
                             logger.warning("Lease invalidated by server")
                             self._lease_id = ""
             except grpc.RpcError as e:
                 if self._heartbeat_running:
-                    logger.warning(f"Heartbeat stream error: {e}, reconnecting...")
+                    reconnect_attempts += 1
+                    # Only log first attempt as warning, rest as debug to reduce noise
+                    if reconnect_attempts == 1:
+                        logger.warning(f"Heartbeat disconnected, reconnecting...")
+                    elif reconnect_attempts % 10 == 0:
+                        logger.debug(f"Heartbeat reconnect attempt {reconnect_attempts}")
                     time.sleep(1.0)
 
     @property

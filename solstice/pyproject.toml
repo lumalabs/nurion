@@ -22,7 +22,7 @@ dependencies = [
     "sqlalchemy>=2.0.0",
     "py-spy>=0.4.1",
     "pyspark==3.5.6",
-    "grpcio>=1.68.0",           # gRPC for WorkQueue client
+    "grpcio>=1.76.0",           # gRPC for WorkQueue client (matches generated stubs)
     "tenacity>=8.2.0",          # Retry library for transient failures
     # Compute engine
     "duckdb>=1.1.0",            # Embedded OLAP database for shuffle/aggregation

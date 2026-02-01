@@ -2930,7 +2930,7 @@ requires-dist = [
     { name = "duckdb", specifier = ">=1.1.0" },
     { name = "fastapi", specifier = ">=0.115.0" },
     { name = "fsspec", extras = ["s3"], specifier = ">=2024.6.0" },
-    { name = "grpcio", specifier = ">=1.68.0" },
+    { name = "grpcio", specifier = ">=1.76.0" },
     { name = "jinja2", specifier = ">=3.1.0" },
     { name = "pandas", specifier = ">=2.0.0" },
     { name = "prometheus-client", specifier = ">=0.20.0" },
