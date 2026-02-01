@@ -43,7 +43,6 @@ from solstice.core.models import Split, SplitPayload
 from solstice.core.sink_operator import SinkOperator
 import os
 
-from solstice.queue import QueueType
 from solstice.testing import (
     reset_fault_injector,
     FAULT_BEFORE_MARK_PROCESSED,
@@ -194,7 +193,6 @@ class TestOperatorExactlyOnce:
             job_id="test",
             stage_id="sink",
             worker_id="worker_0",
-            partition_id=0,
             semantic_guarantee=SemanticGuarantee.EXACTLY_ONCE,
         )
 
@@ -226,7 +224,6 @@ class TestOperatorExactlyOnce:
             job_id="test",
             stage_id="sink",
             worker_id="worker_0",
-            partition_id=0,
             semantic_guarantee=SemanticGuarantee.EXACTLY_ONCE,
         )
 
@@ -292,8 +289,7 @@ class TestFaultInjection:
                 job_id="test",
                 stage_id="sink",
                 worker_id="worker_0",
-                partition_id=0,
-                semantic_guarantee=SemanticGuarantee.EXACTLY_ONCE,
+                    semantic_guarantee=SemanticGuarantee.EXACTLY_ONCE,
             )
 
             op1 = config1.setup(runtime1)
@@ -344,8 +340,7 @@ class TestFaultInjection:
                 job_id="test",
                 stage_id="sink",
                 worker_id="worker_0",
-                partition_id=0,
-                semantic_guarantee=SemanticGuarantee.EXACTLY_ONCE,
+                    semantic_guarantee=SemanticGuarantee.EXACTLY_ONCE,
             )
 
             op2 = config2.setup(runtime2)
@@ -448,28 +443,21 @@ class TestConfigPropagation:
     def test_stage_runtime_has_semantic_guarantee(self):
         """Verify StageRuntime includes semantic_guarantee field."""
         from solstice.core.stage import StageRuntime
-        from solstice.queue import QueueType
 
         # Create with AT_LEAST_ONCE
         runtime = StageRuntime(
-            queue_type=QueueType.MEMORY,
-            shared_broker_endpoint=None,
-            upstream_endpoint=None,
-            upstream_topic=None,
-            state_endpoint=None,
-            state_topic=None,
+            broker_endpoint=None,
+            upstream_queue_name=None,
+            state_queue_name=None,
             semantic_guarantee=SemanticGuarantee.AT_LEAST_ONCE,
         )
         assert runtime.semantic_guarantee == SemanticGuarantee.AT_LEAST_ONCE
 
         # Create with EXACTLY_ONCE
         runtime = StageRuntime(
-            queue_type=QueueType.MEMORY,
-            shared_broker_endpoint=None,
-            upstream_endpoint=None,
-            upstream_topic=None,
-            state_endpoint=None,
-            state_topic=None,
+            broker_endpoint=None,
+            upstream_queue_name=None,
+            state_queue_name=None,
             semantic_guarantee=SemanticGuarantee.EXACTLY_ONCE,
         )
         assert runtime.semantic_guarantee == SemanticGuarantee.EXACTLY_ONCE
@@ -480,7 +468,6 @@ class TestConfigPropagation:
         job = Job(
             job_id="test_config_flow",
             config=JobConfig(
-                queue_type=QueueType.MEMORY,
                 semantic_guarantee=SemanticGuarantee.EXACTLY_ONCE,
             ),
         )
@@ -503,10 +490,7 @@ class TestConfigPropagation:
 
     def test_at_least_once_default(self):
         """Verify AT_LEAST_ONCE is the default."""
-        job = Job(
-            job_id="test_default",
-            config=JobConfig(queue_type=QueueType.MEMORY),
-        )
+        job = Job(job_id="test_default")
 
         job.add_stage(
             Stage(

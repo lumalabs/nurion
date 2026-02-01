@@ -1,0 +1,115 @@
+// WorkQueue gRPC Server
+//
+// Storage-only model: No startup recovery needed.
+// Storage is the source of truth - broker can restart anytime.
+
+use std::net::SocketAddr;
+use std::sync::Arc;
+use tokio::net::TcpListener;
+use tokio_stream::wrappers::TcpListenerStream;
+use tonic::transport::Server;
+
+use crate::recovery::{GcTask, RecoveryTask};
+use crate::service::proto::work_queue_server::WorkQueueServer;
+use crate::service::WorkQueueService;
+use crate::state::WorkQueueState;
+use crate::storage::WorkQueueStorage;
+use crate::types::WorkQueueConfig;
+
+/// WorkQueue broker inner implementation
+pub struct WorkQueueBrokerInner {
+    pub config: WorkQueueConfig,
+    pub state: Arc<WorkQueueState>,
+    pub storage: Arc<WorkQueueStorage>,
+    pub recovery_task: RecoveryTask,
+    pub gc_task: GcTask,
+    pub actual_port: Option<u16>,
+}
+
+impl WorkQueueBrokerInner {
+    /// Create a new broker instance
+    pub async fn new(
+        config: WorkQueueConfig,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        tracing::info!("Initializing WorkQueue broker...");
+        tracing::info!("  Storage: {}", config.db_path);
+        tracing::info!("  Claim timeout: {}s", config.claim_timeout_secs);
+        tracing::info!(
+            "  GC interval: {}s, retention: {}s",
+            config.gc_interval_secs,
+            config.acked_retention_secs
+        );
+
+        let storage = Arc::new(WorkQueueStorage::new(&config.db_path).await?);
+        let state = Arc::new(WorkQueueState::new());
+
+        // Recovery and GC tasks now only use storage (no memory state to recover)
+        let recovery_task = RecoveryTask::new(storage.clone(), config.clone());
+        let gc_task = GcTask::new(storage.clone(), config.clone());
+
+        Ok(Self {
+            config,
+            state,
+            storage,
+            recovery_task,
+            gc_task,
+            actual_port: None,
+        })
+    }
+
+    /// Start the gRPC server
+    pub async fn start(&mut self) -> Result<u16, Box<dyn std::error::Error + Send + Sync>> {
+        // No startup recovery needed - storage is the source of truth!
+        // Just start background tasks.
+
+        // Start background recovery task (recovers expired claims)
+        self.recovery_task.start();
+
+        // Start background GC task (cleans up acked messages)
+        self.gc_task.start();
+
+        // Create gRPC service
+        let service = WorkQueueService::new(self.state.clone(), self.storage.clone());
+
+        // Bind to address
+        let addr: SocketAddr = format!("{}:{}", self.config.host, self.config.port)
+            .parse()
+            .map_err(|e| format!("Invalid address: {}", e))?;
+
+        // Use TcpListener to get actual port
+        let listener = TcpListener::bind(addr).await?;
+        let actual_addr = listener.local_addr()?;
+        self.actual_port = Some(actual_addr.port());
+
+        tracing::info!("WorkQueue server starting on {}", actual_addr);
+
+        // Convert to stream for tonic
+        let incoming = TcpListenerStream::new(listener);
+
+        // Spawn server task
+        tokio::spawn(async move {
+            if let Err(e) = Server::builder()
+                .add_service(WorkQueueServer::new(service))
+                .serve_with_incoming(incoming)
+                .await
+            {
+                tracing::error!("Server error: {}", e);
+            }
+        });
+
+        Ok(actual_addr.port())
+    }
+
+    /// Stop the broker
+    pub fn stop(&mut self) {
+        tracing::info!("Stopping WorkQueue broker...");
+        self.recovery_task.stop();
+        self.gc_task.stop();
+    }
+}
+
+impl Drop for WorkQueueBrokerInner {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}

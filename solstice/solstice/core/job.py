@@ -20,7 +20,6 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from solstice.core.operator import SemanticGuarantee
 from solstice.core.stage import Stage
-from solstice.queue import QueueType
 
 if TYPE_CHECKING:
     from solstice.runtime.ray_runner import RayJobRunner
@@ -53,8 +52,7 @@ class JobConfig:
     """Configuration for a Solstice job.
 
     Attributes:
-        queue_type: Type of queue backend (TANSU for production, MEMORY for testing)
-        tansu_storage_url: Storage URL for Tansu backend (memory://, s3://)
+        workqueue_db_path: Storage path for WorkQueue backend (file://, memory://)
         semantic_guarantee: AT_LEAST_ONCE (default, no dedup) or EXACTLY_ONCE (with dedup)
         ray_init_kwargs: Arguments to pass to ray.init()
         autoscale_config: Configuration for autoscaling (None to disable)
@@ -63,8 +61,7 @@ class JobConfig:
         recover_from_checkpoint: Whether to recover from existing checkpoint on startup
     """
 
-    queue_type: QueueType = QueueType.TANSU
-    tansu_storage_url: str = "memory://"
+    workqueue_db_path: str = "memory://"
     semantic_guarantee: SemanticGuarantee = SemanticGuarantee.AT_LEAST_ONCE
     ray_init_kwargs: Dict[str, Any] = field(default_factory=dict)
     autoscale_config: Optional["AutoscaleConfig"] = None
@@ -93,7 +90,7 @@ class Job:
 
             >>> job = Job(
             ...     job_id="etl_pipeline",
-            ...     config=JobConfig(queue_type=QueueType.MEMORY),
+            ...     config=JobConfig(workqueue_db_path="file:///tmp/wq"),
             ... )
         """
         self.job_id = job_id

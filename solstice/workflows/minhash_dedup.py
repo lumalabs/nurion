@@ -86,7 +86,6 @@ from typing import Any, Dict
 
 from solstice.core.job import Job, JobConfig
 from solstice.core.stage import Stage
-from solstice.queue import QueueType
 from solstice.operators.sources import LanceTableSourceConfig
 from solstice.operators.minhash import MinHashComputeConfig, CandidatePairConfig
 from solstice.operators.connected_components import (
@@ -121,7 +120,7 @@ def create_job(
         - num_hashes: MinHash permutations (default: 128)
         - num_bands: LSH bands (default: 16)
         - max_iterations: Max CC iterations (default: 100)
-        - queue_type: TANSU or MEMORY (default: TANSU)
+        - workqueue_db_path: WorkQueue storage path (default: memory://)
         - output_format: json/lance (default: lance)
 
     Args:
@@ -156,9 +155,7 @@ def create_job(
     max_iterations = int(config.get("max_iterations", DEFAULT_MAX_ITERATIONS))
 
     # Queue configuration
-    queue_type_str = config.get("queue_type", "TANSU")
-    queue_type = QueueType[queue_type_str] if isinstance(queue_type_str, str) else queue_type_str
-    tansu_storage_url = config.get("tansu_storage_url", "memory://")
+    workqueue_db_path = config.get("workqueue_db_path", "memory://")
 
     # Worker resources
     worker_resources = {
@@ -174,10 +171,7 @@ def create_job(
     dedupe_parallelism = config.get("dedupe_parallelism", (2, 4))
 
     # Create job config (iteration handled internally by CCIterateMaster)
-    job_config = JobConfig(
-        queue_type=queue_type,
-        tansu_storage_url=tansu_storage_url,
-    )
+    job_config = JobConfig(workqueue_db_path=workqueue_db_path)
 
     job = Job(job_id=job_id, config=job_config)
 

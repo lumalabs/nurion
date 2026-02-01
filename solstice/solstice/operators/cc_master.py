@@ -25,7 +25,7 @@ Architecture:
     │  run():                                                     │
     │    1. Read input from upstream (candidate pairs/messages)   │
     │    2. Process and update labels in state store              │
-    │    3. Poll workers for changes (operator tracks internally) │
+    │    3. Poll state store for changes                          │
     │    4. If changed and iteration < max:                       │
     │       - Reset iteration counters                            │
     │       - Loop back to step 2                                 │
@@ -34,10 +34,10 @@ Architecture:
 
 Key design points:
 - Iteration happens INSIDE the stage, not in the runner
-- State (labels) is stored in SlateDB per partition
-- Each worker processes its assigned partitions
-- Master polls workers for changes (no callbacks)
-- Iteration state lives in operator, not worker
+- State (labels) is stored in SlateDB
+- Workers claim messages and process them
+- Master reads changes from state store
+- No partition assignment - workers compete for messages
 """
 
 from __future__ import annotations
@@ -70,7 +70,7 @@ class CCIterateMaster(StageMaster):
 
     Handles iteration internally:
     1. Run base stage logic to process input
-    2. Poll workers for iteration changes (operator tracks them)
+    2. Poll state store for iteration changes
     3. If not converged, reset and continue
     4. When converged, output final results
 
@@ -109,7 +109,7 @@ class CCIterateMaster(StageMaster):
 
         Iteration Algorithm:
         1. First pass: Process initial input (candidate pairs -> messages)
-        2. Poll workers for changes (operator tracks internally)
+        2. Read changes from state store
         3. If not converged, reset iteration and continue
         4. Output final labels
 
@@ -133,8 +133,8 @@ class CCIterateMaster(StageMaster):
                 self.logger.error("First pass failed")
                 return False
 
-            # Poll workers for changes from first iteration
-            total_changes = await self._poll_worker_changes()
+            # Read changes from state store for first iteration
+            total_changes = await self._read_state_changes()
             iteration_duration = time.time() - start_time
 
             self._iteration_stats.append(
@@ -210,7 +210,7 @@ class CCIterateMaster(StageMaster):
         """
         return total_changes <= self._convergence_threshold
 
-    async def _poll_worker_changes(self) -> int:
+    async def _read_state_changes(self) -> int:
         """Read total changes from state store.
 
         Workers store their change counts in state store with key `__changes__`.
@@ -220,7 +220,7 @@ class CCIterateMaster(StageMaster):
             Total number of changes across all partitions
         """
         if not self._state_store_path:
-            self.logger.warning("No state_store_path configured, cannot poll changes")
+            self.logger.warning("No state_store_path configured, cannot read changes")
             return 0
 
         total_changes = 0
@@ -267,6 +267,7 @@ class CCIterateMaster(StageMaster):
         """Trigger recomputation from stored state in all workers.
 
         Uses invoke_operator for generic dispatch to operator methods.
+        Each worker recomputes from the full state store.
 
         Returns:
             Total number of changes across all workers
@@ -278,13 +279,10 @@ class CCIterateMaster(StageMaster):
         futures = []
 
         for worker_id, worker in self._worker_manager.workers.items():
-            # Get partition assignment for this worker
-            assigned_partitions = self._partition_manager.get_assignment(worker_id)
-            if not assigned_partitions:
-                self.logger.warning(f"No partitions assigned to worker {worker_id}")
-                continue
+            # With WorkQueue model, workers don't have partition assignments
+            # Each worker recomputes from the full state store
             futures.append(
-                worker.invoke_operator.remote("recompute_from_state", assigned_partitions)
+                worker.invoke_operator.remote("recompute_from_state", list(range(self._num_partitions)))
             )
 
         if futures:

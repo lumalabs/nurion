@@ -2,9 +2,21 @@
 
 ## Status
 
-**Status**: PROPOSED
+**Status**: ✅ IMPLEMENTED
 **Author**: AI Assistant
 **Created**: 2026-01-31
+**Updated**: 2026-02-01
+
+### Implementation Status
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| Rust Server (`lib/workqueue-rs/`) | ✅ Done | gRPC + SlateDB + PyO3 |
+| GC-based Ack | ✅ Done | Messages retained until GC, safer recovery |
+| State API | ✅ Done | `state_get`, `state_put`, atomic ack+state |
+| Python Client | ✅ Done | `workqueue_py.client.WorkQueueClient` |
+| Solstice Integration | ✅ Done | `solstice/queue/workqueue.py` |
+| Unified Worker Exit | ✅ Done | No EOF messages, uses `notify_upstream_finished` + queue drained |
 
 ---
 
@@ -81,10 +93,16 @@ Messages:
   msg:{queue}:{msg_id} → {payload: bytes, created_at: f64}
 
 Pending Index (ordered by time):
-  pending:{queue}:{timestamp}:{msg_id} → ""
+  pending:{queue}:{timestamp_nanos}:{msg_id} → ""
 
 Claimed Index:
   claimed:{queue}:{msg_id} → {worker_id, lease_id, claimed_at}
+
+Acked Index (for GC):
+  acked:{queue}:{timestamp_nanos}:{msg_id} → ""
+
+State Entries:
+  state:{namespace}:{key} → {value: bytes}
 ```
 
 #### Message State Machine
@@ -96,12 +114,23 @@ Claimed Index:
     ┌─────────┐  claim   ┌─────────┐   │
     │ PENDING │─────────▶│ CLAIMED │───┘
     └─────────┘          └────┬────┘
-                              │ ack (atomic with downstream write)
+                              │ ack (atomic with downstream write + state update)
                               ▼
                          ┌─────────┐
-                         │  DONE   │ (message deleted)
+                         │  ACKED  │ (message retained for safety)
+                         └────┬────┘
+                              │ GC (after retention period)
+                              ▼
+                         ┌─────────┐
+                         │ DELETED │ (message body removed)
                          └─────────┘
 ```
+
+**GC-based Ack Design**: Messages are not deleted immediately on ack. Instead:
+1. `ack()` moves message from CLAIMED to ACKED index
+2. Message body is retained for the retention period (default: 1 hour)
+3. Background GC task periodically deletes old ACKED messages
+4. Benefits: Safer recovery, debugging support, auditability
 
 ### 2. gRPC API
 
@@ -191,7 +220,50 @@ Worker                          Server
    │                               │ → Recovery loop reclaims messages
 ```
 
-#### 3.4 Timeout Recovery
+#### 3.4 Unified Worker Exit Mechanism
+
+Workers exit when:
+1. `_upstream_finished` flag is set (via `notify_upstream_finished()` remote call)
+2. Queue is drained: `pending_count == 0 AND claimed_count == 0`
+
+```python
+# StageWorker._run_claim_loop()
+while self._running:
+    records = self.upstream_queue.claim(queue, batch_size, timeout_ms=1000)
+
+    if not records:
+        # Check exit condition
+        if self._upstream_finished and self._is_queue_drained():
+            break  # Exit gracefully
+        continue
+
+    # Process messages...
+
+def _is_queue_drained(self) -> bool:
+    stats = self.upstream_queue.get_stats(queue)
+    return stats["pending_count"] == 0 and stats["claimed_count"] == 0
+```
+
+**Benefits over EOF messages**:
+- Unified exit logic for all workers (no special EOF handling)
+- No EOF message that only one worker can claim
+- Reliable completion detection via queue stats
+- Simpler code, fewer edge cases
+
+**Trigger flow**:
+```
+Source Stage:
+  1. SourceMaster produces all splits
+  2. SourceMaster calls worker_manager.notify_upstream_finished()
+  3. Workers detect _upstream_finished + queue drained → exit
+
+Processing Stages:
+  1. Upstream stage completes
+  2. RayRunner calls downstream_master.notify_upstream_finished()
+  3. Workers detect _upstream_finished + queue drained → exit
+```
+
+#### 3.5 Timeout Recovery
 
 Background task runs every N seconds:
 
@@ -225,7 +297,251 @@ async def recover_timeout_messages():
                 pending[queue].push_back(msg)
 ```
 
-### 4. Startup Recovery
+### 4. Integrated State Management
+
+#### 4.1 Problem: State Store Partitioning with Work-Stealing
+
+The original design used partition-scoped state stores (one SlateDB per partition). This worked well when worker:partition was 1:1, but causes issues with WorkQueue's work-stealing model:
+
+```
+问题: SlateDB 只支持单写者
+
+旧模型 (1:1):
+  Worker_0 ──独占写──> SlateDB_partition_0  ✓
+  Worker_1 ──独占写──> SlateDB_partition_1  ✓
+
+WorkQueue work-stealing (N:M):
+  Worker_0 ─┬─ 可能写 ──> SlateDB_partition_0
+            └─ 可能写 ──> SlateDB_partition_1  ❌ 多写者冲突！
+```
+
+If workers can process any message, and state is partitioned by key hash, we'd need:
+- Many small SlateDB instances (one per partition)
+- Complex locking across processes
+- Or give up work-stealing benefits
+
+#### 4.2 Solution: State Integrated into WorkQueue Server
+
+Since WorkQueue Server already manages SlateDB as a single-writer process, extend it to also manage operator state:
+
+```
+┌─────────────────────────────────────────────────────────┐
+│           WorkQueue Server (单进程, 单写者)              │
+│  ┌─────────────┐    ┌─────────────┐                    │
+│  │ Message DB  │    │  State DB   │  ← 同一进程管理     │
+│  │  (SlateDB)  │    │  (SlateDB)  │    无多写者问题     │
+│  └─────────────┘    └─────────────┘                    │
+└─────────────────────────────────────────────────────────┘
+         ↑                    ↑
+         │    gRPC            │
+    ┌────┴────┬───────────────┴────┐
+    │         │                    │
+ Worker_0  Worker_1            Worker_2
+ (任意消息) (任意消息)          (任意消息)
+```
+
+**Key insight**: Workers don't write state directly. They request state operations from the server, which serializes all writes through a single SlateDB instance.
+
+#### 4.3 Extended gRPC API
+
+```protobuf
+service WorkQueue {
+  // Existing consumer API
+  rpc Claim(ClaimRequest) returns (ClaimResponse);
+  rpc Ack(AckRequest) returns (AckResponse);
+  rpc Nack(NackRequest) returns (NackResponse);
+  rpc AckAndForward(AckAndForwardRequest) returns (AckAndForwardResponse);
+
+  // Existing producer API
+  rpc Push(PushRequest) returns (PushResponse);
+  rpc PushBatch(PushBatchRequest) returns (PushBatchResponse);
+
+  // NEW: State operations (standalone)
+  rpc StateGet(StateGetRequest) returns (StateGetResponse);
+  rpc StatePut(StatePutRequest) returns (StatePutResponse);
+
+  // Existing heartbeat & stats
+  rpc HeartbeatStream(stream HeartbeatPing) returns (stream HeartbeatPong);
+  rpc GetStats(GetStatsRequest) returns (GetStatsResponse);
+}
+
+// Extended Claim with state read
+message ClaimRequest {
+  string queue = 1;
+  int32 batch_size = 2;
+  // NEW: optionally fetch state for these keys
+  repeated string state_keys = 3;
+  string state_namespace = 4;  // e.g., "{job_id}/{stage_id}"
+}
+
+message ClaimResponse {
+  repeated ClaimedMessage messages = 1;
+  // NEW: requested state values
+  map<string, bytes> states = 2;
+}
+
+// Extended Ack with atomic state update
+message AckRequest {
+  string queue = 1;
+  repeated string msg_ids = 2;
+  // NEW: atomic state updates
+  string state_namespace = 3;
+  map<string, bytes> state_puts = 4;    // key -> value to set
+  repeated string state_deletes = 5;     // keys to delete
+}
+
+// Standalone state operations (for non-message scenarios)
+message StateGetRequest {
+  string namespace = 1;
+  repeated string keys = 2;
+}
+
+message StateGetResponse {
+  map<string, bytes> values = 1;
+}
+
+message StatePutRequest {
+  string namespace = 1;
+  map<string, bytes> puts = 2;
+  repeated string deletes = 3;
+}
+
+message StatePutResponse {}
+```
+
+#### 4.4 Key Schema for State
+
+```
+State entries:
+  state:{namespace}:{key} → {value: bytes}
+
+Example:
+  state:job_123/stage_dedupe:sha256_abc123 → "1"
+  state:job_123/stage_cc:label:doc_001 → "cluster_42"
+```
+
+#### 4.5 Atomic Ack + State Update
+
+The critical operation is atomically acknowledging messages AND updating state:
+
+```
+Worker                          Server
+   │                               │
+   │── Ack(                        │
+   │     queue="input",            │
+   │     msg_ids=["m1", "m2"],     │
+   │     state_namespace="j1/s1",  │
+   │     state_puts={              │
+   │       "key_hash_1": "1",      │
+   │       "key_hash_2": "1"       │
+   │     }                         │
+   │   ) ─────────────────────────▶│
+   │                               │ ATOMIC batch write to SlateDB:
+   │                               │ 1. Delete claimed:input:m1
+   │                               │ 2. Delete claimed:input:m2
+   │                               │ 3. Delete msg:input:m1
+   │                               │ 4. Delete msg:input:m2
+   │                               │ 5. Put state:j1/s1:key_hash_1 → "1"
+   │                               │ 6. Put state:j1/s1:key_hash_2 → "1"
+   │◀── AckResponse ───────────────│
+```
+
+**Why atomic**: If worker crashes between ack and state update:
+- Without atomicity: Message acked but state not updated → duplicate not detected on retry
+- With atomicity: Either both succeed or both fail → consistent
+
+#### 4.6 Example: Dedup with Integrated State
+
+```python
+class HashDedupeOperator(Operator):
+    async def process_batch(self):
+        # 1. Claim messages AND fetch state for dedup keys
+        key_hashes = []  # Will be populated after seeing messages
+
+        # First claim without state (we don't know keys yet)
+        messages = await self.client.claim(queue=self.input_queue, batch_size=100)
+
+        # Compute key hashes
+        key_hashes = [self._compute_key_hash(m.payload) for m in messages]
+
+        # 2. Batch fetch state for all keys
+        states = await self.client.state_get(
+            namespace=f"{self.job_id}/{self.stage_id}",
+            keys=key_hashes
+        )
+
+        # 3. Filter duplicates (keys already in state)
+        new_messages = []
+        new_keys = {}
+        for msg, key_hash in zip(messages, key_hashes):
+            if key_hash not in states:
+                new_messages.append(msg)
+                new_keys[key_hash] = b"1"
+
+        # 4. Process non-duplicate messages
+        outputs = [self._process(m) for m in new_messages]
+
+        # 5. Atomic: Ack all messages + update state + forward outputs
+        await self.client.ack_and_forward(
+            upstream_queue=self.input_queue,
+            upstream_msg_ids=[m.msg_id for m in messages],
+            downstream_queue=self.output_queue,
+            downstream_payloads=outputs,
+            state_namespace=f"{self.job_id}/{self.stage_id}",
+            state_puts=new_keys
+        )
+```
+
+#### 4.7 Shuffle Without Queue Partitions
+
+With integrated state, shuffle operations don't need queue partitions:
+
+```
+旧模型 (需要 queue partition):
+  数据按 key hash 路由到 queue partition
+  Worker 固定消费特定 partition
+  同 key 数据必然被同一 worker 处理
+
+新模型 (无 queue partition):
+  所有数据进入同一 queue
+  任意 worker claim 任意消息
+  State 按 key hash 组织 (在 server 端)
+  同 key 的 state 操作由 server 串行化
+```
+
+**Benefits**:
+- No partition skew (work-stealing自动负载均衡)
+- Simpler API (no partition concepts)
+- Single queue depth to monitor
+
+**Trade-off**:
+- All state operations go through server (potential bottleneck for very high-frequency state access)
+- Mitigation: Batch state operations, use claim_with_state pattern
+
+#### 4.8 Handling Partition Skew (Salted Aggregation)
+
+For aggregations where same key must be combined, use two-phase approach:
+
+```
+Phase 1 (Partial Aggregate - 分散热点):
+  key -> hash(key + salt) 分散到不同 worker
+  每个 worker 做局部聚合
+  State key: "{key}:{salt}" -> partial_result
+
+Phase 2 (Final Aggregate - 合并结果):
+  合并同一 key 的所有 partial results
+  State key: "{key}" -> final_result
+```
+
+```python
+@dataclass
+class SaltedGroupByConfig(OperatorConfig):
+    group_keys: List[str]
+    agg_func: str  # "sum", "count", "min", "max" (必须可结合)
+    salt_factor: int = 10  # 热点 key 分散成 10 份
+```
+
+### 5. Startup Recovery
 
 On driver restart, recover state from SlateDB:
 
@@ -250,6 +566,45 @@ async def recover_from_db():
         ])
 
         pending[queue].push_back(Message(msg_id, msg_data))
+```
+
+### 6. Garbage Collection (GC)
+
+Background GC task cleans up acked messages after the retention period:
+
+```rust
+// recovery.rs - GcTask
+async fn run_gc(storage: &WorkQueueStorage, retention_ns: u64) {
+    let now = now_nanos();
+    let cutoff = now - retention_ns;
+
+    // Scan all acked messages
+    for (queue, timestamp_ns, msg_id) in storage.scan_all_acked().await {
+        if timestamp_ns < cutoff {
+            // Delete acked index + message body
+            storage.delete(&acked_key(&queue, timestamp_ns, &msg_id)).await;
+            storage.delete(&msg_key(&queue, &msg_id)).await;
+        }
+    }
+}
+```
+
+**Configuration** (`WorkQueueConfig`):
+```rust
+pub struct WorkQueueConfig {
+    // ... other fields ...
+    pub acked_retention_secs: f64,  // Default: 3600.0 (1 hour)
+    pub gc_interval_secs: f64,       // Default: 60.0 (1 minute)
+}
+```
+
+**Python API**:
+```python
+broker = WorkQueueBrokerManager(
+    db_path="file:///tmp/workqueue",
+    acked_retention_secs=3600.0,  # Keep acked messages for 1 hour
+    gc_interval_secs=60.0,        # Run GC every minute
+)
 ```
 
 ---
@@ -278,12 +633,14 @@ lib/workqueue-rs/
 │   ├── lib.rs                  # PyO3 entry point
 │   ├── server.rs               # gRPC server
 │   ├── service.rs              # WorkQueueService implementation
-│   ├── storage.rs              # SlateDB wrapper
+│   ├── storage.rs              # SlateDB wrapper (messages)
+│   ├── state.rs                # State store (integrated state management)
 │   ├── types.rs                # Data structures
 │   └── recovery.rs             # Timeout recovery logic
 └── python/
     └── workqueue_py/
-        └── __init__.py
+        ├── __init__.py
+        └── client.py           # WorkQueueClient with state support
 ```
 
 ### Key Rust Dependencies
@@ -302,22 +659,52 @@ parking_lot = "0.12"       # Fast locks
 ### Python API
 
 ```python
-from workqueue_py import WorkQueueBroker
+# === Broker (Driver side) ===
+from workqueue_py import WorkQueueBroker, BrokerConfig
 
-# Driver side
-broker = WorkQueueBroker()
-address = broker.start(
-    db_path="s3://bucket/workqueue",  # or local path
+config = BrokerConfig(
+    db_path="s3://bucket/workqueue",  # or file:///path
     host="0.0.0.0",
     port=0,                           # auto-assign
-    claim_timeout_secs=60,
+    claim_timeout_secs=60.0,
+    recovery_interval_secs=10.0,
+    acked_retention_secs=3600.0,      # GC: 1 hour retention
+    gc_interval_secs=60.0,            # GC: run every minute
 )
-print(f"WorkQueue started at {address}")
 
-# Pass address to workers via Ray runtime...
-
-# On shutdown
+broker = WorkQueueBroker(config)
+broker.start()
+print(f"WorkQueue started at port {broker.get_port()}")
 broker.stop()
+
+# === Client (Worker side) ===
+from workqueue_py.client import WorkQueueClient
+
+client = WorkQueueClient("localhost:50051", worker_id="worker-1")
+client.start()
+
+# Producer
+msg_id = client.push("queue", b"payload")
+
+# Consumer
+messages = client.claim("queue", batch_size=10, timeout_ms=1000)
+client.ack("queue", [m.msg_id for m in messages])
+
+# Atomic ack + forward + state update
+client.ack_and_forward(
+    upstream_queue="input",
+    upstream_msg_ids=["m1", "m2"],
+    downstream_queue="output",
+    downstream_payloads=[b"out1", b"out2"],
+    state_namespace="job1/stage1",
+    state_puts={"key1": b"value1"},
+)
+
+# State operations
+values = client.state_get("job1/stage1", ["key1", "key2"])
+client.state_put("job1/stage1", puts={"key3": b"value3"}, deletes=["key1"])
+
+client.stop()
 ```
 
 ---
@@ -444,7 +831,57 @@ async fn claim(&self, queue: &str, batch_size: usize) -> Vec<Message> {
 - Use `split_id` for deduplication (existing design)
 - `AckAndForward` guarantees: either both succeed or neither
 
-### 10. Multi-Job Isolation
+### 10. State Operation Bottleneck
+
+**Issue**: All state operations go through the single WorkQueue Server, which could become a bottleneck for high-frequency state access.
+
+**Mitigation**:
+- Batch state operations (read multiple keys in one RPC)
+- Use `claim_with_state` pattern to combine message fetch + state read
+- Use `ack_with_state` pattern to combine ack + state write
+- For very high throughput needs, consider sharding by state namespace across multiple servers
+
+```rust
+// Server-side optimization: batch state operations
+async fn state_get(&self, req: StateGetRequest) -> StateGetResponse {
+    // Use SlateDB multi-get for efficiency
+    let values = self.db.multi_get(
+        req.keys.iter().map(|k| format!("state:{}:{}", req.namespace, k))
+    ).await;
+
+    StateGetResponse { values }
+}
+```
+
+**Capacity estimates**:
+- SlateDB read: ~100k ops/sec (mostly cache hits)
+- SlateDB write: ~50k ops/sec (batched)
+- gRPC overhead: minimal with connection pooling
+- Expected bottleneck: ~50k state updates/sec per server
+
+For most data processing workloads (batch processing, ETL), this is sufficient. For streaming with very high key cardinality, may need sharding.
+
+### 11. State Namespace Isolation
+
+**Issue**: Different jobs/stages should not see each other's state.
+
+**Mitigation**:
+- Mandatory `namespace` parameter in all state operations
+- Namespace format: `{job_id}/{stage_id}`
+- Server validates namespace format
+- Optional: ACL for cross-job state access (future)
+
+```rust
+fn validate_namespace(namespace: &str) -> Result<(), Status> {
+    let parts: Vec<&str> = namespace.split('/').collect();
+    if parts.len() != 2 || parts[0].is_empty() || parts[1].is_empty() {
+        return Err(Status::invalid_argument("Invalid namespace format"));
+    }
+    Ok(())
+}
+```
+
+### 12. Multi-Job Isolation
 
 **Issue**: Should multiple jobs share one WorkQueue instance?
 
@@ -509,6 +946,10 @@ broker2.start(db_path="s3://bucket/job2/queue")
 | Worker failure recovery | Partition reassignment | Message timeout + reclaim |
 | Code complexity | High (PartitionManager, etc.) | Low (single queue model) |
 | Persistence | Tansu storage backends | SlateDB (S3) |
+| State management | Separate SlateDB per partition | Integrated in WorkQueue Server |
+| State write model | Worker writes directly | Server-mediated (single writer) |
+| Shuffle support | Queue partitions | State-based (any worker, any key) |
+| Partition skew | Manual rebalancing | Work-stealing (automatic) |
 
 ---
 
@@ -521,6 +962,27 @@ broker2.start(db_path="s3://bucket/job2/queue")
 3. **Payload storage**: Keep using Ray Object Store for payloads, or move to SlateDB?
 
 4. **Metrics**: What metrics should the WorkQueue expose? (queue depth, claim rate, ack latency, etc.)
+
+5. **State TTL**: Should state entries have automatic expiration? Useful for:
+   - Dedup state cleanup after job completion
+   - Preventing unbounded state growth
+   - Options: job-scoped cleanup, TTL per namespace, manual cleanup API
+
+6. **State size limits**: What's the max value size for state entries? Large values (>1MB) may impact performance.
+   - Option A: Reject large values at API level
+   - Option B: Store large values in separate storage (S3) with reference in state
+
+7. **State migration**: When job restarts with different parallelism, how to handle existing state?
+   - Current design: State is key-based, not worker-based, so no migration needed
+   - Question: Should we support state snapshot/restore for debugging?
+
+8. **Concurrent state updates**: What happens if two workers update the same state key simultaneously?
+   - Current design: Server serializes all writes, last-write-wins
+   - Question: Do we need CAS (compare-and-swap) operations for some use cases?
+
+9. **State read consistency**: Should state reads be strongly consistent or eventually consistent?
+   - Current design: Strong consistency (single SlateDB writer)
+   - Trade-off: Latency vs consistency
 
 ---
 
@@ -724,4 +1186,15 @@ class RebuildPolicy(Enum):
 
 ---
 
-*Last Updated: 2026-01-31*
+## Changelog
+
+- **2026-02-01**: Implementation complete
+  - Added GC-based ack mechanism (safer than immediate delete)
+  - Added unified worker exit (replaced EOF messages)
+  - State API fully implemented
+  - Solstice integration complete
+- **2026-01-31**: Initial design proposed
+
+---
+
+*Last Updated: 2026-02-01*

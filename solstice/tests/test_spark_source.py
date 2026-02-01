@@ -583,7 +583,7 @@ class TestSparkSourceMaster:
 
     @pytest.mark.asyncio
     async def test_full_pipeline_with_queue(self, ray_cluster):
-        """Test complete SparkSource pipeline with TansuBackend queue.
+        """Test complete SparkSource pipeline with WorkQueue queue.
 
         This test verifies the full flow:
         1. SparkSourceMaster starts and creates source queue

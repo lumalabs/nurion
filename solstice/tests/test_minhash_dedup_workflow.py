@@ -231,7 +231,7 @@ class TestMinHashDedupWorkflowExecution:
                     "num_hashes": 10,
                     "num_bands": 2,  # 10/2 = 5 rows per band
                     "max_iterations": 20,
-                    "tansu_storage_url": "memory://",
+                    "workqueue_db_path": "memory://",
                     "output_format": "lance",
                     "num_partitions": 8,
                     # Resources for 10k doc test

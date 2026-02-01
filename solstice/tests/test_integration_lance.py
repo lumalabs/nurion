@@ -16,7 +16,7 @@
 
 Tests the full pipeline flow:
 1. Create Lance dataset (local or S3)
-2. Run LanceSourceMaster through full pipeline with TansuBackend queue
+2. Run LanceSourceMaster through full pipeline with WorkQueue queue
 3. Verify data is processed correctly
 """
 
@@ -177,16 +177,16 @@ class TestLanceSourceS3:
 
 
 # ============================================================================
-# Full Pipeline Tests (requires tansu)
+# Full Pipeline Tests (requires workqueue)
 # ============================================================================
 
 
 class TestLancePipeline:
-    """Integration tests for full Lance pipeline with TansuBackend."""
+    """Integration tests for full Lance pipeline with WorkQueue."""
 
     @pytest.mark.asyncio
     async def test_full_pipeline_with_queue(self, lance_dataset_local, ray_cluster):
-        """Test complete LanceSource pipeline with TansuBackend queue.
+        """Test complete LanceSource pipeline with WorkQueue queue.
 
         This test verifies the full flow:
         1. LanceSourceMaster starts and creates source queue

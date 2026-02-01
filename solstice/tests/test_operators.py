@@ -36,14 +36,12 @@ def make_runtime(
     worker_id: str = "worker-1",
     job_id: str = "test_job",
     stage_id: str = "stage",
-    partition_id: int = 0,
 ) -> OperatorRuntime:
     """Create a test OperatorRuntime."""
     return OperatorRuntime(
         job_id=job_id,
         stage_id=stage_id,
         worker_id=worker_id,
-        partition_id=partition_id,
         semantic_guarantee=SemanticGuarantee.AT_LEAST_ONCE,
     )
 

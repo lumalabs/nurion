@@ -37,7 +37,6 @@ from solstice.operators.sources.sparkv2 import (
 from solstice.core.operator import SemanticGuarantee
 from solstice.core.stage import StageRuntime
 from solstice.core.stage_master import QueueEndpoint
-from solstice.queue import QueueType
 
 
 # Test data path
@@ -91,7 +90,7 @@ class TestSparkSourceV2Integration:
     """
 
     @pytest.mark.asyncio
-    async def test_v2_writes_to_output_queue(self, ray_cluster, tansu_backend):
+    async def test_v2_writes_to_output_queue(self, ray_cluster, workqueue_backend):
         """Test that V2 writes directly to output_queue."""
         test_path = str(TEST_DATA_100)
 
@@ -110,17 +109,13 @@ class TestSparkSourceV2Integration:
         _wait_for_actor(payload_store)
 
         runtime = StageRuntime(
-            queue_type=QueueType.TANSU,
-            shared_broker_endpoint=QueueEndpoint(
-                queue_type=QueueType.TANSU,
+            broker_endpoint=QueueEndpoint(
                 host="localhost",
-                port=tansu_backend.port,
-                storage_url="memory://tansu/",
+                port=workqueue_backend.port,
+                storage_url="memory://",
             ),
-            upstream_endpoint=None,
-            upstream_topic=None,
-            state_endpoint=None,
-            state_topic=None,
+            upstream_queue_name=None,
+            state_queue_name=None,
             semantic_guarantee=SemanticGuarantee.AT_LEAST_ONCE,
         )
         master = SparkSourceV2Master(
@@ -165,7 +160,7 @@ class TestSparkSourceV2Integration:
             await master.stop()
 
     @pytest.mark.asyncio
-    async def test_v2_with_parallelism(self, ray_cluster, tansu_backend):
+    async def test_v2_with_parallelism(self, ray_cluster, workqueue_backend):
         """Test V2 with custom parallelism."""
         test_path = str(TEST_DATA_100)
 
@@ -185,17 +180,13 @@ class TestSparkSourceV2Integration:
         _wait_for_actor(payload_store)
 
         runtime = StageRuntime(
-            queue_type=QueueType.TANSU,
-            shared_broker_endpoint=QueueEndpoint(
-                queue_type=QueueType.TANSU,
+            broker_endpoint=QueueEndpoint(
                 host="localhost",
-                port=tansu_backend.port,
-                storage_url="memory://tansu/",
+                port=workqueue_backend.port,
+                storage_url="memory://",
             ),
-            upstream_endpoint=None,
-            upstream_topic=None,
-            state_endpoint=None,
-            state_topic=None,
+            upstream_queue_name=None,
+            state_queue_name=None,
             semantic_guarantee=SemanticGuarantee.AT_LEAST_ONCE,
         )
         master = SparkSourceV2Master(
@@ -218,7 +209,7 @@ class TestSparkSourceV2Integration:
             await master.stop()
 
     @pytest.mark.asyncio
-    async def test_v2_large_dataset(self, ray_cluster, tansu_backend):
+    async def test_v2_large_dataset(self, ray_cluster, workqueue_backend):
         """Test V2 with larger dataset."""
         test_path = str(TEST_DATA_1000)
 
@@ -237,17 +228,13 @@ class TestSparkSourceV2Integration:
         _wait_for_actor(payload_store)
 
         runtime = StageRuntime(
-            queue_type=QueueType.TANSU,
-            shared_broker_endpoint=QueueEndpoint(
-                queue_type=QueueType.TANSU,
+            broker_endpoint=QueueEndpoint(
                 host="localhost",
-                port=tansu_backend.port,
-                storage_url="memory://tansu/",
+                port=workqueue_backend.port,
+                storage_url="memory://",
             ),
-            upstream_endpoint=None,
-            upstream_topic=None,
-            state_endpoint=None,
-            state_topic=None,
+            upstream_queue_name=None,
+            state_queue_name=None,
             semantic_guarantee=SemanticGuarantee.AT_LEAST_ONCE,
         )
         master = SparkSourceV2Master(

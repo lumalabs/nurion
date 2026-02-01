@@ -90,15 +90,13 @@ class OperatorRuntime:
     Attributes:
         job_id: Job identifier
         stage_id: Stage identifier
-        worker_id: Worker identifier (includes partition suffix)
-        partition_id: Partition this operator handles
+        worker_id: Worker identifier
         semantic_guarantee: AT_LEAST_ONCE or EXACTLY_ONCE
     """
 
     job_id: str
     stage_id: str
     worker_id: str
-    partition_id: int
     semantic_guarantee: SemanticGuarantee = SemanticGuarantee.AT_LEAST_ONCE
 
 
@@ -216,7 +214,6 @@ class OperatorConfig(ABC):
             job_id="job_123",
             stage_id="stage_0",
             worker_id="worker_0",
-            partition_id=0,
         )
         operator = config.setup(runtime)
 
@@ -236,7 +233,7 @@ class OperatorConfig(ABC):
         """Create and return an operator instance with this configuration.
 
         Args:
-            runtime: Runtime parameters (job_id, stage_id, worker_id, partition_id)
+            runtime: Runtime parameters (job_id, stage_id, worker_id)
 
         Returns:
             Configured operator instance
@@ -257,35 +254,27 @@ class OperatorConfig(ABC):
 
 
 class Operator(ABC):
-    """Base class for all operators with partition-aware state management.
+    """Base class for all operators with state management.
 
     Design Principle: Operators receive immutable config and runtime parameters.
     Optional state store for exactly-once semantics.
 
-    Partition-per-Operator Model:
-    - Each partition gets its own Operator instance
-    - partition_id is in runtime, accessible via self.partition_id
-    - State store is used for offset + business state persistence
-
-    Offset-based Dedup (for EXACTLY_ONCE):
-    - last_offset: Last processed offset
-    - is_duplicate(offset): Returns True if offset <= last_offset
-    - For sequential partition consumption, this is sufficient
-    - No need for separate split_id tracking
+    Message ID-based Dedup (for EXACTLY_ONCE):
+    - Tracks processed message IDs in state store
+    - is_duplicate_by_id(message_id): Returns True if already processed
+    - Works with WorkQueue claim-based model
 
     Usage:
-        # Worker creates operator per partition
         runtime = OperatorRuntime(
             job_id="job_123",
             stage_id="stage_0",
-            worker_id="worker_0_p0",
-            partition_id=0,
+            worker_id="worker_0",
             semantic_guarantee=SemanticGuarantee.EXACTLY_ONCE,
         )
         op = config.setup(runtime)
-        op.init_from_state_store()  # Recover last_offset
+        op.init_from_state_store()  # Recover state
         # ... process messages ...
-        op.mark_processed(offset)
+        op.mark_processed_by_id(message_id)
     """
 
     # Class variable set by @operator decorator
@@ -337,11 +326,6 @@ class Operator(ABC):
         return self._runtime.stage_id
 
     @property
-    def partition_id(self) -> int:
-        """Partition ID from runtime (for partition-per-operator model)."""
-        return self._runtime.partition_id
-
-    @property
     def semantic_guarantee(self) -> SemanticGuarantee:
         """Semantic guarantee from runtime."""
         return self._runtime.semantic_guarantee
@@ -369,14 +353,12 @@ class Operator(ABC):
                 )
         return self._state_store
 
-    def _ensure_partition_acquired(self, partition_id: Optional[int] = None) -> None:
-        """Ensure partition is acquired in state store.
+    # Default partition ID for state store (WorkQueue model doesn't use partitions)
+    _STATE_PARTITION_ID: ClassVar[int] = 0
 
-        Args:
-            partition_id: Partition ID to acquire. If None, uses self.partition_id.
-                         Multi-partition operators should pass explicit partition_id.
-        """
-        pid = partition_id if partition_id is not None else self.partition_id
+    def _ensure_partition_acquired(self) -> None:
+        """Ensure state partition is acquired in state store."""
+        pid = self._STATE_PARTITION_ID
         if pid in self._acquired_partitions:
             return
         store = self.state_store
@@ -399,7 +381,7 @@ class Operator(ABC):
 
         try:
             # Recover last_offset
-            offset_bytes = store.get(self.partition_id, OFFSET_KEY)
+            offset_bytes = store.get(self._STATE_PARTITION_ID, OFFSET_KEY)
             if offset_bytes is not None:
                 self.last_offset = int.from_bytes(offset_bytes, "big", signed=True)
                 self.logger.info(f"Recovered last_offset={self.last_offset}")
@@ -425,6 +407,42 @@ class Operator(ABC):
         if self.last_offset < 0:
             return False
         return offset <= self.last_offset
+
+    def is_duplicate_by_id(self, message_id: str) -> bool:
+        """Check if message ID was already processed.
+
+        For WorkQueue claim-based model where messages have unique IDs
+        instead of sequential offsets.
+
+        Args:
+            message_id: The message ID to check
+
+        Returns:
+            True if this message was already processed
+        """
+        if not hasattr(self, "_processed_ids"):
+            self._processed_ids: set[str] = set()
+        return message_id in self._processed_ids
+
+    def mark_processed_by_id(self, message_id: str) -> None:
+        """Mark message ID as processed.
+
+        For WorkQueue claim-based model.
+
+        Args:
+            message_id: The message ID that was processed
+        """
+        if not hasattr(self, "_processed_ids"):
+            self._processed_ids: set[str] = set()
+        self._processed_ids.add(message_id)
+        self.processed_count += 1
+
+        # Limit the size of the processed IDs set to avoid memory issues
+        # Keep only the last 10000 IDs
+        if len(self._processed_ids) > 10000:
+            # Convert to list, keep last 5000, convert back
+            ids_list = list(self._processed_ids)
+            self._processed_ids = set(ids_list[-5000:])
 
     # =========================================================================
     # State Persistence
@@ -452,15 +470,16 @@ class Operator(ABC):
 
         # Build batch writes
         writes: List[Tuple[int, bytes, bytes]] = []
+        pid = self._STATE_PARTITION_ID
 
         # Add operator's state updates
         if state_updates:
             for key, value in state_updates:
-                writes.append((self.partition_id, key, value))
+                writes.append((pid, key, value))
 
         # Add offset
         offset_bytes = offset.to_bytes(8, "big", signed=True)
-        writes.append((self.partition_id, OFFSET_KEY, offset_bytes))
+        writes.append((pid, OFFSET_KEY, offset_bytes))
 
         # Atomic write
         store.put_batch(writes)
@@ -484,7 +503,6 @@ class Operator(ABC):
     def get_metrics(self) -> Dict[str, Any]:
         """Get current metrics."""
         return {
-            "partition_id": self.partition_id,
             "processed_count": self.processed_count,
             "error_count": self.error_count,
             "total_input_records": self.total_input_records,

@@ -20,7 +20,7 @@ These are P1 tests that verify:
 - Rapid scale up/down cycles
 - Partition rebalancing during scaling
 
-All tests use real Ray clusters and Tansu queues (no mocks).
+All tests use real Ray clusters and WorkQueue brokers (no mocks).
 Data volumes: 10,000+ records with complex operators.
 """
 
