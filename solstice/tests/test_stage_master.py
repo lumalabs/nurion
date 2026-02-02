@@ -116,12 +116,31 @@ def mock_stage():
 
 @pytest.fixture
 def stage_runtime():
-    """Provide default stage runtime for unit tests."""
-    return StageRuntime(
-        broker_endpoint=None,
+    """Provide stage runtime with a real broker for unit tests."""
+    from solstice.queue import WorkQueueBrokerManager
+    from solstice.core.models import QueueEndpoint
+
+    # Create a real broker for tests
+    broker = WorkQueueBrokerManager(db_path="memory://")
+    broker.start()
+
+    broker_url = broker.get_broker_url()
+    host, port_str = broker_url.split(":")
+
+    runtime = StageRuntime(
+        broker_endpoint=QueueEndpoint(
+            host=host,
+            port=int(port_str),
+            storage_url="memory://",
+        ),
         upstream_queue_name=None,
         state_queue_name=None,
     )
+
+    yield runtime
+
+    # Cleanup
+    broker.stop()
 
 
 @pytest.fixture
@@ -195,7 +214,7 @@ class TestStageMaster:
 
         await master.start()
 
-        assert master._output_queue is not None
+        assert master._queue_client is not None
         assert master._output_queue_name == "test_job_test_stage_output"
 
         await master.stop()

@@ -441,16 +441,16 @@ impl WorkQueue for WorkQueueService {
 
         for queue in queues_to_check {
             match self.storage.get_queue_stats(&queue).await {
-                Ok((pending, claimed)) => {
-                    let meta = self.storage.get_meta(&queue).await.unwrap_or_default();
+                Ok(meta) => {
+                    let pending_count = meta.push_seq.saturating_sub(meta.claim_seq);
                     queues.insert(
                         queue.clone(),
                         QueueStats {
                             queue: queue.clone(),
-                            pending_count: pending as i64,
-                            claimed_count: claimed as i64,
-                            total_pushed: meta.push_seq as i64,
-                            total_acked: 0, // Could track this in meta if needed
+                            pending_count: pending_count as i64,
+                            claimed_count: meta.claimed_count as i64,
+                            total_pushed: meta.total_pushed as i64,
+                            total_acked: meta.total_acked as i64,
                         },
                     );
                 }
