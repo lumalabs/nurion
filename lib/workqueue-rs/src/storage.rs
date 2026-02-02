@@ -441,6 +441,7 @@ impl WorkQueueStorage {
         let mut deleted = 0;
 
         batch.delete(&Self::meta_key(queue));
+        batch.delete(&Self::finished_key(queue));
 
         // Delete pending entries and messages
         for seq in meta.claim_seq..meta.push_seq {

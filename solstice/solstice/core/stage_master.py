@@ -474,7 +474,8 @@ class StageMaster:
                     self.logger.debug(
                         f"Stage {self.stage_id} upstream queue drained, notifying workers"
                     )
-                    await self._worker_manager.notify_safe_to_exit()
+                    if self._worker_manager:
+                        await self._worker_manager.notify_safe_to_exit()
                     return
             except Exception as e:
                 self.logger.debug(f"Error polling queue completion: {e}")
