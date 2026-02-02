@@ -226,8 +226,13 @@ def check_fault(point: str) -> None:
         if should_fail:
             raise InjectedFaultError(f"Injected fault at {point}")
     except ray.exceptions.RayActorError:
-        # Actor died, reset and retry
+        # Actor died, reset and retry once
         reset_fault_injector()
+        actor = _get_or_create_actor()
+        if actor is not None:
+            should_fail = ray.get(actor.check.remote(point))
+            if should_fail:
+                raise InjectedFaultError(f"Injected fault at {point}")
 
 
 def reset_fault_injector() -> None:
