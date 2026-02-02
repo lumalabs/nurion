@@ -191,7 +191,7 @@ class SourceMaster(StageMaster):
         await self._produce_splits()
 
         # Create output queue (for downstream stages)
-        self._output_queue = await self._create_queue()
+        self._output_queue = await self._create_queue_client()
 
         # Set upstream queue name to our source queue (workers will consume from here)
         self.upstream_queue_name = self._source_queue_name
