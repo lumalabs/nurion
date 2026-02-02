@@ -22,17 +22,20 @@ use std::sync::Arc;
 use dashmap::DashMap;
 use tokio::sync::Mutex;
 
-/// Per-queue state - just a lock for claim serialization
+/// Per-queue state - locks for serializing operations
 pub struct QueueState {
     /// Lock for serializing claim operations on this queue.
     /// Using tokio::sync::Mutex to allow holding across await.
     pub claim_lock: Mutex<()>,
+    /// Lock for serializing metadata updates (counters) to prevent race conditions.
+    pub meta_lock: Mutex<()>,
 }
 
 impl QueueState {
     pub fn new() -> Self {
         Self {
             claim_lock: Mutex::new(()),
+            meta_lock: Mutex::new(()),
         }
     }
 }

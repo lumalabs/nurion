@@ -115,6 +115,10 @@ impl WorkQueue for WorkQueueService {
     async fn ack(&self, request: Request<AckRequest>) -> Result<Response<AckResponse>, Status> {
         let req = request.into_inner();
 
+        // Get meta lock for this queue to prevent counter race conditions
+        let queue_state = self.state.get_or_create_queue(&req.queue);
+        let _meta_guard = queue_state.meta_lock.lock().await;
+
         // Check if we have state updates
         let has_state_updates = !req.state_namespace.is_empty()
             && (!req.state_puts.is_empty() || !req.state_deletes.is_empty());
@@ -150,6 +154,10 @@ impl WorkQueue for WorkQueueService {
     async fn nack(&self, request: Request<NackRequest>) -> Result<Response<NackResponse>, Status> {
         let req = request.into_inner();
 
+        // Get meta lock for this queue to prevent counter race conditions
+        let queue_state = self.state.get_or_create_queue(&req.queue);
+        let _meta_guard = queue_state.meta_lock.lock().await;
+
         // Nack directly in storage (returns messages to pending at tail)
         match self.storage.nack_messages(&req.queue, &req.msg_ids).await {
             Ok(()) => Ok(Response::new(NackResponse {
@@ -167,6 +175,25 @@ impl WorkQueue for WorkQueueService {
         request: Request<AckAndForwardRequest>,
     ) -> Result<Response<AckAndForwardResponse>, Status> {
         let req = request.into_inner();
+
+        // Get meta locks for both queues to prevent counter race conditions
+        // Lock in consistent order to prevent deadlock
+        let (first_queue, second_queue) = if req.upstream_queue <= req.downstream_queue {
+            (&req.upstream_queue, &req.downstream_queue)
+        } else {
+            (&req.downstream_queue, &req.upstream_queue)
+        };
+
+        let first_state = self.state.get_or_create_queue(first_queue);
+        let second_state = self.state.get_or_create_queue(second_queue);
+
+        let _first_guard = first_state.meta_lock.lock().await;
+        // Only lock second queue if it's different from first
+        let _second_guard = if first_queue != second_queue {
+            Some(second_state.meta_lock.lock().await)
+        } else {
+            None
+        };
 
         // Build downstream messages
         let downstream_messages: Vec<Message> = req
@@ -231,6 +258,10 @@ impl WorkQueue for WorkQueueService {
     async fn push(&self, request: Request<PushRequest>) -> Result<Response<PushResponse>, Status> {
         let req = request.into_inner();
 
+        // Get meta lock for this queue to prevent counter race conditions
+        let queue_state = self.state.get_or_create_queue(&req.queue);
+        let _meta_guard = queue_state.meta_lock.lock().await;
+
         let msg = Message::with_metadata(req.queue.clone(), req.payload, req.metadata);
         let msg_id = msg.msg_id.clone();
 
@@ -249,6 +280,10 @@ impl WorkQueue for WorkQueueService {
         request: Request<PushBatchRequest>,
     ) -> Result<Response<PushBatchResponse>, Status> {
         let req = request.into_inner();
+
+        // Get meta lock for this queue to prevent counter race conditions
+        let queue_state = self.state.get_or_create_queue(&req.queue);
+        let _meta_guard = queue_state.meta_lock.lock().await;
 
         let messages: Vec<Message> = req
             .payloads

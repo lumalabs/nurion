@@ -441,8 +441,9 @@ class StageMaster:
         """Get the queue client for this stage."""
         return self._queue_client
 
-    # Backward compatibility alias
+    # Backward compatibility aliases
     get_output_queue = get_queue_client
+    _create_queue = _create_queue_client
 
     def get_output_queue_name(self) -> str:
         """Get the output queue name."""
