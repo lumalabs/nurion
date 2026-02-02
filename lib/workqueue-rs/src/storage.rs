@@ -105,6 +105,10 @@ impl WorkQueueStorage {
         format!("state:{}:{}", namespace, key).into_bytes()
     }
 
+    fn finished_key(queue: &str) -> Vec<u8> {
+        format!("finished:{}", queue).into_bytes()
+    }
+
     // === Queue Metadata ===
 
     pub async fn get_meta(&self, queue: &str) -> Result<QueueMeta, StorageError> {
@@ -553,6 +557,40 @@ impl WorkQueueStorage {
 
         self.db.write(batch).await?;
         Ok((puts.len(), deletes.len()))
+    }
+
+    // === Queue Completion API ===
+
+    /// Mark a queue as finished (no more messages will be pushed)
+    pub async fn mark_queue_finished(&self, queue: &str) -> Result<(), StorageError> {
+        self.db.put(&Self::finished_key(queue), b"1").await?;
+        self.db.flush().await?;
+        tracing::info!("Queue {} marked as finished", queue);
+        Ok(())
+    }
+
+    /// Check if queue is finished (marked by upstream)
+    pub async fn is_queue_finished(&self, queue: &str) -> Result<bool, StorageError> {
+        Ok(self.db.get(&Self::finished_key(queue)).await?.is_some())
+    }
+
+    /// Check if queue is finished AND drained (safe for worker to exit)
+    /// Returns (finished, drained, pending_count, claimed_count)
+    pub async fn check_queue_completion(&self, queue: &str) -> Result<(bool, bool, u64, u64), StorageError> {
+        let finished = self.is_queue_finished(queue).await?;
+        let meta = self.get_meta(queue).await?;
+
+        let pending_count = meta.push_seq.saturating_sub(meta.claim_seq);
+        let claimed_count = meta.claimed_count;
+        let drained = pending_count == 0 && claimed_count == 0;
+
+        Ok((finished, drained, pending_count, claimed_count))
+    }
+
+    /// Clear the finished flag (for queue reuse/testing)
+    pub async fn clear_queue_finished(&self, queue: &str) -> Result<(), StorageError> {
+        self.db.delete(&Self::finished_key(queue)).await?;
+        Ok(())
     }
 }
 

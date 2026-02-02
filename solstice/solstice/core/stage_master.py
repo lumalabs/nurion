@@ -321,8 +321,14 @@ class StageMaster:
                 # Emit periodic metrics
                 await self._emit_stage_metrics()
 
-            # No EOF marker needed - downstream workers detect completion via:
-            # notify_upstream_finished() + queue drained (pending=0, claimed=0)
+            # Mark output queue as finished - downstream workers can now safely exit
+            # when the queue is drained (pending=0, claimed=0)
+            if self._queue_client:
+                try:
+                    self._queue_client.mark_queue_finished(self._output_queue_name)
+                    self.logger.debug(f"Marked output queue {self._output_queue_name} as finished")
+                except Exception as e:
+                    self.logger.warning(f"Failed to mark output queue as finished: {e}")
 
             # Emit completion event
             await self._emit_stage_completed()
@@ -430,12 +436,50 @@ class StageMaster:
     # =========================================================================
 
     async def notify_upstream_finished(self) -> None:
-        """Notify this stage that all upstream stages have finished."""
+        """Notify this stage that all upstream stages have finished.
+
+        Starts a background task to poll the upstream queue for completion.
+        When the queue is drained, workers are notified they can safely exit.
+        """
         self._upstream_finished = True
         self.logger.info(f"Stage {self.stage_id} notified: upstream finished")
 
         if self._worker_manager:
             await self._worker_manager.notify_upstream_finished()
+
+        # Start background task to poll for queue completion
+        if self.upstream_queue_name and self._queue_client:
+            asyncio.create_task(
+                self._poll_queue_completion(),
+                name=f"poll_completion_{self.stage_id}",
+            )
+
+    async def _poll_queue_completion(self) -> None:
+        """Poll upstream queue until it's safe for workers to exit.
+
+        Checks is_queue_finished() RPC which returns safe_to_exit=True when:
+        1. Queue is marked as finished (by upstream master)
+        2. Queue is drained (pending==0 && claimed==0)
+
+        When safe, notifies all workers via notify_safe_to_exit().
+        """
+        if not self._queue_client or not self.upstream_queue_name:
+            return
+
+        poll_interval = 0.1  # 100ms
+        while self._running:
+            try:
+                result = self._queue_client.is_queue_finished(self.upstream_queue_name)
+                if result.get("safe_to_exit", False):
+                    self.logger.debug(
+                        f"Stage {self.stage_id} upstream queue drained, notifying workers"
+                    )
+                    await self._worker_manager.notify_safe_to_exit()
+                    return
+            except Exception as e:
+                self.logger.debug(f"Error polling queue completion: {e}")
+
+            await asyncio.sleep(poll_interval)
 
     def get_queue_client(self) -> Optional[WorkQueueQueueClient]:
         """Get the queue client for this stage."""

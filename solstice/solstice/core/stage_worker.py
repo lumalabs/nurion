@@ -118,6 +118,7 @@ class StageWorker:
         # Worker-level state
         self._running = False
         self._upstream_finished = False
+        self._safe_to_exit = False  # Set by master when queue is confirmed drained
 
         # Buffer for split metrics (batch produce)
         self._pending_split_metrics: List[Any] = []
@@ -270,18 +271,15 @@ class StageWorker:
         )
 
     def _is_queue_drained(self) -> bool:
-        """Check if queue is fully drained (no pending, no in-flight messages)."""
-        if not self.queue_client or not self.upstream_queue_name:
-            return True
+        """Check if worker should exit.
 
-        try:
-            stats = self.queue_client.get_stats(self.upstream_queue_name)
-            pending = stats.get("pending_count", 0)
-            claimed = stats.get("claimed_count", 0)
-            return pending == 0 and claimed == 0
-        except Exception:
-            # If we can't get stats, assume not drained
-            return False
+        Returns True when master has confirmed the queue is fully drained
+        (finished flag set AND pending==0 AND claimed==0).
+
+        The master handles the RPC check and notifies workers via
+        notify_safe_to_exit() when it's safe to exit.
+        """
+        return self._safe_to_exit
 
     async def _process_message(
         self,
@@ -384,6 +382,16 @@ class StageWorker:
         """Called by master when upstream stage(s) have finished."""
         self._upstream_finished = True
         self.logger.info(f"Worker {self.worker_id} notified: upstream finished")
+
+    def notify_safe_to_exit(self) -> None:
+        """Called by master when queue is confirmed drained and safe to exit.
+
+        This is the authoritative signal that:
+        1. Upstream has finished (queue marked as finished)
+        2. Queue is drained (pending==0 && claimed==0)
+        """
+        self._safe_to_exit = True
+        self.logger.info(f"Worker {self.worker_id} notified: safe to exit")
 
     def get_status(self) -> Dict[str, Any]:
         """Get current worker status."""
