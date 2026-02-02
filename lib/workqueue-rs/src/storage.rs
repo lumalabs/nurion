@@ -230,6 +230,9 @@ impl WorkQueueStorage {
         let mut batch = WriteBatch::new();
         let ack_count = msg_ids.len() as u64;
 
+        // Check if upstream and downstream are the same queue (edge case)
+        let same_queue = opts.downstream_queue.map_or(false, |dq| dq == queue);
+
         // 1. Move messages from claimed to acked + update upstream meta
         if !msg_ids.is_empty() {
             let upstream_meta = self.get_meta(queue).await?;
@@ -237,12 +240,16 @@ impl WorkQueueStorage {
                 batch.delete(&Self::claimed_key(queue, msg_id));
                 batch.put(&Self::acked_key(queue, now_ns, msg_id), &[]);
             }
-            let new_upstream_meta = QueueMeta {
-                claimed_count: upstream_meta.claimed_count.saturating_sub(ack_count),
-                total_acked: upstream_meta.total_acked + ack_count,
-                ..upstream_meta
-            };
-            batch.put(&Self::meta_key(queue), &serde_json::to_vec(&new_upstream_meta)?);
+            
+            // If same queue, we'll merge the meta updates below
+            if !same_queue {
+                let new_upstream_meta = QueueMeta {
+                    claimed_count: upstream_meta.claimed_count.saturating_sub(ack_count),
+                    total_acked: upstream_meta.total_acked + ack_count,
+                    ..upstream_meta
+                };
+                batch.put(&Self::meta_key(queue), &serde_json::to_vec(&new_upstream_meta)?);
+            }
         }
 
         // 2. Push downstream messages if provided
@@ -257,10 +264,21 @@ impl WorkQueueStorage {
                     batch.put(&Self::pending_key(downstream_queue, seq), msg.msg_id.as_bytes());
                 }
 
-                let new_meta = QueueMeta {
-                    push_seq: downstream_meta.push_seq + msg_count,
-                    total_pushed: downstream_meta.total_pushed + msg_count,
-                    ..downstream_meta
+                // Merge ack and push counters when same queue
+                let new_meta = if same_queue {
+                    QueueMeta {
+                        push_seq: downstream_meta.push_seq + msg_count,
+                        claimed_count: downstream_meta.claimed_count.saturating_sub(ack_count),
+                        total_pushed: downstream_meta.total_pushed + msg_count,
+                        total_acked: downstream_meta.total_acked + ack_count,
+                        ..downstream_meta
+                    }
+                } else {
+                    QueueMeta {
+                        push_seq: downstream_meta.push_seq + msg_count,
+                        total_pushed: downstream_meta.total_pushed + msg_count,
+                        ..downstream_meta
+                    }
                 };
                 batch.put(&Self::meta_key(downstream_queue), &serde_json::to_vec(&new_meta)?);
             }
