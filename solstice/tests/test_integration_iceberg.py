@@ -239,7 +239,7 @@ class TestIcebergPipeline:
         await master.start()
 
         # Verify queue was created
-        output_queue = master.get_output_queue()
+        output_queue = master.get_queue_client()
         assert output_queue is not None
         assert output_queue.health_check()
 

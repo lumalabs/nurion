@@ -258,7 +258,7 @@ class TestStageMaster:
         await master.stop()  # Should not raise
 
     @pytest.mark.asyncio
-    async def test_get_output_queue(self, mock_stage, stage_runtime, payload_store, ray_cluster):
+    async def test_get_queue_client(self, mock_stage, stage_runtime, payload_store, ray_cluster):
         """Test getting output queue for downstream."""
         from solstice.queue import WorkQueueQueueClient
 
@@ -269,11 +269,11 @@ class TestStageMaster:
             payload_store=payload_store,
         )
 
-        assert master.get_output_queue() is None
+        assert master.get_queue_client() is None
 
         await master.start()
 
-        queue = master.get_output_queue()
+        queue = master.get_queue_client()
         assert queue is not None
         assert isinstance(queue, WorkQueueQueueClient)
 
