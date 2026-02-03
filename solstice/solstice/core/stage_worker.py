@@ -76,6 +76,15 @@ class WorkerRuntime:
     batch_size: int = 100
 
 
+class PayloadMissingError(RuntimeError):
+    """Raised when required payload is missing for a claimed message."""
+
+    def __init__(self, msg_id: str, payload_key: str) -> None:
+        super().__init__(f"Payload not found for key: {payload_key}")
+        self.msg_id = msg_id
+        self.payload_key = payload_key
+
+
 @ray.remote
 class StageWorker:
     """Worker with claim-based processing model."""
@@ -232,12 +241,32 @@ class StageWorker:
 
                 # Process each claimed message
                 for record in records:
+                    if not record.claim_token:
+                        raise RuntimeError(
+                            f"Missing claim_token for message {record.msg_id}"
+                        )
+
                     message = QueueMessage.from_bytes(record.value)
                     split_id = make_split_id(self.job_id, self.stage_id, record.msg_id)
 
-                    check_fault(FAULT_BEFORE_PROCESS)
-                    output_bytes = await self._process_message(message, record, split_id)
-                    check_fault(FAULT_AFTER_PROCESS)
+                    try:
+                        check_fault(FAULT_BEFORE_PROCESS)
+                        output_bytes = await self._process_message(message, record, split_id)
+                        check_fault(FAULT_AFTER_PROCESS)
+                    except PayloadMissingError as e:
+                        if self.upstream_queue_name:
+                            self.logger.error(
+                                f"Payload missing for msg_id={e.msg_id}, "
+                                f"nacking for retry: {e.payload_key}"
+                            )
+                            self.queue_client.nack(
+                                self.upstream_queue_name,
+                                [record.msg_id],
+                                claim_tokens=[record.claim_token],
+                                reason="payload_missing",
+                            )
+                            continue
+                        raise
 
                     check_fault(FAULT_BEFORE_MARK_PROCESSED)
                     self._operator.processed_count += 1
@@ -249,12 +278,17 @@ class StageWorker:
                         self.queue_client.ack_and_forward(
                             upstream_queue=self.upstream_queue_name,
                             upstream_msg_ids=[record.msg_id],
+                            upstream_claim_tokens=[record.claim_token],
                             downstream_queue=self.output_queue_name,
                             downstream_payloads=[output_bytes],
                         )
                     else:
                         # No output, just ack
-                        self.queue_client.ack(self.upstream_queue_name, [record.msg_id])
+                        self.queue_client.ack(
+                            self.upstream_queue_name,
+                            [record.msg_id],
+                            claim_tokens=[record.claim_token],
+                        )
 
             except asyncio.CancelledError:
                 self.logger.info(f"Worker {self.worker_id} claim loop cancelled")
@@ -311,7 +345,7 @@ class StageWorker:
         else:
             payload = self.payload_store.get(message.payload_key)
             if payload is None:
-                raise RuntimeError(f"Payload not found for key: {message.payload_key}")
+                raise PayloadMissingError(record.msg_id, message.payload_key)
 
             split = Split(
                 split_id=message.split_id,

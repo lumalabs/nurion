@@ -485,9 +485,7 @@ class StageMaster:
                         f"Stage {self.stage_id} failed to poll queue completion "
                         f"after {max_consecutive_errors} consecutive errors: {e}"
                     )
-                    raise RuntimeError(
-                        f"Failed to poll upstream queue completion: {e}"
-                    ) from e
+                    raise RuntimeError(f"Failed to poll upstream queue completion: {e}") from e
                 self.logger.debug(f"Error polling queue completion: {e}")
 
             await asyncio.sleep(poll_interval)

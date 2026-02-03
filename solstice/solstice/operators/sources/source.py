@@ -324,9 +324,7 @@ class SourceMaster(StageMaster):
                         f"Source {self.stage_id} failed to poll queue completion "
                         f"after {max_consecutive_errors} consecutive errors: {e}"
                     )
-                    raise RuntimeError(
-                        f"Failed to poll source queue completion: {e}"
-                    ) from e
+                    raise RuntimeError(f"Failed to poll source queue completion: {e}") from e
                 self.logger.debug(f"Error polling source queue completion: {e}")
 
             await asyncio.sleep(poll_interval)

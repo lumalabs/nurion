@@ -38,7 +38,11 @@ Example:
     client = WorkQueueQueueClient("master-host:50051", worker_id="worker-1")
     client.start()
     messages = client.claim("my-queue", batch_size=10)
-    client.ack("my-queue", [m.msg_id for m in messages])
+    client.ack(
+        "my-queue",
+        [m.msg_id for m in messages],
+        claim_tokens=[m.claim_token for m in messages],
+    )
     client.stop()
 """
 
@@ -169,6 +173,7 @@ class WorkQueueRecord:
     queue: str
     created_at: float
     metadata: Dict[str, str]
+    claim_token: Optional[str] = None
 
     @classmethod
     def from_message(cls, msg: Message) -> "WorkQueueRecord":
@@ -178,6 +183,7 @@ class WorkQueueRecord:
             queue=msg.queue,
             created_at=msg.created_at,
             metadata=dict(msg.metadata) if msg.metadata else {},
+            claim_token=getattr(msg, "claim_token", None),
         )
 
 
@@ -242,6 +248,7 @@ class WorkQueueQueueClient:
         self,
         queue: str,
         msg_ids: List[str],
+        claim_tokens: Optional[List[str]] = None,
         state_namespace: Optional[str] = None,
         state_puts: Optional[Dict[str, bytes]] = None,
         state_deletes: Optional[List[str]] = None,
@@ -250,19 +257,34 @@ class WorkQueueQueueClient:
         return self._client.ack(
             queue,
             msg_ids,
+            claim_tokens=claim_tokens,
             state_namespace=state_namespace,
             state_puts=state_puts,
             state_deletes=state_deletes,
         )
 
-    def nack(self, queue: str, msg_ids: List[str]) -> int:
+    def nack(
+        self,
+        queue: str,
+        msg_ids: List[str],
+        claim_tokens: Optional[List[str]] = None,
+        reason: str = "processing_failed",
+        delay_ms: int = 0,
+    ) -> int:
         self._check()
-        return self._client.nack(queue, msg_ids)
+        return self._client.nack(
+            queue,
+            msg_ids,
+            claim_tokens=claim_tokens,
+            reason=reason,
+            delay_ms=delay_ms,
+        )
 
     def ack_and_forward(
         self,
         upstream_queue: str,
         upstream_msg_ids: List[str],
+        upstream_claim_tokens: Optional[List[str]],
         downstream_queue: str,
         downstream_payloads: List[bytes],
         state_namespace: Optional[str] = None,
@@ -273,6 +295,7 @@ class WorkQueueQueueClient:
         return self._client.ack_and_forward(
             upstream_queue,
             upstream_msg_ids,
+            upstream_claim_tokens,
             downstream_queue,
             downstream_payloads,
             state_namespace=state_namespace,
