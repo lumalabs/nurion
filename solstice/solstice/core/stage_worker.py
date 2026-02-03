@@ -117,7 +117,6 @@ class StageWorker:
 
         # Worker-level state
         self._running = False
-        self._upstream_finished = False
         self._safe_to_exit = False  # Set by master when queue is confirmed drained
 
         # Buffer for split metrics (batch produce)
@@ -223,7 +222,7 @@ class StageWorker:
 
                 if not records:
                     # Queue returned empty, check if we should exit
-                    if self._upstream_finished and self._is_queue_drained():
+                    if self._should_exit():
                         self.logger.info(
                             f"Worker {self.worker_id} done: upstream finished and queue drained"
                         )
@@ -270,14 +269,15 @@ class StageWorker:
             f"Worker {self.worker_id} finished: processed={self._operator.processed_count if self._operator else 0}"
         )
 
-    def _is_queue_drained(self) -> bool:
+    def _should_exit(self) -> bool:
         """Check if worker should exit.
 
-        Returns True when master has confirmed the queue is fully drained
-        (finished flag set AND pending==0 AND claimed==0).
+        Returns True when master has confirmed it's safe to exit, meaning:
+        1. Upstream has finished (queue marked as finished)
+        2. Queue is drained (pending==0 && claimed==0)
 
         The master handles the RPC check and notifies workers via
-        notify_safe_to_exit() when it's safe to exit.
+        notify_safe_to_exit() when these conditions are met.
         """
         return self._safe_to_exit
 
@@ -378,11 +378,6 @@ class StageWorker:
 
     # === Status and Control ===
 
-    def notify_upstream_finished(self) -> None:
-        """Called by master when upstream stage(s) have finished."""
-        self._upstream_finished = True
-        self.logger.info(f"Worker {self.worker_id} notified: upstream finished")
-
     def notify_safe_to_exit(self) -> None:
         """Called by master when queue is confirmed drained and safe to exit.
 
@@ -404,7 +399,7 @@ class StageWorker:
             "stage_id": self.stage_id,
             "pid": os.getpid(),
             "running": self._running,
-            "upstream_finished": self._upstream_finished,
+            "safe_to_exit": self._safe_to_exit,
             "processed_count": op.processed_count if op else 0,
             "error_count": op.error_count if op else 0,
             "input_records": op.total_input_records if op else 0,

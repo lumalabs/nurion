@@ -582,7 +582,13 @@ impl WorkQueueStorage {
 
         let pending_count = meta.push_seq.saturating_sub(meta.claim_seq);
         let claimed_count = meta.claimed_count;
-        let drained = pending_count == 0 && claimed_count == 0;
+
+        // Queue is only drained if:
+        // 1. No pending messages (pending_count == 0)
+        // 2. No in-flight messages (claimed_count == 0)
+        // 3. Queue has actually received messages (total_pushed > 0)
+        // This prevents false "drained" when queue is empty but hasn't been used yet
+        let drained = pending_count == 0 && claimed_count == 0 && meta.total_pushed > 0;
 
         Ok((finished, drained, pending_count, claimed_count))
     }

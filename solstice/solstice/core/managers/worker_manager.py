@@ -81,8 +81,7 @@ class WorkerManager:
         # Upstream queue name (from runtime)
         self._upstream_queue_name = runtime.upstream_queue_name
 
-        # Upstream tracking
-        self._upstream_finished = False
+        # Exit tracking
         self._safe_to_exit = False
 
     @property
@@ -326,45 +325,24 @@ class WorkerManager:
             self._workers.pop(worker_id, None)
             self._worker_tasks.pop(worker_id, None)
 
-    async def notify_upstream_finished(self) -> None:
-        """Notify all workers that upstream has finished."""
-        self._upstream_finished = True
-        # Use fire-and-forget pattern to avoid blocking the event loop
-        for worker_id, worker in self._workers.items():
-            try:
-                # Don't wait for response - fire and forget
-                worker.notify_upstream_finished.remote()
-                self._logger.debug(f"Notified worker {worker_id}: upstream finished")
-            except Exception as e:
-                self._logger.warning(f"Failed to notify worker {worker_id}: {e}")
+    async def notify_worker_safe_to_exit(self, worker_id: str) -> None:
+        """Notify a specific worker that it's safe to exit.
 
-    async def notify_worker_upstream_finished(self, worker_id: str) -> None:
-        """Notify a specific worker that upstream has finished.
-
-        Used for newly spawned recovery workers. Also notifies if safe_to_exit
-        is already true (queue was drained before this worker spawned).
+        Used for newly spawned recovery workers when the queue was already
+        drained before this worker spawned.
         """
+        if not self._safe_to_exit:
+            return
+
         worker = self._workers.get(worker_id)
         if worker is None:
             return
 
-        if self._upstream_finished:
-            try:
-                worker.notify_upstream_finished.remote()
-                self._logger.debug(
-                    f"Notified recovered worker {worker_id}: upstream already finished"
-                )
-            except Exception as e:
-                self._logger.warning(f"Failed to notify {worker_id} of upstream completion: {e}")
-
-        if self._safe_to_exit:
-            try:
-                worker.notify_safe_to_exit.remote()
-                self._logger.debug(
-                    f"Notified recovered worker {worker_id}: safe to exit"
-                )
-            except Exception as e:
-                self._logger.warning(f"Failed to notify {worker_id} safe to exit: {e}")
+        try:
+            worker.notify_safe_to_exit.remote()
+            self._logger.debug(f"Notified recovered worker {worker_id}: safe to exit")
+        except Exception as e:
+            self._logger.warning(f"Failed to notify {worker_id} safe to exit: {e}")
 
     async def notify_safe_to_exit(self) -> None:
         """Notify all workers that it's safe to exit.

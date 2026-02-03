@@ -1,5 +1,9 @@
 # Partition Management, Skew Detection, and Backpressure Improvements
 
+> NOTE: This document references the former Tansu/Kafka queue model. The current
+> implementation uses the embedded WorkQueue backend. See
+> `design-docs/work-queue-redesign.md`.
+
 _Design Document - December 2025_
 
 ---

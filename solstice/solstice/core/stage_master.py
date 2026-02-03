@@ -444,9 +444,6 @@ class StageMaster:
         self._upstream_finished = True
         self.logger.info(f"Stage {self.stage_id} notified: upstream finished")
 
-        if self._worker_manager:
-            await self._worker_manager.notify_upstream_finished()
-
         # Start background task to poll for queue completion
         if self.upstream_queue_name and self._queue_client:
             asyncio.create_task(
@@ -467,16 +464,30 @@ class StageMaster:
             return
 
         poll_interval = 0.1  # 100ms
+        max_consecutive_errors = 10
+        consecutive_errors = 0
+
         while self._running:
             try:
                 result = self._queue_client.is_queue_finished(self.upstream_queue_name)
+                consecutive_errors = 0  # Reset on success
                 if result.get("safe_to_exit", False):
                     self.logger.debug(
                         f"Stage {self.stage_id} upstream queue drained, notifying workers"
                     )
-                    await self._worker_manager.notify_safe_to_exit()
+                    if self._worker_manager:
+                        await self._worker_manager.notify_safe_to_exit()
                     return
             except Exception as e:
+                consecutive_errors += 1
+                if consecutive_errors >= max_consecutive_errors:
+                    self.logger.error(
+                        f"Stage {self.stage_id} failed to poll queue completion "
+                        f"after {max_consecutive_errors} consecutive errors: {e}"
+                    )
+                    raise RuntimeError(
+                        f"Failed to poll upstream queue completion: {e}"
+                    ) from e
                 self.logger.debug(f"Error polling queue completion: {e}")
 
             await asyncio.sleep(poll_interval)
