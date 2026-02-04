@@ -287,5 +287,6 @@ class SparkSourceV2Master(StageMaster):
             self._spark_initialized = False
             self.logger.info("Stopped Spark session")
 
+
 # Set master_class after class definition
 SparkSourceV2Config.master_class = SparkSourceV2Master
