@@ -496,14 +496,14 @@ impl WorkQueueStorageReader {
         &self,
         py: Python<'_>,
         namespace: String,
-        prefix: String,
+        prefix: &str,
         limit: Option<usize>,
     ) -> PyResult<PyObject> {
         let entries = self
             .runtime
             .block_on(self.storage.state_scan_prefix(
                 &namespace,
-                &prefix,
+                prefix,
                 limit.unwrap_or(0),
             ))
             .map_err(|e| {
