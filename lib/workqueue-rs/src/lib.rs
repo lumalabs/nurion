@@ -577,6 +577,17 @@ impl WorkQueueStorageReader {
     }
 }
 
+impl Drop for WorkQueueStorageReader {
+    fn drop(&mut self) {
+        // CRITICAL: Close storage before dropping runtime to avoid "channel closed" panics
+        // from SlateDB's background tasks. We must use block_on to call the async close()
+        // method before the runtime is dropped.
+        if let Err(e) = self.runtime.block_on(self.storage.close()) {
+            eprintln!("Warning: Failed to close storage during drop: {}", e);
+        }
+    }
+}
+
 /// Python module definition
 #[pymodule]
 fn workqueue_py(m: &Bound<'_, PyModule>) -> PyResult<()> {

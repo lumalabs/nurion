@@ -18,11 +18,11 @@ Architecture:
     ┌─────────────────────────────────────────────────────────────┐
     │                     Stage Master                            │
     │                                                             │
-    │  ┌───────────────┐  ┌───────────────┐  ┌───────────────┐   │
-    │  │  WorkerMgr    │  │ RecoveryMgr   │  │   (job-level) │   │
-    │  │ - lifecycle   │  │ - failures    │  │ backpressure  │   │
-    │  │ - spawn/stop  │  │ - recovery    │  │ & autoscale   │   │
-    │  └───────────────┘  └───────────────┘  └───────────────┘   │
+    │  ┌───────────────┐  ┌───────────────┐                      │
+    │  │  WorkerMgr    │  │ RecoveryMgr   │                      │
+    │  │ - lifecycle   │  │ - failures    │                      │
+    │  │ - spawn/stop  │  │ - recovery    │                      │
+    │  └───────────────┘  └───────────────┘                      │
     │                                                             │
     │  ┌─────────────────────────────────────────────────────┐    │
     │  │        Output Queue (WorkQueue)                      │    │
@@ -98,7 +98,8 @@ class StageMaster:
     Managers:
     - WorkerManager: Worker lifecycle (spawn, stop, status)
     - RecoveryManager: Failure tracking and worker recovery
-    - Backpressure: handled by job-level controller
+    
+    Backpressure is handled by job-level controller via BackpressureProvider protocol.
     """
 
     def __init__(
