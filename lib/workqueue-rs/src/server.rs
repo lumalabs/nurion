@@ -135,6 +135,11 @@ impl WorkQueueBrokerInner {
         // Stop our background tasks that use storage
         self.recovery_task.stop_async().await;
         self.gc_task.stop_async().await;
+
+        // Close storage to ensure clean shutdown
+        if let Err(e) = self.storage.close().await {
+            tracing::error!("Error closing storage: {}", e);
+        }
     }
 
     /// Stop the broker (sync version - signals stop but doesn't wait)

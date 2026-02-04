@@ -18,9 +18,9 @@
 // - Claim locks: serialize concurrent claims per queue
 // - Queue registry: track known queues for stats
 
+use dashmap::DashMap;
 use std::collections::HashMap;
 use std::sync::Arc;
-use dashmap::DashMap;
 use tokio::sync::Mutex;
 
 use crate::types::now_secs;
