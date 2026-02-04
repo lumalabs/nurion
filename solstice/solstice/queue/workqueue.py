@@ -304,6 +304,9 @@ class WorkQueueQueueClient:
         claim_tokens: Optional[List[str]] = None,
         reason: str = "processing_failed",
         delay_ms: int = 0,
+        state_namespace: Optional[str] = None,
+        state_puts: Optional[Dict[str, bytes]] = None,
+        state_deletes: Optional[List[str]] = None,
     ) -> int:
         self._check()
         return self._client.nack(
@@ -312,6 +315,9 @@ class WorkQueueQueueClient:
             claim_tokens=claim_tokens,
             reason=reason,
             delay_ms=delay_ms,
+            state_namespace=state_namespace,
+            state_puts=state_puts,
+            state_deletes=state_deletes,
         )
 
     def ack_and_forward(

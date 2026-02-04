@@ -321,6 +321,9 @@ class WorkQueueClient:
         claim_tokens: Optional[List[str]] = None,
         reason: str = "processing_failed",
         delay_ms: int = 0,
+        state_namespace: Optional[str] = None,
+        state_puts: Optional[Dict[str, bytes]] = None,
+        state_deletes: Optional[List[str]] = None,
     ) -> int:
         """Return messages to queue for retry.
 
@@ -330,6 +333,9 @@ class WorkQueueClient:
             claim_tokens: List of claim tokens (1:1 with msg_ids)
             reason: Reason for nack ("processing_failed", "payload_missing", "skip")
             delay_ms: Delay before message can be reclaimed
+            state_namespace: Optional namespace for atomic state updates
+            state_puts: State keys to set atomically with nack
+            state_deletes: State keys to delete atomically with nack
 
         Returns:
             Number of messages returned to queue
@@ -360,6 +366,9 @@ class WorkQueueClient:
             reason=reason_enum,
             delay_ms=delay_ms,
             claim_tokens=claim_tokens or [],
+            state_namespace=state_namespace or "",
+            state_puts=state_puts or {},
+            state_deletes=state_deletes or [],
         )
 
         response = self._stub.Nack(request)

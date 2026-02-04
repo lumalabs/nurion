@@ -98,12 +98,6 @@ impl WorkQueueStorage {
         Ok(())
     }
 
-    /// Check if this is using in-memory storage
-    pub fn is_memory(&self) -> bool {
-        // Memory storage doesn't have the same issues as file storage
-        false // We can't easily check this, but it's informational only
-    }
-
     // === Key Generation ===
 
     fn meta_key(queue: &str) -> Vec<u8> {
@@ -570,6 +564,33 @@ impl WorkQueueStorage {
             Some(claim_tokens),
             Some(worker_id),
             Some(lease_id),
+            None,
+            None,
+            None,
+        )
+        .await
+    }
+
+    pub async fn nack_messages_with_state(
+        &self,
+        queue: &str,
+        msg_ids: &[String],
+        claim_tokens: &[String],
+        worker_id: &str,
+        lease_id: &str,
+        state_namespace: &str,
+        state_puts: &HashMap<String, Vec<u8>>,
+        state_deletes: &[String],
+    ) -> Result<(), StorageError> {
+        self.nack_messages_internal(
+            queue,
+            msg_ids,
+            Some(claim_tokens),
+            Some(worker_id),
+            Some(lease_id),
+            Some(state_namespace),
+            Some(state_puts),
+            Some(state_deletes),
         )
         .await
     }
@@ -580,7 +601,7 @@ impl WorkQueueStorage {
         queue: &str,
         msg_ids: &[String],
     ) -> Result<(), StorageError> {
-        self.nack_messages_internal(queue, msg_ids, None, None, None)
+        self.nack_messages_internal(queue, msg_ids, None, None, None, None, None, None)
             .await
     }
 
@@ -591,6 +612,9 @@ impl WorkQueueStorage {
         claim_tokens: Option<&[String]>,
         worker_id: Option<&str>,
         lease_id: Option<&str>,
+        state_namespace: Option<&str>,
+        state_puts: Option<&HashMap<String, Vec<u8>>>,
+        state_deletes: Option<&[String]>,
     ) -> Result<(), StorageError> {
         if msg_ids.is_empty() {
             return Ok(());
@@ -661,6 +685,23 @@ impl WorkQueueStorage {
                 ..meta
             };
             txn.put(&Self::meta_key(queue), &serde_json::to_vec(&new_meta)?)?;
+
+            let has_state_updates = state_namespace.is_some()
+                && (state_puts.map_or(false, |puts| !puts.is_empty())
+                    || state_deletes.map_or(false, |deletes| !deletes.is_empty()));
+            if has_state_updates {
+                let namespace = state_namespace.unwrap();
+                if let Some(puts) = state_puts {
+                    for (key, value) in puts {
+                        txn.put(&Self::state_key(namespace, key), value)?;
+                    }
+                }
+                if let Some(deletes) = state_deletes {
+                    for key in deletes {
+                        txn.delete(&Self::state_key(namespace, key))?;
+                    }
+                }
+            }
 
             match txn.commit().await {
                 Ok(()) => return Ok(()),

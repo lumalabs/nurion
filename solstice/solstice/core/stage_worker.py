@@ -241,13 +241,7 @@ class StageWorker:
                                 f"Payload missing for msg_id={e.msg_id}, "
                                 f"nacking for retry: {e.payload_key}"
                             )
-                            self.queue_client.nack(
-                                self.upstream_queue_name,
-                                [record.msg_id],
-                                claim_tokens=[record.claim_token],
-                                reason="payload_missing",
-                            )
-                            self._emit_event(
+                            event_puts = self._build_event_puts(
                                 event_type="nack",
                                 record=record,
                                 split_id=split_id,
@@ -258,6 +252,14 @@ class StageWorker:
                                 output_rows=0,
                                 output_bytes=0,
                                 reason="payload_missing",
+                            )
+                            self.queue_client.nack(
+                                self.upstream_queue_name,
+                                [record.msg_id],
+                                claim_tokens=[record.claim_token],
+                                reason="payload_missing",
+                                state_namespace=job_namespace(self.job_id),
+                                state_puts=event_puts,
                             )
                             continue
                         raise
@@ -462,38 +464,6 @@ class StageWorker:
             split_key(split_id): encode_json(split_event),
         }
         return puts
-
-    def _emit_event(
-        self,
-        event_type: str,
-        record: WorkQueueRecord,
-        split_id: str,
-        message: QueueMessage,
-        processing_ms: float,
-        input_rows: int,
-        input_bytes: int,
-        output_rows: int,
-        output_bytes: int,
-        reason: str,
-    ) -> None:
-        if not self.queue_client:
-            return
-        puts = self._build_event_puts(
-            event_type=event_type,
-            record=record,
-            split_id=split_id,
-            message=message,
-            processing_ms=processing_ms,
-            input_rows=input_rows,
-            input_bytes=input_bytes,
-            output_rows=output_rows,
-            output_bytes=output_bytes,
-            reason=reason,
-        )
-        try:
-            self.queue_client.state_put(job_namespace(self.job_id), puts=puts)
-        except Exception as e:
-            self.logger.debug(f"Failed to emit {event_type} event: {e}")
 
     async def _cleanup(self) -> None:
         """Clean up resources."""
