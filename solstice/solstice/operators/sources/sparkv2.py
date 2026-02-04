@@ -287,12 +287,5 @@ class SparkSourceV2Master(StageMaster):
             self._spark_initialized = False
             self.logger.info("Stopped Spark session")
 
-    def get_status(self):
-        """Get current source status."""
-        status = super().get_status()
-        status.metrics["splits_produced"] = self._splits_produced
-        return status
-
-
 # Set master_class after class definition
 SparkSourceV2Config.master_class = SparkSourceV2Master

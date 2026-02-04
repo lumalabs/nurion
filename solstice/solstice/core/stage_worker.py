@@ -430,17 +430,10 @@ class StageWorker:
         parent_message_id = message.metadata.get("parent_message_id")
         source_stage = message.metadata.get("source_stage")
 
-        event = {
+        base_event = {
             "event_type": event_type,
-            "timestamp_ns": ts_ns,
             "timestamp": time.time(),
-            "stage_id": self.stage_id,
             "worker_id": self.worker_id,
-            "queue": record.queue,
-            "msg_id": record.msg_id,
-            "split_id": split_id,
-            "parent_message_id": parent_message_id,
-            "source_stage": source_stage,
             "processing_ms": processing_ms,
             "queue_wait_ms": queue_wait_ms,
             "input_rows": input_rows,
@@ -449,9 +442,24 @@ class StageWorker:
             "output_bytes": output_bytes,
             "reason": reason,
         }
+        split_event = dict(base_event)
+        split_event.update(
+            {
+                "timestamp_ns": ts_ns,
+                "stage_id": self.stage_id,
+                "split_id": split_id,
+                "parent_message_id": parent_message_id,
+                "source_stage": source_stage,
+            }
+        )
+        if parent_message_id is None:
+            split_event.pop("parent_message_id", None)
+        if source_stage is None:
+            split_event.pop("source_stage", None)
+
         puts = {
-            event_key(self.stage_id, ts_ns, record.msg_id): encode_json(event),
-            split_key(split_id): encode_json(event),
+            event_key(self.stage_id, ts_ns, record.msg_id): encode_json(base_event),
+            split_key(split_id): encode_json(split_event),
         }
         return puts
 

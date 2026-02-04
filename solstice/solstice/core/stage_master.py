@@ -138,25 +138,24 @@ class StageMaster:
         self._recovery_manager: Optional[RecoveryManager] = None
         self._backpressure_provider: Optional[BackpressureProvider] = None
 
-    async def _create_queue_client(self) -> WorkQueueQueueClient:
+    async def _create_queue_client(self) -> None:
         """Create queue client and output queue."""
         assert self.broker_endpoint is not None, "broker_endpoint is required"
 
         broker_url = f"{self.broker_endpoint.host}:{self.broker_endpoint.port}"
         from solstice.queue.workqueue import _compute_heartbeat_interval
 
-        queue = WorkQueueQueueClient(
+        self._queue_client = WorkQueueQueueClient(
             broker_url,
             worker_id=f"master-{self.stage_id}",
             heartbeat_interval_secs=_compute_heartbeat_interval(self.runtime.claim_timeout_secs),
         )
-        queue.start()
+        self._queue_client.start()
         self.logger.info(f"Connected to broker at {broker_url}")
 
         # Create the output queue
-        queue.create_queue(self._output_queue_name)
+        self._queue_client.create_queue(self._output_queue_name)
         self.logger.info(f"Created output queue: {self._output_queue_name}")
-        return queue
 
     def _init_managers(self) -> None:
         """Initialize managers after output queue is created."""
@@ -213,8 +212,8 @@ class StageMaster:
         self.logger.info(f"Starting stage {self.stage_id}")
         self._start_time = time.time()
 
-        # Create output queue
-        self._queue_client = await self._create_queue_client()
+        # Create queue client and output queue
+        await self._create_queue_client()
 
         # Initialize managers now that we have the output endpoint
         self._init_managers()

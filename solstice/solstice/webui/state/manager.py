@@ -141,16 +141,18 @@ class JobStateManager:
                 event = decode_json(entry["value"])
             except Exception:
                 continue
+            parsed = parse_event_key(entry["key"])
+            if parsed:
+                parsed_stage_id, ts_ns, msg_id = parsed
+                event.setdefault("timestamp_ns", ts_ns)
+                event.setdefault("stage_id", parsed_stage_id)
+                event.setdefault("msg_id", msg_id)
+                event.setdefault("split_id", f"{job_id}:{parsed_stage_id}:{msg_id}")
             ts = event.get("timestamp") or 0
             if start_time and ts < start_time:
                 continue
             if end_time and ts > end_time:
                 continue
-            if "timestamp_ns" not in event:
-                parsed = parse_event_key(entry["key"])
-                if parsed:
-                    _, ts_ns, _ = parsed
-                    event["timestamp_ns"] = ts_ns
             events.append(event)
 
         # Merge timeout events written by recovery (global namespace)
