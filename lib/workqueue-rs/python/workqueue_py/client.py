@@ -117,6 +117,7 @@ class WorkQueueClient:
         self._heartbeat_thread: Optional[threading.Thread] = None
         self._heartbeat_running = False
         self._heartbeat_lock = threading.Lock()
+        self._channel_lock = threading.Lock()
 
     def start(self) -> None:
         """Connect to server and start heartbeat.
@@ -131,8 +132,9 @@ class WorkQueueClient:
                 "--grpc_python_out=python/workqueue_py proto/workqueue.proto"
             )
 
-        self._channel = grpc.insecure_channel(self.server_address)
-        self._stub = pb2_grpc.WorkQueueStub(self._channel)
+        with self._channel_lock:
+            self._channel = grpc.insecure_channel(self.server_address)
+            self._stub = pb2_grpc.WorkQueueStub(self._channel)
 
         # Start heartbeat stream
         self._heartbeat_running = True
@@ -165,13 +167,29 @@ class WorkQueueClient:
             self._heartbeat_thread.join(timeout=2.0)
             self._heartbeat_thread = None
 
-        if self._channel:
-            self._channel.close()
-            self._channel = None
+        with self._channel_lock:
+            if self._channel:
+                self._channel.close()
+                self._channel = None
 
-        self._stub = None
+            self._stub = None
         self._lease_id = ""
         logger.info(f"Disconnected from {self.server_address}")
+
+    def _reset_channel(self) -> None:
+        """Reset the gRPC channel and stub.
+
+        This is called when the channel becomes permanently unusable
+        and needs to be recreated.
+        """
+        with self._channel_lock:
+            if self._channel:
+                try:
+                    self._channel.close()
+                except Exception:
+                    pass
+            self._channel = grpc.insecure_channel(self.server_address)
+            self._stub = pb2_grpc.WorkQueueStub(self._channel)
 
     def _heartbeat_loop(self) -> None:
         """Background thread for heartbeat streaming."""
@@ -188,7 +206,9 @@ class WorkQueueClient:
 
         while self._heartbeat_running:
             try:
-                responses = self._stub.HeartbeatStream(ping_generator())
+                with self._channel_lock:
+                    stub = self._stub
+                responses = stub.HeartbeatStream(ping_generator())
                 for pong in responses:
                     if not self._heartbeat_running:
                         break
@@ -206,6 +226,8 @@ class WorkQueueClient:
                         logger.warning(f"Heartbeat disconnected, reconnecting...")
                     elif reconnect_attempts % 10 == 0:
                         logger.debug(f"Heartbeat reconnect attempt {reconnect_attempts}")
+                    # Reset the channel to recover from channel-level failures
+                    self._reset_channel()
                     time.sleep(1.0)
 
     @property
@@ -216,8 +238,9 @@ class WorkQueueClient:
 
     def _check_connected(self) -> None:
         """Verify client is connected."""
-        if not self._stub:
-            raise RuntimeError("Client not started. Call start() first.")
+        with self._channel_lock:
+            if not self._stub:
+                raise RuntimeError("Client not started. Call start() first.")
 
     # =========================================================================
     # Consumer API

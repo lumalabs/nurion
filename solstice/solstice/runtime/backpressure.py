@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, List
 
 from solstice.core.models import QueueStats
 from solstice.runtime.queue_stats import QueueStatsClient, StageQueueConfig
