@@ -56,6 +56,14 @@ impl WorkQueueBrokerInner {
         );
 
         let storage = Arc::new(WorkQueueStorage::new(&config.db_path).await?);
+        Self::new_with_storage(config, storage).await
+    }
+
+    /// Create a new broker instance using existing storage
+    pub async fn new_with_storage(
+        config: WorkQueueConfig,
+        storage: Arc<WorkQueueStorage>,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let state = Arc::new(WorkQueueState::new());
 
         // Recovery and GC tasks now only use storage (no memory state to recover)

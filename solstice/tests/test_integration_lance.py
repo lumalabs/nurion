@@ -215,7 +215,6 @@ class TestLancePipeline:
                 storage_url="memory://",
             ),
             upstream_queue_name=None,
-            state_queue_name=None,
         )
         master = LanceSourceMaster(
             job_id="test-lance-pipeline",
@@ -310,7 +309,6 @@ class TestLancePipeline:
                 storage_url="memory://",
             ),
             upstream_queue_name=None,
-            state_queue_name=None,
         )
         master = LanceSourceMaster(
             job_id="test-lance-s3-pipeline",

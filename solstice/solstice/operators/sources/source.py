@@ -136,9 +136,6 @@ class SourceMaster(StageMaster):
         self._splits_produced = 0
         self._splits_production_done = False
 
-        # Backpressure configuration (from stage)
-        self._backpressure_threshold_queue_size = stage.backpressure_threshold_queue_size
-
         # Override logger
         self.logger = create_ray_logger(f"SourceMaster-{self.stage_id}")
 
@@ -345,37 +342,18 @@ class SourceMaster(StageMaster):
         Returns:
             True if production should be paused, False otherwise
         """
-        # Check if we have downstream stages configured
-        if not self._downstream_stage_refs:
+        provider = self._backpressure_provider
+        if not provider:
             return False
 
-        # Check all downstream stages for backpressure
-        for stage_id, stage_ref in self._downstream_stage_refs.items():
-            try:
-                # Get status from downstream stage (sync method)
-                status = stage_ref.get_status()
-
-                # Check if backpressure is active
-                if status.backpressure_active:
-                    self.logger.debug(
-                        f"Backpressure detected from downstream stage {stage_id}, "
-                        f"pausing split production"
-                    )
-                    return True
-
-                # Also check queue size if available
-                # Use a threshold (e.g., 80% of max queue size)
-                queue_size = status.output_queue_size
-                if queue_size > self._backpressure_threshold_queue_size * 0.8:
-                    self.logger.debug(
-                        f"Downstream queue size {queue_size} approaching threshold, "
-                        f"slowing down production"
-                    )
-                    return True
-
-            except Exception as e:
-                self.logger.debug(f"Error checking backpressure from {stage_id}: {e}")
-                # Continue checking other downstream stages
+        try:
+            if provider.should_pause(self.stage_id):
+                self.logger.debug(
+                    f"Backpressure detected for {self.stage_id}, pausing split production"
+                )
+                return True
+        except Exception as e:
+            self.logger.debug(f"Error checking backpressure for {self.stage_id}: {e}")
 
         return False
 
@@ -467,5 +445,4 @@ class SourceMaster(StageMaster):
             except Exception:
                 pass
 
-        status.metrics["splits_produced"] = self._splits_produced
         return status

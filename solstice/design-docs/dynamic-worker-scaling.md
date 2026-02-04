@@ -15,7 +15,7 @@ _Created: December 2025_
 |-----------|--------|-------|
 | **SimpleAutoscaler** | ✅ Complete | `runtime/autoscaler.py` |
 | **AutoscaleConfig** | ✅ Complete | Dataclass with threshold settings |
-| **Queue Lag Metrics** | ✅ Complete | Via `BackpressureMonitor` |
+| **Queue Lag Metrics** | ✅ Complete | Via job-level queue stats client |
 | **Worker Scale Up/Down** | ✅ Complete | Via `WorkerManager` |
 | **Cooldown Period** | ✅ Complete | Prevents thrashing |
 | **Manual Override API** | ✅ Complete | `set_stage_workers()`, `freeze_stage()` |
@@ -27,6 +27,7 @@ _Created: December 2025_
 - Configurable check interval (default 15s)
 - Cooldown between scaling decisions
 - Manual intervention via runner API
+- Backpressure is evaluated by a job-level controller using WorkQueue stats
 
 ---
 
@@ -133,7 +134,7 @@ class AutoscaleConfig:
 
 ### 4.2 Metrics Collection
 
-Metrics are collected directly from `StageMaster` instances via synchronous method calls:
+Metrics are collected via a job-level queue stats client and synchronous master calls:
 
 ```python
 @dataclass
@@ -141,10 +142,15 @@ class StageMetrics:
     stage_id: str
     worker_count: int
     input_queue_lag: int      # Messages pending in input queue
+    input_queue_claimed: int  # Messages currently claimed (in-flight)
     output_queue_size: int    # Messages in output queue
     is_finished: bool
     config: StageConfig       # min_workers, max_workers, etc.
 ```
+
+Queue stats are sourced from WorkQueue (`pending_count`, `claimed_count`, `total_pushed`, `total_acked`)
+through a single job-level client. Worker/master/operator progress counters are not used
+for autoscaling decisions.
 
 **Why not Ray RPC or message queues for metrics?**
 
@@ -179,8 +185,8 @@ def compute_desired_workers(metrics: StageMetrics) -> int:
     if metrics.input_queue_lag > scale_up_lag_threshold:
         return min(current + max_scale_step, config.max_workers)
     
-    # Rule 3: Scale down on low lag
-    if metrics.input_queue_lag < scale_down_lag_threshold:
+    # Rule 3: Scale down on low lag (only when no in-flight messages)
+    if metrics.input_queue_lag < scale_down_lag_threshold and metrics.input_queue_claimed == 0:
         if current > config.min_workers:
             return max(current - 1, config.min_workers)
     
@@ -430,7 +436,7 @@ The simple design should be revisited if Solstice evolves to support:
 ## 11. References
 
 - [Checkpoint and Recovery Design](checkpoint-and-recovery.md)
-- [Architecture Overview](architecture.md)
+- [Architecture Overview](deprecated-design/architecture.md)
 - [Tansu Queue Backend](../solstice/queue/tansu.py)
 
 ---

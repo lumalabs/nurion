@@ -15,6 +15,7 @@
 // WorkQueue Python bindings using PyO3
 
 use pyo3::prelude::*;
+use pyo3::types::{PyBytes, PyDict, PyList};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -28,6 +29,7 @@ mod storage;
 mod types;
 
 use server::WorkQueueBrokerInner;
+use storage::WorkQueueStorage;
 use types::WorkQueueConfig;
 
 /// Broker error type exposed to Python
@@ -135,6 +137,7 @@ pub struct WorkQueueBroker {
     running: Arc<AtomicBool>,
     event_handler: Option<PyObject>,
     actual_port: Arc<Mutex<Option<u16>>>,
+    storage: Option<Arc<WorkQueueStorage>>,
 }
 
 #[pymethods]
@@ -148,6 +151,7 @@ impl WorkQueueBroker {
             running: Arc::new(AtomicBool::new(false)),
             event_handler,
             actual_port: Arc::new(Mutex::new(None)),
+            storage: None,
         }
     }
 
@@ -165,6 +169,25 @@ impl WorkQueueBroker {
         let handler = self.event_handler.as_ref().map(|h| h.clone_ref(py));
         let running = self.running.clone();
         let actual_port = self.actual_port.clone();
+
+        let rt = Runtime::new().map_err(|e| {
+            self.running.store(false, Ordering::SeqCst);
+            pyo3::exceptions::PyRuntimeError::new_err(format!(
+                "Failed to create runtime: {}",
+                e
+            ))
+        })?;
+        let storage = rt
+            .block_on(WorkQueueStorage::new(&config.db_path))
+            .map_err(|e| {
+                self.running.store(false, Ordering::SeqCst);
+                pyo3::exceptions::PyRuntimeError::new_err(format!(
+                    "Failed to open storage {}: {}",
+                    config.db_path, e
+                ))
+            })?;
+        let storage = Arc::new(storage);
+        self.storage = Some(storage.clone());
 
         let handle = std::thread::spawn(move || {
             // Initialize tracing
@@ -188,7 +211,7 @@ impl WorkQueueBroker {
             };
 
             rt.block_on(async {
-                match WorkQueueBrokerInner::new(config).await {
+                match WorkQueueBrokerInner::new_with_storage(config, storage).await {
                     Ok(mut broker) => {
                         match broker.start().await {
                             Ok(port) => {
@@ -248,6 +271,16 @@ impl WorkQueueBroker {
         Ok(())
     }
 
+    /// Create a storage reader backed by the broker's storage instance
+    fn get_storage_reader(&self) -> PyResult<WorkQueueStorageReader> {
+        let storage = self.storage.as_ref().ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err(
+                "Broker storage not available (start the broker first)",
+            )
+        })?;
+        WorkQueueStorageReader::from_storage(self.config.db_path.clone(), storage.clone())
+    }
+
     /// Stop the broker
     fn stop(&mut self, py: Python<'_>) -> PyResult<()> {
         self.running.store(false, Ordering::SeqCst);
@@ -291,11 +324,249 @@ impl WorkQueueBroker {
     }
 }
 
+/// WorkQueue Storage Reader - direct storage access (no RPC)
+#[pyclass(unsendable)]
+pub struct WorkQueueStorageReader {
+    db_path: String,
+    runtime: Runtime,
+    storage: Arc<WorkQueueStorage>,
+}
+
+#[pymethods]
+impl WorkQueueStorageReader {
+    #[new]
+    #[pyo3(signature = (db_path))]
+    fn new(db_path: String) -> PyResult<Self> {
+        let runtime = Runtime::new().map_err(|e| {
+            pyo3::exceptions::PyRuntimeError::new_err(format!(
+                "Failed to create runtime: {}",
+                e
+            ))
+        })?;
+        let storage = runtime
+            .block_on(WorkQueueStorage::new(&db_path))
+            .map_err(|e| {
+                pyo3::exceptions::PyRuntimeError::new_err(format!(
+                    "Failed to open storage {}: {}",
+                    db_path, e
+                ))
+            })?;
+        Ok(Self {
+            db_path,
+            runtime,
+            storage: Arc::new(storage),
+        })
+    }
+
+    /// Get queue stats (pending/claimed/total)
+    fn get_queue_stats(&self, py: Python<'_>, queue: String) -> PyResult<PyObject> {
+        let meta = self
+            .runtime
+            .block_on(self.storage.get_queue_stats(&queue))
+            .map_err(|e| {
+                pyo3::exceptions::PyRuntimeError::new_err(format!(
+                    "Failed to get stats for {}: {}",
+                    queue, e
+                ))
+            })?;
+        let pending = meta.push_seq.saturating_sub(meta.claim_seq);
+
+        let dict = PyDict::new(py);
+        dict.set_item("pending_count", pending)?;
+        dict.set_item("claimed_count", meta.claimed_count)?;
+        dict.set_item("total_pushed", meta.total_pushed)?;
+        dict.set_item("total_acked", meta.total_acked)?;
+        Ok(dict.into())
+    }
+
+    /// Scan acked messages (optionally filtered by queue and time range)
+    #[pyo3(signature = (queue=None, start_ns=None, end_ns=None, limit=None))]
+    fn scan_acked(
+        &self,
+        py: Python<'_>,
+        queue: Option<String>,
+        start_ns: Option<u64>,
+        end_ns: Option<u64>,
+        limit: Option<usize>,
+    ) -> PyResult<PyObject> {
+        let entries = self
+            .runtime
+            .block_on(self.storage.scan_acked(queue.as_deref()))
+            .map_err(|e| {
+                pyo3::exceptions::PyRuntimeError::new_err(format!(
+                    "Failed to scan acked: {}",
+                    e
+                ))
+            })?;
+        let mut results = Vec::new();
+        for (queue_name, ts_ns, msg_id) in entries {
+            if let Some(start) = start_ns {
+                if ts_ns < start {
+                    continue;
+                }
+            }
+            if let Some(end) = end_ns {
+                if ts_ns > end {
+                    continue;
+                }
+            }
+            results.push((queue_name, ts_ns, msg_id));
+            if let Some(max_items) = limit {
+                if results.len() >= max_items {
+                    break;
+                }
+            }
+        }
+
+        let list = PyList::empty(py);
+        for (queue_name, ts_ns, msg_id) in results {
+            let item = PyDict::new(py);
+            item.set_item("queue", queue_name)?;
+            item.set_item("timestamp_ns", ts_ns)?;
+            item.set_item("msg_id", msg_id)?;
+            list.append(item)?;
+        }
+        Ok(list.into())
+    }
+
+    /// Scan claimed messages (optionally filtered by queue)
+    #[pyo3(signature = (queue=None, limit=None))]
+    fn scan_claimed(
+        &self,
+        py: Python<'_>,
+        queue: Option<String>,
+        limit: Option<usize>,
+    ) -> PyResult<PyObject> {
+        let entries = self
+            .runtime
+            .block_on(self.storage.scan_claimed(queue.as_deref()))
+            .map_err(|e| {
+                pyo3::exceptions::PyRuntimeError::new_err(format!(
+                    "Failed to scan claimed: {}",
+                    e
+                ))
+            })?;
+        let list = PyList::empty(py);
+        let mut count = 0usize;
+        for (queue_name, msg_id, claim) in entries {
+            let item = PyDict::new(py);
+            item.set_item("queue", queue_name)?;
+            item.set_item("msg_id", msg_id)?;
+            item.set_item("worker_id", claim.worker_id)?;
+            item.set_item("lease_id", claim.lease_id)?;
+            item.set_item("claimed_at", claim.claimed_at)?;
+            item.set_item("claim_token", claim.claim_token)?;
+            list.append(item)?;
+            count += 1;
+            if let Some(max_items) = limit {
+                if count >= max_items {
+                    break;
+                }
+            }
+        }
+        Ok(list.into())
+    }
+
+    /// Get state values by keys (bytes)
+    fn state_get_batch(
+        &self,
+        py: Python<'_>,
+        namespace: String,
+        keys: Vec<String>,
+    ) -> PyResult<PyObject> {
+        let values = self
+            .runtime
+            .block_on(self.storage.state_get_batch(&namespace, &keys))
+            .map_err(|e| {
+                pyo3::exceptions::PyRuntimeError::new_err(format!(
+                    "Failed to read state for {}: {}",
+                    namespace, e
+                ))
+            })?;
+        let dict = PyDict::new(py);
+        for (key, value) in values {
+            dict.set_item(key, PyBytes::new(py, &value))?;
+        }
+        Ok(dict.into())
+    }
+
+    /// Scan state keys by prefix (returns suffix keys and bytes)
+    #[pyo3(signature = (namespace, prefix="", limit=None))]
+    fn state_scan_prefix(
+        &self,
+        py: Python<'_>,
+        namespace: String,
+        prefix: String,
+        limit: Option<usize>,
+    ) -> PyResult<PyObject> {
+        let entries = self
+            .runtime
+            .block_on(self.storage.state_scan_prefix(
+                &namespace,
+                &prefix,
+                limit.unwrap_or(0),
+            ))
+            .map_err(|e| {
+                pyo3::exceptions::PyRuntimeError::new_err(format!(
+                    "Failed to scan state for {}: {}",
+                    namespace, e
+                ))
+            })?;
+        let list = PyList::empty(py);
+        for (key, value) in entries {
+            let item = PyDict::new(py);
+            item.set_item("key", key)?;
+            item.set_item("value", PyBytes::new(py, &value))?;
+            list.append(item)?;
+        }
+        Ok(list.into())
+    }
+
+    /// List queues from storage
+    fn list_queues(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let queues = self
+            .runtime
+            .block_on(self.storage.list_queues())
+            .map_err(|e| {
+                pyo3::exceptions::PyRuntimeError::new_err(format!(
+                    "Failed to list queues: {}",
+                    e
+                ))
+            })?;
+        let list = PyList::empty(py);
+        for queue in queues {
+            list.append(queue)?;
+        }
+        Ok(list.into())
+    }
+
+    fn __repr__(&self) -> String {
+        format!("WorkQueueStorageReader(db_path='{}')", self.db_path)
+    }
+}
+
+impl WorkQueueStorageReader {
+    fn from_storage(db_path: String, storage: Arc<WorkQueueStorage>) -> PyResult<Self> {
+        let runtime = Runtime::new().map_err(|e| {
+            pyo3::exceptions::PyRuntimeError::new_err(format!(
+                "Failed to create runtime: {}",
+                e
+            ))
+        })?;
+        Ok(Self {
+            db_path,
+            runtime,
+            storage,
+        })
+    }
+}
+
 /// Python module definition
 #[pymodule]
 fn workqueue_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<BrokerConfig>()?;
     m.add_class::<BrokerError>()?;
     m.add_class::<WorkQueueBroker>()?;
+    m.add_class::<WorkQueueStorageReader>()?;
     Ok(())
 }

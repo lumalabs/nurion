@@ -19,9 +19,9 @@ Architecture:
     │                     Stage Master                            │
     │                                                             │
     │  ┌───────────────┐  ┌───────────────┐  ┌───────────────┐   │
-    │  │  WorkerMgr    │  │ RecoveryMgr   │  │BackpressureMon│   │
-    │  │ - lifecycle   │  │ - failures    │  │ - lag         │   │
-    │  │ - spawn/stop  │  │ - recovery    │  │ - scaling     │   │
+    │  │  WorkerMgr    │  │ RecoveryMgr   │  │   (job-level) │   │
+    │  │ - lifecycle   │  │ - failures    │  │ backpressure  │   │
+    │  │ - spawn/stop  │  │ - recovery    │  │ & autoscale   │   │
     │  └───────────────┘  └───────────────┘  └───────────────┘   │
     │                                                             │
     │  ┌─────────────────────────────────────────────────────┐    │
@@ -35,7 +35,7 @@ Architecture:
 
 Responsibilities:
 1. Create and manage output queue (WorkQueue)
-2. Coordinate managers (worker, recovery, backpressure)
+2. Coordinate managers (worker, recovery)
 3. Run the main processing loop
 4. Track stage completion and emit state events
 
@@ -49,28 +49,24 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional, Protocol
 
 from solstice.queue import WorkQueueQueueClient
 from solstice.utils.logging import create_ray_logger
 from solstice.core.split_payload_store import SplitPayloadStore
-from solstice.core.models import (
-    FailurePolicy,
-    FailureTracker,
-    QueueEndpoint,
-    QueueMessage,
-    StageStatus,
-)
+from solstice.core.models import FailurePolicy, FailureTracker, QueueEndpoint, QueueMessage, StageStatus
 from solstice.core.stage_worker import StageWorker
-from solstice.core.managers import (
-    WorkerManager,
-    RecoveryManager,
-    BackpressureMonitor,
-)
+from solstice.core.managers import WorkerManager, RecoveryManager
+from solstice.webui.state.schema import encode_json, job_namespace, stage_key
 
 if TYPE_CHECKING:
     from solstice.core.stage import Stage, StageRuntime
-    from solstice.webui.state.producer import StateProducer
+
+
+class BackpressureProvider(Protocol):
+    def is_backpressure_active(self, stage_id: str) -> bool: ...
+
+    def should_pause(self, stage_id: str) -> bool: ...
 
 # Re-export for compatibility
 __all__ = [
@@ -95,7 +91,7 @@ class StageMaster:
     Managers:
     - WorkerManager: Worker lifecycle (spawn, stop, status)
     - RecoveryManager: Failure tracking and worker recovery
-    - BackpressureMonitor: Backpressure detection and scaling
+    - Backpressure: handled by job-level controller
     """
 
     def __init__(
@@ -114,7 +110,6 @@ class StageMaster:
         # Queue configuration (from runtime)
         self.broker_endpoint = runtime.broker_endpoint
         self.upstream_queue_name = runtime.upstream_queue_name
-        self.state_queue_name = runtime.state_queue_name
 
         # SplitPayloadStore - shared across all stages
         self.payload_store = payload_store
@@ -131,17 +126,10 @@ class StageMaster:
         self._start_time: Optional[float] = None
         self._upstream_finished = False
 
-        # Downstream stage refs for backpressure (compatibility)
-        self._downstream_stage_refs: Dict[str, "StageMaster"] = {}
-
-        # State producer for WebUI metrics
-        self._state_producer: Optional["StateProducer"] = None
-        self._last_metrics_emit_time = 0.0
-
         # Worker and recovery managers created after output queue is ready
         self._worker_manager: Optional[WorkerManager] = None
         self._recovery_manager: Optional[RecoveryManager] = None
-        self._backpressure_monitor: Optional[BackpressureMonitor] = None
+        self._backpressure_provider: Optional[BackpressureProvider] = None
 
     async def _create_queue_client(self) -> WorkQueueQueueClient:
         """Create queue client and output queue."""
@@ -172,20 +160,12 @@ class StageMaster:
             payload_store=self.payload_store,
             broker_endpoint=self.broker_endpoint,
             output_queue_name=self._output_queue_name,
-            state_queue_name=self.state_queue_name,
         )
 
         self._recovery_manager = RecoveryManager(
             stage_id=self.stage_id,
             worker_manager=self._worker_manager,
             policy=FailurePolicy(),
-        )
-
-        self._backpressure_monitor = BackpressureMonitor(
-            stage=self.stage,
-            runtime=self.runtime,
-            worker_manager=self._worker_manager,
-            logger=self.logger,
         )
 
     def _has_unprocessed_messages(self) -> bool:
@@ -244,9 +224,8 @@ class StageMaster:
                     f"Stage {self.stage_id}: Failed to spawn minimum required workers"
                 )
 
-        # Initialize state producer and emit stage started event
-        await self._init_state_producer()
-        await self._emit_stage_started()
+        # Write stage started state
+        self._write_stage_state(status="RUNNING")
 
         # Mark as running only after all initialization succeeds
         self._running = True
@@ -324,9 +303,6 @@ class StageMaster:
                 if self._failed:
                     break
 
-                # Emit periodic metrics
-                await self._emit_stage_metrics()
-
             # Mark output queue as finished - downstream workers can now safely exit
             # when the queue is drained (pending=0, claimed=0)
             if self._queue_client:
@@ -338,8 +314,8 @@ class StageMaster:
                 except Exception as e:
                     self.logger.warning(f"Failed to mark output queue as finished: {e}")
 
-            # Emit completion event
-            await self._emit_stage_completed()
+            # Write completion state
+            self._write_stage_state(status="FAILED" if self._failed else "COMPLETED")
 
             if self._failed:
                 raise RuntimeError(self._failure_message)
@@ -357,95 +333,40 @@ class StageMaster:
         if self._worker_manager:
             await self._worker_manager.stop_all_workers()
 
-        # Stop backpressure monitor
-        if self._backpressure_monitor:
-            self._backpressure_monitor.stop()
-
-        # Stop state producer (async - has background tasks)
-        if self._state_producer:
-            try:
-                await self._state_producer.stop()
-            except Exception as e:
-                self.logger.warning(f"Error stopping state producer: {e}")
-            self._state_producer = None
-
         self.logger.info(f"Stage {self.stage_id} stopped")
 
     # =========================================================================
-    # State/Metrics Methods
+    # State Write Helpers
     # =========================================================================
 
-    async def _init_state_producer(self) -> None:
-        """Initialize state producer for metrics push."""
-        if not self.broker_endpoint or not self.state_queue_name:
+    def _write_stage_state(self, status: str) -> None:
+        """Write stage status into WorkQueue state."""
+        if not self._queue_client:
             return
-
+        operator_class = self.stage.operator_config.operator_class
+        operator_name = operator_class.__name__ if operator_class else "Unknown"
+        data = {
+            "stage_id": self.stage_id,
+            "status": status,
+            "timestamp": time.time(),
+            "operator_type": operator_name,
+            "min_parallelism": self.stage.min_parallelism,
+            "max_parallelism": self.stage.max_parallelism,
+            "num_cpus": self.stage.num_cpus,
+            "num_gpus": self.stage.num_gpus,
+            "memory_mb": self.stage.memory_mb,
+            "backpressure_threshold_lag": self.stage.backpressure_threshold_lag,
+            "backpressure_threshold_queue_size": self.stage.backpressure_threshold_queue_size,
+        }
+        if status == "FAILED":
+            data["failure_message"] = self._failure_message
         try:
-            from solstice.webui.state.producer import StateProducer
-
-            broker_url = f"{self.broker_endpoint.host}:{self.broker_endpoint.port}"
-            from solstice.queue.workqueue import _compute_heartbeat_interval
-
-            state_queue = WorkQueueQueueClient(
-                broker_url,
-                worker_id=f"state-{self.stage_id}",
-                heartbeat_interval_secs=_compute_heartbeat_interval(
-                    self.runtime.claim_timeout_secs
-                ),
+            self._queue_client.state_put(
+                job_namespace(self.job_id),
+                puts={stage_key(self.stage_id): encode_json(data)},
             )
-            state_queue.start()
-
-            self._state_producer = StateProducer(
-                job_id=self.job_id,
-                queue_client=state_queue,
-                state_queue_name=self.state_queue_name,
-            )
-            await self._state_producer.start()
-            self.logger.debug("Stage state producer initialized")
         except Exception as e:
-            self.logger.warning(f"Failed to init state producer: {e}")
-            self._state_producer = None
-
-    async def _emit_stage_started(self) -> None:
-        """Emit STAGE_STARTED event."""
-        if not self._state_producer:
-            return
-
-        try:
-            from solstice.webui.state.messages import stage_started_message
-
-            operator_class = self.stage.operator_config.operator_class
-            operator_name = operator_class.__name__ if operator_class else "Unknown"
-            msg = stage_started_message(
-                job_id=self.job_id,
-                stage_id=self.stage_id,
-                operator_type=operator_name,
-                min_parallelism=self.stage.min_parallelism,
-                max_parallelism=self.stage.max_parallelism,
-            )
-            await self._state_producer.produce(msg)
-        except Exception as e:
-            self.logger.debug(f"Failed to emit stage started: {e}")
-
-    async def _emit_stage_completed(self) -> None:
-        """Emit STAGE_COMPLETED event."""
-        if not self._state_producer:
-            return
-
-        try:
-            from solstice.webui.state.messages import stage_completed_message
-
-            msg = stage_completed_message(
-                job_id=self.job_id,
-                stage_id=self.stage_id,
-            )
-            await self._state_producer.produce(msg)
-        except Exception as e:
-            self.logger.debug(f"Failed to emit stage completed: {e}")
-
-    async def _emit_stage_metrics(self) -> None:
-        """Emit stage metrics (no-op, metrics come from workers)."""
-        pass
+            self.logger.debug(f"Failed to write stage state: {e}")
 
     # =========================================================================
     # Public Interface (for RayJobRunner and WebUI)
@@ -534,34 +455,76 @@ class StageMaster:
             is_finished=self._finished,
             failed=self._failed,
             failure_message=self._failure_message,
-            backpressure_active=self._backpressure_monitor.is_backpressure_active
-            if self._backpressure_monitor
+            backpressure_active=self._backpressure_provider.is_backpressure_active(self.stage_id)
+            if self._backpressure_provider
             else False,
         )
 
-    def get_input_queue_lag(self) -> int:
-        """Get input queue lag (for autoscaler)."""
-        if self._backpressure_monitor:
-            return self._backpressure_monitor.get_input_lag()
-        return 0
-
-    def set_downstream_stage_refs(self, downstream_refs: Dict[str, "StageMaster"]) -> None:
-        """Set downstream stage references for backpressure propagation."""
-        self._downstream_stage_refs = downstream_refs
-        if self._backpressure_monitor:
-            self._backpressure_monitor.set_downstream_refs(downstream_refs)
-
     async def scale_down(self, count: int) -> int:
         """Gracefully remove workers."""
-        if self._backpressure_monitor:
-            return await self._backpressure_monitor.scale_down(count)
-        return 0
+        if not self._worker_manager:
+            return 0
+        if count <= 0:
+            return 0
+
+        current = self._worker_manager.worker_count
+        min_workers = self.stage.min_parallelism
+        safe_to_remove = max(0, current - min_workers)
+        actual_remove = min(count, safe_to_remove)
+
+        if actual_remove == 0:
+            self.logger.debug(f"Cannot scale down: current={current}, min={min_workers}")
+            return 0
+
+        worker_ids = self._worker_manager.worker_ids[-actual_remove:]
+        removed = 0
+        for worker_id in worker_ids:
+            if await self._worker_manager.stop_worker(worker_id):
+                removed += 1
+                self.logger.debug(f"Removed worker {worker_id}")
+
+        self.logger.info(
+            f"Scaled down {self.stage_id}: removed {removed}/{count} workers "
+            f"(now {self._worker_manager.worker_count} workers)"
+        )
+        return removed
 
     async def scale_up(self, count: int) -> int:
         """Scale up by spawning new workers."""
-        if self._backpressure_monitor:
-            return await self._backpressure_monitor.scale_up(count)
-        return 0
+        if not self._worker_manager:
+            return 0
+        if count <= 0:
+            return 0
+
+        current = self._worker_manager.worker_count
+        max_workers = self.stage.max_parallelism
+        safe_to_add = max(0, max_workers - current)
+        actual_add = min(count, safe_to_add)
+
+        if actual_add == 0:
+            self.logger.debug(f"Cannot scale up: current={current}, max={max_workers}")
+            return 0
+
+        added = 0
+        for _ in range(actual_add):
+            try:
+                worker_id = await self._worker_manager.spawn_worker(is_min_worker=False)
+                if worker_id:
+                    added += 1
+                    self.logger.debug(f"Spawned worker {worker_id}")
+            except Exception as e:
+                self.logger.warning(f"Failed to spawn worker: {e}")
+                break
+
+        self.logger.info(
+            f"Scaled up {self.stage_id}: added {added}/{count} workers "
+            f"(now {self._worker_manager.worker_count} workers)"
+        )
+        return added
+
+    def set_backpressure_provider(self, provider: BackpressureProvider) -> None:
+        """Attach job-level backpressure provider."""
+        self._backpressure_provider = provider
 
     async def cleanup_queue(self) -> None:
         """Clean up queue client (called by runner after all consumers done)."""

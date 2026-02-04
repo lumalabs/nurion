@@ -616,7 +616,6 @@ class TestSparkSourceMaster:
                 storage_url="memory://",
             ),
             upstream_queue_name=None,
-            state_queue_name=None,
         )
         master = SparkSourceMaster(
             job_id="test-full-pipeline",

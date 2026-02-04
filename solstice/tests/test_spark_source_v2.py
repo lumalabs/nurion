@@ -114,7 +114,6 @@ class TestSparkSourceV2Integration:
                 storage_url="memory://",
             ),
             upstream_queue_name=None,
-            state_queue_name=None,
         )
         master = SparkSourceV2Master(
             job_id="test-v2-output",
@@ -185,7 +184,6 @@ class TestSparkSourceV2Integration:
                 storage_url="memory://",
             ),
             upstream_queue_name=None,
-            state_queue_name=None,
         )
         master = SparkSourceV2Master(
             job_id="test-v2-parallel",
@@ -234,7 +232,6 @@ class TestSparkSourceV2Integration:
                 storage_url="memory://",
             ),
             upstream_queue_name=None,
-            state_queue_name=None,
         )
         master = SparkSourceV2Master(
             job_id="test-v2-large",

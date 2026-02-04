@@ -56,6 +56,7 @@ from workqueue_py import BrokerConfig, BrokerError, WorkQueueBroker
 from workqueue_py.client import WorkQueueClient, Message
 
 from solstice.utils.logging import create_ray_logger
+from solstice.queue.workqueue_storage import WorkQueueStorageReader
 
 
 # =============================================================================
@@ -134,6 +135,17 @@ class WorkQueueBrokerManager:
 
     def is_running(self) -> bool:
         return self._running
+
+    def get_storage_reader(self) -> Optional[WorkQueueStorageReader]:
+        """Get a storage reader backed by the broker's live storage."""
+        if not self._broker:
+            return None
+        try:
+            reader = self._broker.get_storage_reader()
+            return WorkQueueStorageReader(reader=reader)
+        except Exception as e:
+            self.logger.warning(f"Failed to get storage reader: {e}")
+            return None
 
 
 class _BrokerEventHandler:
