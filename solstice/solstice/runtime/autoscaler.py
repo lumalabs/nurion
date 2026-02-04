@@ -213,7 +213,7 @@ class SimpleAutoscaler:
 
             metrics[stage_id] = StageMetrics(
                 stage_id=stage_id,
-                worker_count=len(master._workers),
+                worker_count=master._worker_manager.worker_count if master._worker_manager else 0,
                 min_workers=min_workers,
                 max_workers=max_workers,
                 input_queue_lag=input_lag,
@@ -309,7 +309,7 @@ class SimpleAutoscaler:
             if not master:
                 continue
 
-            current = len(master._workers)
+            current = master._worker_manager.worker_count if master._worker_manager else 0
 
             try:
                 if target > current:

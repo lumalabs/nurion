@@ -137,7 +137,7 @@ pub struct WorkQueueBroker {
     running: Arc<AtomicBool>,
     event_handler: Option<PyObject>,
     actual_port: Arc<Mutex<Option<u16>>>,
-    storage: Option<Arc<WorkQueueStorage>>,
+    storage: Arc<Mutex<Option<Arc<WorkQueueStorage>>>>,
 }
 
 #[pymethods]
@@ -151,7 +151,7 @@ impl WorkQueueBroker {
             running: Arc::new(AtomicBool::new(false)),
             event_handler,
             actual_port: Arc::new(Mutex::new(None)),
-            storage: None,
+            storage: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -169,25 +169,10 @@ impl WorkQueueBroker {
         let handler = self.event_handler.as_ref().map(|h| h.clone_ref(py));
         let running = self.running.clone();
         let actual_port = self.actual_port.clone();
-
-        let rt = Runtime::new().map_err(|e| {
-            self.running.store(false, Ordering::SeqCst);
-            pyo3::exceptions::PyRuntimeError::new_err(format!(
-                "Failed to create runtime: {}",
-                e
-            ))
-        })?;
-        let storage = rt
-            .block_on(WorkQueueStorage::new(&config.db_path))
-            .map_err(|e| {
-                self.running.store(false, Ordering::SeqCst);
-                pyo3::exceptions::PyRuntimeError::new_err(format!(
-                    "Failed to open storage {}: {}",
-                    config.db_path, e
-                ))
-            })?;
-        let storage = Arc::new(storage);
-        self.storage = Some(storage.clone());
+        
+        // Create a shared storage holder that can be updated from the thread
+        let storage_holder: Arc<Mutex<Option<Arc<WorkQueueStorage>>>> = Arc::new(Mutex::new(None));
+        let storage_holder_clone = storage_holder.clone();
 
         let handle = std::thread::spawn(move || {
             // Initialize tracing
@@ -211,6 +196,27 @@ impl WorkQueueBroker {
             };
 
             rt.block_on(async {
+                // Initialize storage on the same runtime that will be used for operations
+                let storage = match WorkQueueStorage::new(&config.db_path).await {
+                    Ok(s) => Arc::new(s),
+                    Err(e) => {
+                        running.store(false, Ordering::SeqCst);
+                        if let Some(h) = &handler {
+                            Python::with_gil(|py| {
+                                let error = BrokerError::new(
+                                    "storage_error".to_string(),
+                                    format!("Failed to open storage {}: {}", config.db_path, e),
+                                );
+                                let _ = h.call_method1(py, "on_fatal", (error,));
+                            });
+                        }
+                        return;
+                    }
+                };
+
+                // Store the storage reference for get_storage_reader
+                *storage_holder_clone.lock().unwrap() = Some(storage.clone());
+
                 match WorkQueueBrokerInner::new_with_storage(config, storage).await {
                     Ok(mut broker) => {
                         match broker.start().await {
@@ -268,17 +274,18 @@ impl WorkQueueBroker {
         });
 
         self.handle = Some(handle);
+        self.storage = storage_holder;
         Ok(())
     }
 
     /// Create a storage reader backed by the broker's storage instance
     fn get_storage_reader(&self) -> PyResult<WorkQueueStorageReader> {
-        let storage = self.storage.as_ref().ok_or_else(|| {
+        let storage = self.storage.lock().unwrap().clone().ok_or_else(|| {
             pyo3::exceptions::PyRuntimeError::new_err(
                 "Broker storage not available (start the broker first)",
             )
         })?;
-        WorkQueueStorageReader::from_storage(self.config.db_path.clone(), storage.clone())
+        WorkQueueStorageReader::from_storage(self.config.db_path.clone(), storage)
     }
 
     /// Stop the broker

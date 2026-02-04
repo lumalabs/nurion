@@ -48,17 +48,5 @@ class JobBackpressureController:
 
         return False
 
-    def get_input_queue_stats(self, stage_id: str) -> QueueStats:
-        cfg = self._stage_configs.get(stage_id)
-        if not cfg:
-            return QueueStats()
-        return self._queue_stats.get_stats(cfg.input_queue_name)
-
-    def get_output_queue_stats(self, stage_id: str) -> QueueStats:
-        cfg = self._stage_configs.get(stage_id)
-        if not cfg:
-            return QueueStats()
-        return self._queue_stats.get_stats(cfg.output_queue_name)
-
     def _downstream_stages(self, stage_id: str) -> Iterable[str]:
         return self._dag_edges.get(stage_id, [])
