@@ -201,10 +201,10 @@ WorkQueue is embedded; no external broker is required.
 2. **Don't create unused APIs**: Only implement endpoints that have actual callers
    - Example: Don't add batch endpoints if the caller only sends single requests
    - Example: Don't add "nice-to-have" endpoints without confirmed use cases
-3. **Don't worry about backward compatibility (pre-1.0)**: Before version 1.0, breaking changes are acceptable
+3. **Don't worry about compatibility with earlier versions (pre-1.0)**: Before version 1.0, breaking changes are acceptable
    - Focus on getting the design right, not maintaining compatibility
    - Document breaking changes in commit messages
-   - After 1.0, maintain backward compatibility
+   - After 1.0, maintain compatibility with earlier versions
 4. **Don't skip types**: Add appropriate type annotations
 5. **Don't hardcode config**: Use config classes and environment variables
 6. **Don't use uncertain fallback patterns**: Logic should be consistent, not "try A, if not found try B"

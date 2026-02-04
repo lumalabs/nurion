@@ -167,6 +167,7 @@ class WorkerManager:
             output_queue_name=self._output_queue_name,
             state_queue_name=self._state_queue_name,
             batch_size=self._stage.batch_size,
+            claim_timeout_secs=self._runtime.claim_timeout_secs,
         )
 
         # Create worker actor
@@ -311,6 +312,9 @@ class WorkerManager:
             except ray.exceptions.GetTimeoutError:
                 self._logger.warning(f"Unexpected: task for {worker_id} not ready")
             except Exception as e:
+                if "broker_unavailable" in str(e):
+                    self._logger.error(f"Worker {worker_id} failed: {e}")
+                    raise
                 self._logger.error(f"Worker {worker_id} failed: {e}")
                 failed.append(worker_id)
 

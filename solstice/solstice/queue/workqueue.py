@@ -187,12 +187,27 @@ class WorkQueueRecord:
         )
 
 
+def _compute_heartbeat_interval(claim_timeout_secs: Optional[float]) -> Optional[float]:
+    """Compute a safe heartbeat interval from claim timeout."""
+    if claim_timeout_secs is None:
+        return None
+    if claim_timeout_secs <= 0:
+        return 0.1
+    return max(0.1, min(5.0, claim_timeout_secs / 2))
+
+
 class WorkQueueQueueClient:
     """WorkQueue client for claim/ack operations."""
 
-    def __init__(self, broker_url: str, worker_id: str = "default"):
+    def __init__(
+        self,
+        broker_url: str,
+        worker_id: str = "default",
+        heartbeat_interval_secs: Optional[float] = None,
+    ):
         self.broker_url = broker_url
         self.worker_id = worker_id
+        self.heartbeat_interval_secs = heartbeat_interval_secs
         self._client: Optional[WorkQueueClient] = None
         self._running = False
         self.logger = create_ray_logger(f"WorkQueueClient:{worker_id}")
@@ -201,7 +216,14 @@ class WorkQueueQueueClient:
     def start(self) -> None:
         if self._running:
             return
-        self._client = WorkQueueClient(self.broker_url, self.worker_id)
+        if self.heartbeat_interval_secs is None:
+            self._client = WorkQueueClient(self.broker_url, self.worker_id)
+        else:
+            self._client = WorkQueueClient(
+                self.broker_url,
+                self.worker_id,
+                heartbeat_interval_secs=self.heartbeat_interval_secs,
+            )
         self._client.start()
         self._running = True
         self.logger.info(f"Connected to {self.broker_url}")

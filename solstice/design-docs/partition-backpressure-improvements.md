@@ -417,7 +417,7 @@ async def _get_consumer(
             # Subscribe - Kafka will assign partitions automatically
             consumer.subscribe([topic])
         else:
-            # Manual assignment (backward compatibility)
+            # Manual assignment (legacy mode)
             partition_id = partition if partition is not None else 0
             consumer.assign([TopicPartition(topic, partition_id)])
     

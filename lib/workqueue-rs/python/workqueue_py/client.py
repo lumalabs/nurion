@@ -112,6 +112,7 @@ class WorkQueueClient:
         self._channel: Optional[grpc.Channel] = None
         self._stub: Optional[Any] = None
         self._lease_id: str = ""
+        self._channel_lock = threading.Lock()
 
         # Heartbeat management
         self._heartbeat_thread: Optional[threading.Thread] = None
@@ -131,8 +132,9 @@ class WorkQueueClient:
                 "--grpc_python_out=python/workqueue_py proto/workqueue.proto"
             )
 
-        self._channel = grpc.insecure_channel(self.server_address)
-        self._stub = pb2_grpc.WorkQueueStub(self._channel)
+        with self._channel_lock:
+            self._channel = grpc.insecure_channel(self.server_address)
+            self._stub = pb2_grpc.WorkQueueStub(self._channel)
 
         # Start heartbeat stream
         self._heartbeat_running = True
@@ -153,9 +155,11 @@ class WorkQueueClient:
                 return
             time.sleep(0.1)
 
-        raise RuntimeError(
-            f"Failed to acquire lease from server within {self.connect_timeout}s"
+        logger.warning(
+            f"Failed to acquire lease within {self.connect_timeout}s; "
+            "continuing without lease and retrying via heartbeat"
         )
+        return
 
     def stop(self) -> None:
         """Stop heartbeat and close connection."""
@@ -165,13 +169,24 @@ class WorkQueueClient:
             self._heartbeat_thread.join(timeout=2.0)
             self._heartbeat_thread = None
 
-        if self._channel:
-            self._channel.close()
-            self._channel = None
+        with self._channel_lock:
+            if self._channel:
+                self._channel.close()
+                self._channel = None
 
         self._stub = None
         self._lease_id = ""
         logger.info(f"Disconnected from {self.server_address}")
+
+    def _reset_channel(self) -> None:
+        """Recreate the gRPC channel/stub after disconnects."""
+        with self._channel_lock:
+            if self._channel:
+                self._channel.close()
+            self._channel = grpc.insecure_channel(self.server_address)
+            self._stub = pb2_grpc.WorkQueueStub(self._channel)
+        with self._heartbeat_lock:
+            self._lease_id = ""
 
     def _heartbeat_loop(self) -> None:
         """Background thread for heartbeat streaming."""
@@ -201,6 +216,10 @@ class WorkQueueClient:
             except grpc.RpcError as e:
                 if self._heartbeat_running:
                     reconnect_attempts += 1
+                    try:
+                        self._reset_channel()
+                    except Exception as reset_error:
+                        logger.debug(f"Heartbeat channel reset error: {reset_error}")
                     # Only log first attempt as warning, rest as debug to reduce noise
                     if reconnect_attempts == 1:
                         logger.warning(f"Heartbeat disconnected, reconnecting...")

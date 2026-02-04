@@ -74,6 +74,7 @@ class WorkerRuntime:
 
     # Processing config
     batch_size: int = 100
+    claim_timeout_secs: float = 60.0
 
 
 class PayloadMissingError(RuntimeError):
@@ -108,6 +109,7 @@ class StageWorker:
 
         # Processing config
         self._batch_size = runtime.batch_size
+        self._claim_timeout_secs = runtime.claim_timeout_secs
 
         # Store references
         self.stage = stage
@@ -147,7 +149,13 @@ class StageWorker:
         if not self.broker_endpoint:
             raise RuntimeError("broker_endpoint is required")
         broker_url = f"{self.broker_endpoint.host}:{self.broker_endpoint.port}"
-        client = WorkQueueQueueClient(broker_url, worker_id=self.worker_id)
+        from solstice.queue.workqueue import _compute_heartbeat_interval
+
+        client = WorkQueueQueueClient(
+            broker_url,
+            worker_id=self.worker_id,
+            heartbeat_interval_secs=_compute_heartbeat_interval(self._claim_timeout_secs),
+        )
         client.start()
         return client
 
@@ -294,6 +302,22 @@ class StageWorker:
                 self.logger.info(f"Worker {self.worker_id} claim loop cancelled")
                 raise
             except Exception as e:
+                try:
+                    import grpc
+                except Exception:
+                    grpc = None  # type: ignore[assignment]
+
+                is_broker_error = False
+                if grpc is not None and isinstance(e, grpc.RpcError):
+                    is_broker_error = True
+                elif isinstance(e, RuntimeError) and "Client not started" in str(e):
+                    is_broker_error = True
+
+                if is_broker_error:
+                    self.logger.error(
+                        f"Worker {self.worker_id} broker error, stopping: {e}"
+                    )
+                    raise RuntimeError("broker_unavailable") from e
                 if self._operator:
                     self._operator.error_count += 1
                 self.logger.error(f"Error in worker {self.worker_id}: {e}")
