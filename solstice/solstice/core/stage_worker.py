@@ -224,9 +224,7 @@ class StageWorker:
                 # Process each claimed message
                 for record in records:
                     if not record.claim_token:
-                        raise RuntimeError(
-                            f"Missing claim_token for message {record.msg_id}"
-                        )
+                        raise RuntimeError(f"Missing claim_token for message {record.msg_id}")
 
                     message = QueueMessage.from_bytes(record.value)
                     split_id = make_split_id(self.job_id, self.stage_id, record.msg_id)
@@ -318,9 +316,7 @@ class StageWorker:
                     is_broker_error = True
 
                 if is_broker_error:
-                    self.logger.error(
-                        f"Worker {self.worker_id} broker error, stopping: {e}"
-                    )
+                    self.logger.error(f"Worker {self.worker_id} broker error, stopping: {e}")
                     raise RuntimeError("broker_unavailable") from e
                 self.logger.error(f"Error in worker {self.worker_id}: {e}")
                 await asyncio.sleep(0.1)
@@ -547,4 +543,3 @@ class StageWorker:
             raise ValueError(f"Method '{method_name}' is not marked @master_callable.")
 
         return method(*args, **kwargs)
-

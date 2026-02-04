@@ -21,6 +21,7 @@ These managers handle specific concerns within a StageMaster:
 
 from solstice.core.managers.worker_manager import WorkerManager
 from solstice.core.managers.recovery_manager import RecoveryManager
+
 __all__ = [
     "WorkerManager",
     "RecoveryManager",

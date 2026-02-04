@@ -1,3 +1,17 @@
+# Copyright 2025 nurion team
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Job state reader backed by WorkQueue storage (pyO3)."""
 
 from __future__ import annotations
@@ -23,7 +37,9 @@ from solstice.webui.state.schema import (
 class JobStateManager:
     """Read-only state access for WebUI (no state queue, no SlateDB)."""
 
-    def __init__(self, db_path: Optional[str] = None, storage: Optional[WorkQueueStorageReader] = None):
+    def __init__(
+        self, db_path: Optional[str] = None, storage: Optional[WorkQueueStorageReader] = None
+    ):
         if storage is None:
             if db_path is None:
                 raise ValueError("db_path is required when storage is not provided")
@@ -146,11 +162,7 @@ class JobStateManager:
                 for s in stages
                 if s.get("stage_id")
             }
-            queues = (
-                [f"{job_id}_{stage_id}_output"]
-                if stage_id
-                else list(queue_map.keys())
-            )
+            queues = [f"{job_id}_{stage_id}_output"] if stage_id else list(queue_map.keys())
             for queue in queues:
                 timeout_entries = self._storage.state_scan_prefix(
                     "wq_events",

@@ -54,7 +54,13 @@ from typing import TYPE_CHECKING, Any, Dict, Optional, Protocol
 from solstice.queue import WorkQueueQueueClient
 from solstice.utils.logging import create_ray_logger
 from solstice.core.split_payload_store import SplitPayloadStore
-from solstice.core.models import FailurePolicy, FailureTracker, QueueEndpoint, QueueMessage, StageStatus
+from solstice.core.models import (
+    FailurePolicy,
+    FailureTracker,
+    QueueEndpoint,
+    QueueMessage,
+    StageStatus,
+)
 from solstice.core.stage_worker import StageWorker
 from solstice.core.managers import WorkerManager, RecoveryManager
 from solstice.webui.state.schema import encode_json, job_namespace, stage_key
@@ -67,6 +73,7 @@ class BackpressureProvider(Protocol):
     def is_backpressure_active(self, stage_id: str) -> bool: ...
 
     def should_pause(self, stage_id: str) -> bool: ...
+
 
 # Re-export for compatibility
 __all__ = [
@@ -308,9 +315,7 @@ class StageMaster:
             if self._queue_client:
                 try:
                     self._queue_client.mark_queue_finished(self._output_queue_name)
-                    self.logger.debug(
-                        f"Marked output queue {self._output_queue_name} as finished"
-                    )
+                    self.logger.debug(f"Marked output queue {self._output_queue_name} as finished")
                 except Exception as e:
                     self.logger.warning(f"Failed to mark output queue as finished: {e}")
 
@@ -422,9 +427,7 @@ class StageMaster:
                         f"Stage {self.stage_id} failed to poll queue completion "
                         f"after {max_consecutive_errors} consecutive errors: {e}"
                     )
-                    raise RuntimeError(
-                        f"Failed to poll upstream queue completion: {e}"
-                    ) from e
+                    raise RuntimeError(f"Failed to poll upstream queue completion: {e}") from e
                 self.logger.debug(f"Error polling queue completion: {e}")
 
             await asyncio.sleep(poll_interval)

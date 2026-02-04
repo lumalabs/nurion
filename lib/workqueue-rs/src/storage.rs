@@ -90,6 +90,20 @@ impl WorkQueueStorage {
         Ok(Self { db })
     }
 
+    /// Close the storage gracefully.
+    /// This should be called before dropping the storage to ensure all background
+    /// tasks are properly shut down and avoid "channel closed" panics.
+    pub async fn close(&self) -> Result<(), StorageError> {
+        self.db.close().await?;
+        Ok(())
+    }
+
+    /// Check if this is using in-memory storage
+    pub fn is_memory(&self) -> bool {
+        // Memory storage doesn't have the same issues as file storage
+        false // We can't easily check this, but it's informational only
+    }
+
     // === Key Generation ===
 
     fn meta_key(queue: &str) -> Vec<u8> {

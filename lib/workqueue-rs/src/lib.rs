@@ -137,7 +137,9 @@ pub struct WorkQueueBroker {
     running: Arc<AtomicBool>,
     event_handler: Option<PyObject>,
     actual_port: Arc<Mutex<Option<u16>>>,
-    storage: Option<Arc<WorkQueueStorage>>,
+    // Storage is created inside the broker thread (to keep it in the same tokio runtime)
+    // and shared back via this Arc<Mutex<>>
+    storage: Arc<Mutex<Option<Arc<WorkQueueStorage>>>>,
 }
 
 #[pymethods]
@@ -151,7 +153,7 @@ impl WorkQueueBroker {
             running: Arc::new(AtomicBool::new(false)),
             event_handler,
             actual_port: Arc::new(Mutex::new(None)),
-            storage: None,
+            storage: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -169,30 +171,18 @@ impl WorkQueueBroker {
         let handler = self.event_handler.as_ref().map(|h| h.clone_ref(py));
         let running = self.running.clone();
         let actual_port = self.actual_port.clone();
-
-        let rt = Runtime::new().map_err(|e| {
-            self.running.store(false, Ordering::SeqCst);
-            pyo3::exceptions::PyRuntimeError::new_err(format!(
-                "Failed to create runtime: {}",
-                e
-            ))
-        })?;
-        let storage = rt
-            .block_on(WorkQueueStorage::new(&config.db_path))
-            .map_err(|e| {
-                self.running.store(false, Ordering::SeqCst);
-                pyo3::exceptions::PyRuntimeError::new_err(format!(
-                    "Failed to open storage {}: {}",
-                    config.db_path, e
-                ))
-            })?;
-        let storage = Arc::new(storage);
-        self.storage = Some(storage.clone());
+        // Storage will be created inside the broker thread and shared back via this Arc<Mutex<>>
+        let storage_slot = self.storage.clone();
 
         let handle = std::thread::spawn(move || {
             // Initialize tracing
             let _ = tracing_subscriber::fmt().try_init();
 
+            // Create a single runtime for the entire broker lifecycle
+            // CRITICAL: SlateDB's internal background tasks (compactor, gc, memtable flusher)
+            // are bound to the tokio runtime that creates the Db. If storage is created in a
+            // different runtime than where it's used, the internal channels get closed when
+            // the original runtime is dropped, causing "channel closed" panics.
             let rt = match Runtime::new() {
                 Ok(rt) => rt,
                 Err(e) => {
@@ -211,7 +201,31 @@ impl WorkQueueBroker {
             };
 
             rt.block_on(async {
-                match WorkQueueBrokerInner::new_with_storage(config, storage).await {
+                // Create storage in the same runtime that will use it
+                // CRITICAL: SlateDB's internal background tasks (compactor, gc, memtable flusher)
+                // are bound to the tokio runtime that creates the Db. Storage must be created
+                // and used in the same runtime to avoid "channel closed" panics.
+                let storage = match WorkQueueStorage::new(&config.db_path).await {
+                    Ok(s) => Arc::new(s),
+                    Err(e) => {
+                        running.store(false, Ordering::SeqCst);
+                        if let Some(h) = &handler {
+                            Python::with_gil(|py| {
+                                let error = BrokerError::new(
+                                    "storage_error".to_string(),
+                                    format!("Failed to open storage {}: {}", config.db_path, e),
+                                );
+                                let _ = h.call_method1(py, "on_fatal", (error,));
+                            });
+                        }
+                        return;
+                    }
+                };
+
+                // Share storage reference back to the main struct for get_storage_reader()
+                *storage_slot.lock().unwrap() = Some(storage.clone());
+
+                match WorkQueueBrokerInner::new_with_storage(config, storage.clone()).await {
                     Ok(mut broker) => {
                         match broker.start().await {
                             Ok(port) => {
@@ -230,7 +244,8 @@ impl WorkQueueBroker {
                                         .await;
                                 }
 
-                                broker.stop();
+                                // Gracefully stop the broker, waiting for background tasks to finish
+                                broker.stop_async().await;
 
                                 // Trigger on_stopped callback
                                 if let Some(h) = &handler {
@@ -273,7 +288,8 @@ impl WorkQueueBroker {
 
     /// Create a storage reader backed by the broker's storage instance
     fn get_storage_reader(&self) -> PyResult<WorkQueueStorageReader> {
-        let storage = self.storage.as_ref().ok_or_else(|| {
+        let storage_guard = self.storage.lock().unwrap();
+        let storage = storage_guard.as_ref().ok_or_else(|| {
             pyo3::exceptions::PyRuntimeError::new_err(
                 "Broker storage not available (start the broker first)",
             )

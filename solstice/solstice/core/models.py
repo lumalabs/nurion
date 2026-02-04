@@ -72,7 +72,6 @@ class Split:
         )
 
 
-
 @dataclass
 class BackpressureSignal:
     """Signal for backpressure propagation"""

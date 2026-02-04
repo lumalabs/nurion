@@ -248,7 +248,6 @@ class Operator(ABC):
 
         self.task: Optional[asyncio.Task[None]] = None
 
-
     @property
     def config(self) -> OperatorConfig:
         """User-defined configuration (immutable)."""
