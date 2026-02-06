@@ -44,6 +44,7 @@ from solstice.operators.llm.utils import (
 )
 from solstice.serve.client import ModelClient
 
+
 class EndpointSelectPolicy:
     """Policy for selecting endpoints from a list.
 
@@ -152,7 +153,6 @@ class ExternalLLMOperator(Operator):
 
     def _get_model_client(self) -> ModelClient:
         if self._model_client is None:
-
             assert self._config.registry is not None, (
                 "registry must be set in config when use_model_client=True"
             )

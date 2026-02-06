@@ -14,7 +14,7 @@
 
 """Tests for solstice.serve.client."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
@@ -148,10 +148,12 @@ class TestModelClientGetEndpoint:
         mock_registry = MagicMock()
         client = ModelClient(registry=mock_registry)
         client._registry_url = "http://registry:18000"
-        client._endpoint_cache["m"] = EndpointCache.from_registry_response([
-            {"endpoint": "http://h1:8001", "pending": 10, "is_ready": True},
-            {"endpoint": "http://h2:8002", "pending": 3, "is_ready": True},
-        ])
+        client._endpoint_cache["m"] = EndpointCache.from_registry_response(
+            [
+                {"endpoint": "http://h1:8001", "pending": 10, "is_ready": True},
+                {"endpoint": "http://h2:8002", "pending": 3, "is_ready": True},
+            ]
+        )
         assert await client.get_endpoint("m") == "http://h2:8002"
 
     async def test_no_endpoints_raises(self) -> None:
@@ -211,9 +213,7 @@ class TestModelClientRegistryRefresh:
     async def test_refresh_registry_url(self) -> None:
         """When registry URL is None, it should be resolved from the actor."""
         mock_registry = MagicMock()
-        mock_registry.get_http_url.remote = AsyncMock(
-            return_value="http://new-registry:18000"
-        )
+        mock_registry.get_http_url.remote = AsyncMock(return_value="http://new-registry:18000")
 
         client = ModelClient(registry=mock_registry)
         assert client._registry_url is None
@@ -225,9 +225,7 @@ class TestModelClientRegistryRefresh:
     async def test_get_endpoint_refreshes_on_connect_error(self) -> None:
         """On ConnectError, client should reset registry URL and retry."""
         mock_registry = MagicMock()
-        mock_registry.get_http_url.remote = AsyncMock(
-            return_value="http://new-registry:18000"
-        )
+        mock_registry.get_http_url.remote = AsyncMock(return_value="http://new-registry:18000")
 
         client = ModelClient(registry=mock_registry, cache_ttl_seconds=0.0)
         client._registry_url = "http://dead:18000"
@@ -241,9 +239,7 @@ class TestModelClientRegistryRefresh:
                 raise httpx.ConnectError("Connection refused")
             resp = MagicMock()
             resp.status_code = 200
-            resp.json.return_value = [
-                {"endpoint": "http://h:8001", "pending": 0, "is_ready": True}
-            ]
+            resp.json.return_value = [{"endpoint": "http://h:8001", "pending": 0, "is_ready": True}]
             resp.raise_for_status = MagicMock()
             return resp
 
