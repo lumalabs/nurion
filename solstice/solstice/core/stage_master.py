@@ -269,14 +269,17 @@ class StageMaster:
 
         # --- DirectProducer: immediate finish ---
         if self._source_manager and self._source_manager.is_direct_producer:
-            self._finished = True
-            if self._queue_client:
-                try:
-                    self._queue_client.mark_queue_finished(self._output_queue_name)
-                except Exception as e:
-                    self.logger.warning(f"Failed to mark output queue as finished: {e}")
-            self._write_stage_state(status="COMPLETED")
-            return True
+            try:
+                self._finished = True
+                if self._queue_client:
+                    try:
+                        self._queue_client.mark_queue_finished(self._output_queue_name)
+                    except Exception as e:
+                        self.logger.warning(f"Failed to mark output queue as finished: {e}")
+                self._write_stage_state(status="COMPLETED")
+                return True
+            finally:
+                await self.stop()
 
         # --- Worker-based run loop ---
         assert self._worker_manager is not None

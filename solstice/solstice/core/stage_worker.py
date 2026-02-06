@@ -238,12 +238,16 @@ class StageWorker:
         tables: list[pa.Table] = []
         parent_split_ids: list[str] = []
 
+        # First pass: collect all msg_ids and claim_tokens for the entire group
+        # This ensures we can nack ALL records if any payload is missing
         for record in records:
             if not record.claim_token:
                 raise RuntimeError(f"Missing claim_token for message {record.msg_id}")
             msg_ids.append(record.msg_id)
             claim_tokens.append(record.claim_token)
 
+        # Second pass: fetch payloads and check for missing ones
+        for record in records:
             message = QueueMessage.from_bytes(record.value)
             if message.payload_key:
                 payload = self.payload_store.get(message.payload_key)
