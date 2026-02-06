@@ -226,12 +226,7 @@ class TestLancePipeline:
         # Start the full pipeline (creates queues, spawns workers)
         await master.start()
 
-        # Verify source queue was created
-        source_queue = master.get_source_client()
-        assert source_queue is not None
-        assert source_queue.health_check()
-
-        # Verify output queue was created
+        # Verify queue client was created (handles all queue operations)
         output_queue = master.get_queue_client()
         assert output_queue is not None
 

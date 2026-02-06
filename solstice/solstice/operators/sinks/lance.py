@@ -28,6 +28,7 @@ This ensures:
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 from dataclasses import dataclass, field
@@ -156,8 +157,14 @@ class LanceSink(SinkOperator):
             storage_options=self.storage_options,
         )
 
-        # Return fragment metadata as raw bytes for the commit queue
-        payloads = [json.dumps(frag.to_json()).encode() for frag in fragments]
+        # Return fragment metadata + schema as raw bytes for the commit queue.
+        # Schema is needed by the committer for the first Overwrite commit
+        # (dataset doesn't exist yet, so it can't read schema from disk).
+        schema_b64 = base64.b64encode(table.schema.serialize().to_pybytes()).decode()
+        payloads = [
+            json.dumps({"fragment": frag.to_json(), "schema_b64": schema_b64}).encode()
+            for frag in fragments
+        ]
         return RawOutputBytes(payloads=payloads)
 
     def _build_table(self, batch: SplitPayload) -> pa.Table:

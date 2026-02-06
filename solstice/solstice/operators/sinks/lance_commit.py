@@ -26,6 +26,7 @@ This ensures fragments are not lost if the committer crashes before committing.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import time
@@ -176,13 +177,28 @@ class LanceSinkCommitter:
                     self._pending_acks.append((record.msg_id, record.claim_token))
 
     def _parse_fragment(self, value: bytes) -> Optional[FragmentMetadata]:
-        """Parse a single commit queue record into FragmentMetadata."""
+        """Parse a single commit queue record into FragmentMetadata.
+
+        Message format (from LanceSink):
+            {"fragment": <fragment_json_dict>, "schema_b64": "<base64_arrow_schema>"}
+
+        The schema is extracted from the first message and cached for use
+        in the first Overwrite commit (when the dataset doesn't exist yet).
+        """
         try:
-            frag_data = value.decode()
-            parsed = json.loads(frag_data)
-            if isinstance(parsed, dict):
-                frag_data = json.dumps(parsed)
-            return FragmentMetadata.from_json(frag_data)
+            parsed = json.loads(value.decode())
+
+            # New format: wrapper with fragment + schema
+            if isinstance(parsed, dict) and "fragment" in parsed:
+                frag_json = parsed["fragment"]
+                # Extract schema from first message that carries it
+                if self._schema is None and "schema_b64" in parsed:
+                    schema_bytes = base64.b64decode(parsed["schema_b64"])
+                    self._schema = pa.ipc.read_schema(pa.BufferReader(schema_bytes))
+                return FragmentMetadata.from_json(json.dumps(frag_json))
+
+            # Legacy format: raw fragment JSON
+            return FragmentMetadata.from_json(json.dumps(parsed) if isinstance(parsed, dict) else value.decode())
         except Exception as e:
             self._logger.error(f"Error parsing commit record: {e}")
             return None
@@ -261,12 +277,18 @@ class LanceSinkCommitter:
                 raise
 
     def _get_schema(self) -> pa.Schema:
-        """Get the Arrow schema for the dataset."""
+        """Get the Arrow schema for the dataset.
+
+        Schema sources (in priority order):
+        1. Cached from commit queue messages (set by _parse_fragment)
+        2. Read from existing dataset on disk (for append mode)
+        """
         if self._schema is not None:
             return self._schema
         try:
             ds = lance.dataset(self._table_path, storage_options=self._storage_options)
-            return ds.schema
+            self._schema = ds.schema
+            return self._schema
         except Exception:
             raise RuntimeError(
                 "Cannot determine schema for first commit. "

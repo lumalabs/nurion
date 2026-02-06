@@ -22,7 +22,7 @@ import pytest
 import pyarrow as pa
 import ray
 
-from tests.conftest import make_operator_runtime, make_stage_runtime
+from tests.conftest import make_operator_runtime
 from solstice.core.models import Split
 from solstice.core.stage import Stage
 from solstice.operators.filter import FilterOperatorConfig
@@ -309,19 +309,11 @@ class TestSparkSplitPlanner:
             ),
         )
 
-        # Create StageMaster directly
-        from solstice.core.split_payload_store import RaySplitPayloadStore
+        # Create SparkSplitPlanner directly from operator config
+        planner = SparkSplitPlanner(source_stage.operator_config)
 
-        payload_store = RaySplitPayloadStore(name="test-plan-splits_store")
-        master = SparkSplitPlanner(
-            job_id="test-plan-splits",
-            stage=source_stage,
-            payload_store=payload_store,
-            runtime=make_stage_runtime(),
-        )
-
-        # Fetch splits using the master
-        splits = list(master.plan_splits())
+        # Fetch splits using the planner
+        splits = list(planner.plan_splits("spark_source"))
 
         assert len(splits) > 0
         total_records = sum(s.data_range["block_size"] for s in splits)
@@ -343,8 +335,8 @@ class TestSparkSplitPlanner:
 
         assert len(all_records) == 100
 
-        # Cleanup - _stop_spark is sync, stop() is async
-        master._stop_spark()
+        # Cleanup
+        planner._stop_spark()
 
     def test_stage_master_with_sql_query(self, ray_cluster):
         """Test SparkSplitPlanner with SQL query in dataframe_fn.
@@ -371,19 +363,11 @@ class TestSparkSplitPlanner:
             ),
         )
 
-        # Create StageMaster - it will initialize Spark internally
-        from solstice.core.split_payload_store import RaySplitPayloadStore
-
-        payload_store = RaySplitPayloadStore(name="test-sql-query_store")
-        master = SparkSplitPlanner(
-            job_id="test-sql-query",
-            stage=source_stage,
-            payload_store=payload_store,
-            runtime=make_stage_runtime(),
-        )
+        # Create SparkSplitPlanner directly from operator config
+        planner = SparkSplitPlanner(source_stage.operator_config)
 
         # Fetch splits - this triggers Spark init via raydp.init_spark()
-        splits = list(master.plan_splits())
+        splits = list(planner.plan_splits("spark_source"))
 
         assert len(splits) > 0
         total_records = sum(s.data_range["block_size"] for s in splits)
@@ -401,7 +385,7 @@ class TestSparkSplitPlanner:
         assert len(all_records) > 0
 
         # Cleanup Spark
-        master._stop_spark()
+        planner._stop_spark()
 
     def test_stage_master_1000_records_full_pipeline(self, ray_cluster):
         """Test SparkSplitPlanner with 1000 records - verify split generation and data integrity.
@@ -425,18 +409,10 @@ class TestSparkSplitPlanner:
             ),
         )
 
-        # Create StageMaster and fetch splits
-        from solstice.core.split_payload_store import RaySplitPayloadStore
+        # Create SparkSplitPlanner directly from operator config
+        planner = SparkSplitPlanner(source_stage.operator_config)
 
-        payload_store = RaySplitPayloadStore(name="test-1000-records_store")
-        master = SparkSplitPlanner(
-            job_id="test-1000-records",
-            stage=source_stage,
-            payload_store=payload_store,
-            runtime=make_stage_runtime(),
-        )
-
-        splits = list(master.plan_splits())
+        splits = list(planner.plan_splits("spark_source"))
         total_records = sum(s.data_range["block_size"] for s in splits)
         assert total_records == 1000
         print(f"Fetched {len(splits)} splits with {total_records} total records")
@@ -460,7 +436,7 @@ class TestSparkSplitPlanner:
         assert len(high_performers) > 0
         print(f"Found {len(high_performers)} high performers out of 1000 records")
 
-        master._stop_spark()
+        planner._stop_spark()
 
     def test_stage_master_with_parallelism(self, ray_cluster):
         """Test SparkSplitPlanner with custom parallelism setting.
@@ -482,17 +458,9 @@ class TestSparkSplitPlanner:
             ),
         )
 
-        from solstice.core.split_payload_store import RaySplitPayloadStore
+        planner = SparkSplitPlanner(source_stage.operator_config)
 
-        payload_store = RaySplitPayloadStore(name="test-parallelism_store")
-        master = SparkSplitPlanner(
-            job_id="test-parallelism",
-            stage=source_stage,
-            payload_store=payload_store,
-            runtime=make_stage_runtime(),
-        )
-
-        splits = list(master.plan_splits())
+        splits = list(planner.plan_splits("spark_source"))
 
         # Should have 4 splits due to parallelism setting
         assert len(splits) == 4
@@ -500,7 +468,7 @@ class TestSparkSplitPlanner:
         total_records = sum(s.data_range["block_size"] for s in splits)
         assert total_records == 100
 
-        master._stop_spark()
+        planner._stop_spark()
 
     def test_stage_master_complex_dataframe_fn(self, ray_cluster):
         """Test SparkSplitPlanner with complex dataframe_fn logic.
@@ -531,17 +499,9 @@ class TestSparkSplitPlanner:
             ),
         )
 
-        from solstice.core.split_payload_store import RaySplitPayloadStore
+        planner = SparkSplitPlanner(source_stage.operator_config)
 
-        payload_store = RaySplitPayloadStore(name="test-complex-df_store")
-        master = SparkSplitPlanner(
-            job_id="test-complex-df",
-            stage=source_stage,
-            payload_store=payload_store,
-            runtime=make_stage_runtime(),
-        )
-
-        splits = list(master.plan_splits())
+        splits = list(planner.plan_splits("spark_source"))
         total_records = sum(s.data_range["block_size"] for s in splits)
 
         # Should have at most 50 records (limit in dataframe_fn)
@@ -555,7 +515,7 @@ class TestSparkSplitPlanner:
                 for record in payload.to_pylist():
                     assert record["age"] > 30
 
-        master._stop_spark()
+        planner._stop_spark()
 
     @pytest.mark.asyncio
     async def test_full_pipeline_with_queue(self, ray_cluster, workqueue_backend):
@@ -582,7 +542,7 @@ class TestSparkSplitPlanner:
 
         from solstice.core.split_payload_store import RaySplitPayloadStore
         from solstice.core.stage import StageRuntime
-        from solstice.core.stage_master import QueueEndpoint
+        from solstice.core.stage_master import QueueEndpoint, StageMaster
 
         payload_store = RaySplitPayloadStore(name="test-full-pipeline_store")
         runtime = StageRuntime(
@@ -593,7 +553,7 @@ class TestSparkSplitPlanner:
             ),
             upstream_queue_name=None,
         )
-        master = SparkSplitPlanner(
+        master = StageMaster(
             job_id="test-full-pipeline",
             stage=source_stage,
             payload_store=payload_store,
@@ -603,12 +563,7 @@ class TestSparkSplitPlanner:
         # Start the full pipeline (creates queues, spawns workers)
         await master.start()
 
-        # Verify source queue was created
-        source_queue = master.get_source_client()
-        assert source_queue is not None
-        assert source_queue.health_check()
-
-        # Verify output queue was created
+        # Verify queue client was created
         output_queue = master.get_queue_client()
         assert output_queue is not None
 

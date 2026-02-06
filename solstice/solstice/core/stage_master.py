@@ -214,6 +214,10 @@ class StageMaster:
             self._running = True
             return
 
+        # Mark running early so produce_splits and other init code can
+        # check ``self._running`` to decide whether to continue.
+        self._running = True
+
         # --- SplitPlanner: create planner queue, produce splits ---
         if self._source_manager and not self._source_manager.is_direct_producer:
             planner_queue = self._source_manager.planner_queue_name
@@ -223,7 +227,7 @@ class StageMaster:
             await self._source_manager.produce_splits(
                 self._queue_client,
                 backpressure_fn=self._check_backpressure,
-                running_fn=lambda: self._running or not self._start_time,
+                running_fn=lambda: self._running,
             )
             self.upstream_queue_name = planner_queue
 
@@ -246,7 +250,6 @@ class StageMaster:
                 )
 
         self._write_stage_state(status="RUNNING")
-        self._running = True
 
         if self._source_manager and self._source_manager.production_done:
             await self._source_manager.notify_splits_done(

@@ -212,7 +212,7 @@ class OperatorConfig(ABC):
             Most operators should use create_source() / create_sink_committer() instead.
     """
 
-    operator_class: ClassVar[Type["Operator"]]
+    operator_class: ClassVar[Optional[Type["Operator"]]] = None
     master_class: ClassVar[Optional[Type["StageMaster"]]] = None
 
     def get_merge_upstream(self) -> int:
@@ -257,7 +257,16 @@ class OperatorConfig(ABC):
 
         Returns:
             Configured operator instance
+
+        Raises:
+            TypeError: If operator_class is not set (e.g., DirectProducer configs
+                that have no associated operator).
         """
+        if self.operator_class is None:
+            raise TypeError(
+                f"{type(self).__name__} has no operator_class. "
+                f"DirectProducer sources do not have operators."
+            )
         return self.operator_class(config=self, runtime=runtime)
 
     def to_dict(self) -> Dict[str, Any]:
