@@ -274,6 +274,13 @@ class InferenceWorker:
             if time.time() - start_time > timeout:
                 logger.error(f"Worker {self._worker_id} startup timeout")
                 self._state = WorkerState.STOPPED
+                # Kill the subprocess to release GPU resources
+                if self._process is not None:
+                    try:
+                        os.killpg(os.getpgid(self._process.pid), signal.SIGKILL)
+                        self._process.wait(timeout=5)
+                    except Exception as e:
+                        logger.warning(f"Error killing timed-out server process: {e}")
                 return
 
             try:

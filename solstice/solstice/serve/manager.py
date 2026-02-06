@@ -162,19 +162,29 @@ class ModelServiceManager:
         self._pools[model_id] = pool
         self._configs[model_id] = config
 
-        # Scale to min_workers
-        scale_result = await pool.scale_to.remote(config.min_workers)
-        result["scale_result"] = scale_result
+        try:
+            # Scale to min_workers
+            scale_result = await pool.scale_to.remote(config.min_workers)
+            result["scale_result"] = scale_result
 
-        # Start autoscaler inside pool actor
-        effective_autoscale_config = autoscale_config or self._autoscale_config
-        ray.get(pool.start_autoscaler.remote(effective_autoscale_config))
+            # Start autoscaler inside pool actor
+            effective_autoscale_config = autoscale_config or self._autoscale_config
+            ray.get(pool.start_autoscaler.remote(effective_autoscale_config))
 
-        if wait_ready:
-            # Wait for at least one worker to be ready
-            is_ready = await pool.wait_ready.remote(timeout=timeout)
-            if not is_ready:
-                raise TimeoutError(f"Model {model_id} not ready after {timeout}s")
+            if wait_ready:
+                # Wait for at least one worker to be ready
+                is_ready = await pool.wait_ready.remote(timeout=timeout)
+                if not is_ready:
+                    raise TimeoutError(f"Model {model_id} not ready after {timeout}s")
+        except Exception:
+            # Cleanup partial state on failure
+            del self._pools[model_id]
+            del self._configs[model_id]
+            try:
+                ray.kill(pool)
+            except Exception:
+                pass
+            raise
 
         result["status"] = "ready"
         result["completed_at"] = time.time()

@@ -64,7 +64,7 @@ def test_registry_basic():
     logger.info("Registered fake endpoint")
 
     # Query endpoints
-    resp = client.get(f"{http_url}/endpoints/test_model/status")
+    resp = client.get(f"{http_url}/endpoints_status", params={"model_id": "test_model"})
     assert resp.status_code == 200
     endpoints = resp.json()
     logger.info(f"Endpoints: {endpoints}")

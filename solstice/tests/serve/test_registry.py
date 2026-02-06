@@ -61,7 +61,7 @@ class TestModelRegistryHTTP:
             assert response.json() == {"ok": True}
 
             # Verify via HTTP GET
-            response = await client.get(f"{http_url}/endpoints/test_model")
+            response = await client.get(f"{http_url}/endpoints", params={"model_id": "test_model"})
             assert response.status_code == 200
             assert response.json() == ["http://worker1:8001"]
 
@@ -84,7 +84,7 @@ class TestModelRegistryHTTP:
             assert response.status_code == 200
 
             # Verify empty
-            response = await client.get(f"{http_url}/endpoints/test_model")
+            response = await client.get(f"{http_url}/endpoints", params={"model_id": "test_model"})
             assert response.json() == []
 
     async def test_heartbeat_via_http(self, registry) -> None:
@@ -109,7 +109,7 @@ class TestModelRegistryHTTP:
             assert response.status_code == 200
 
             # Verify status via endpoints_with_status
-            response = await client.get(f"{http_url}/endpoints/test_model/status")
+            response = await client.get(f"{http_url}/endpoints_status", params={"model_id": "test_model"})
             assert response.status_code == 200
             data = response.json()
             assert len(data) == 1
@@ -134,7 +134,7 @@ class TestModelRegistryHTTP:
                 )
 
             # Get with status
-            response = await client.get(f"{http_url}/endpoints/test_model/status")
+            response = await client.get(f"{http_url}/endpoints_status", params={"model_id": "test_model"})
             assert response.status_code == 200
             data = response.json()
             assert len(data) == 3
@@ -195,7 +195,7 @@ class TestModelRegistryHTTP:
         _, http_url = registry
 
         async with httpx.AsyncClient() as client:
-            response = await client.get(f"{http_url}/endpoints/nonexistent")
+            response = await client.get(f"{http_url}/endpoints", params={"model_id": "nonexistent"})
             assert response.status_code == 200
             assert response.json() == []
 
