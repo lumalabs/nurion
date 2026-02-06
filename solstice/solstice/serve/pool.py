@@ -180,6 +180,7 @@ class ModelPool:
                 worker_statuses[worker_id] = status
                 if status.get("is_ready"):
                     ready_count += 1
+                total_pending += status.get("pending", 0)
             except Exception:
                 worker_statuses[worker_id] = {"state": "unknown"}
 

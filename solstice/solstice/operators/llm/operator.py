@@ -284,4 +284,7 @@ class ExternalLLMOperator(Operator):
             except RuntimeError:
                 pass
             self._http_client = None
+        if self._model_client:
+            self._model_client.close()
+            self._model_client = None
         super().close()

@@ -450,7 +450,10 @@ class EmbeddedLLMOperator(Operator):
 
                 # For Qwen-VL models, use the correct vision placeholder
                 # vLLM expects: <|vision_start|><|image_pad|><|vision_end|>
-                vlm_prompt = f"<|vision_start|><|image_pad|><|vision_end|>\n{prompt}"
+                if "Qwen" in self._llm_config.model:
+                    vlm_prompt = f"<|vision_start|><|image_pad|><|vision_end|>\n{prompt}"
+                else:
+                    vlm_prompt = prompt
 
                 inputs.append(
                     {
