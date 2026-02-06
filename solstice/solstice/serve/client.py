@@ -12,14 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Model Client - Endpoint discovery and load-balanced selection.
-
-The ModelClient discovers model endpoints from ModelRegistry and selects
-the best one based on load. It does NOT make inference calls — that's the
-caller's responsibility (e.g., ExternalLLMOperator).
-
-All operations are synchronous — registry queries are lightweight HTTP calls.
-"""
+"""Model Client - Async endpoint discovery and load-balanced selection."""
 
 from __future__ import annotations
 
@@ -53,14 +46,10 @@ class EndpointCache:
     cached_at: float = 0.0
 
     def is_fresh(self, ttl: float) -> bool:
-        """Check if cache is still fresh."""
         return time.time() - self.cached_at < ttl
 
     @classmethod
-    def from_registry_response(
-        cls, response: list[dict[str, Any]]
-    ) -> "EndpointCache":
-        """Create cache from registry response."""
+    def from_registry_response(cls, response: list[dict[str, Any]]) -> "EndpointCache":
         endpoints = [
             EndpointInfo(
                 endpoint=item["endpoint"],
@@ -75,72 +64,54 @@ class EndpointCache:
 
 
 class ModelClient:
-    """Client for discovering and selecting model inference endpoints.
-
-    All methods are synchronous. Handles:
-    - Endpoint discovery via ModelRegistry HTTP API
-    - Client-side load balancing (least-pending selection)
-    - Local endpoint caching with TTL
-    - Automatic registry URL refresh on connection failure
+    """Async client for discovering and selecting model inference endpoints.
 
     Usage:
-        client = ModelClient(registry_url="http://10.1.232.88:18000")
-
-        # Get the best endpoint for a model
-        endpoint = client.get_endpoint("caption_vlm")
+        client = ModelClient(registry=registry_handle)
+        endpoint = await client.get_endpoint("caption_vlm")
         # → "http://10.1.48.251:8000"
-
-        # Caller makes the HTTP request directly
     """
 
-    def __init__(
-        self,
-        registry: "ray.ActorHandle",
-        cache_ttl_seconds: float = 30.0,
-    ) -> None:
-        """Initialize the client.
-
-        Args:
-            registry: Registry ActorHandle
-            cache_ttl_seconds: TTL for endpoint cache (default 30s)
-        """
-        self._cache_ttl = cache_ttl_seconds
+    def __init__(self, registry: ray.ActorHandle, cache_ttl_seconds: float = 30.0) -> None:
         self._registry = registry
-        self._registry_url: str = ray.get(registry.get_http_url.remote())
+        self._cache_ttl = cache_ttl_seconds
+        self._registry_url: Optional[str] = None
         self._endpoint_cache: dict[str, EndpointCache] = {}
         self._local_pending: dict[str, int] = {}
-        self._http_client: Optional[httpx.Client] = None
+        self._http_client: Optional[httpx.AsyncClient] = None
 
-    def _get_http_client(self) -> httpx.Client:
+    def _get_http_client(self) -> httpx.AsyncClient:
         if self._http_client is None:
-            self._http_client = httpx.Client(timeout=10.0)
+            self._http_client = httpx.AsyncClient(timeout=10.0)
         return self._http_client
 
-    def _fetch_endpoints(self, model_id: str) -> list[dict[str, Any]]:
-        """Fetch endpoints from registry via HTTP."""
-        url = f"{self._get_registry_url()}/endpoints/{model_id}/status"
+    async def _get_registry_url(self) -> str:
+        if self._registry_url is None:
+            self._registry_url = await self._registry.get_http_url.remote()
+        return self._registry_url
+
+    async def _fetch_endpoints(self, model_id: str) -> list[dict[str, Any]]:
+        url = f"{await self._get_registry_url()}/endpoints_status"
         client = self._get_http_client()
-        response = client.get(url)
+        response = await client.get(url, params={"model_id": model_id})
         response.raise_for_status()
         return response.json()
 
-    def _get_endpoints(self, model_id: str) -> list[EndpointInfo]:
-        """Get endpoints for a model, using cache if fresh."""
+    async def _get_endpoints(self, model_id: str) -> list[EndpointInfo]:
         cache = self._endpoint_cache.get(model_id)
         if cache and cache.is_fresh(self._cache_ttl):
             return cache.endpoints
 
         try:
-            response = self._fetch_endpoints(model_id)
+            response = await self._fetch_endpoints(model_id)
             cache = EndpointCache.from_registry_response(response)
             self._endpoint_cache[model_id] = cache
             return cache.endpoints
         except httpx.ConnectError:
-            # Registry IP may have changed, re-resolve from handle and retry
             logger.warning("Registry connection failed, re-resolving URL...")
-            self._registry_url = ray.get(self._registry.get_http_url.remote())
+            self._registry_url = None
             try:
-                response = self._fetch_endpoints(model_id)
+                response = await self._fetch_endpoints(model_id)
                 cache = EndpointCache.from_registry_response(response)
                 self._endpoint_cache[model_id] = cache
                 return cache.endpoints
@@ -156,10 +127,8 @@ class ModelClient:
             return []
 
     def _select_endpoint(self, endpoints: list[EndpointInfo]) -> Optional[str]:
-        """Select best endpoint using least-pending load balancing."""
         if not endpoints:
             return None
-
         ready = [e for e in endpoints if e.is_ready]
         if not ready:
             ready = endpoints
@@ -170,19 +139,13 @@ class ModelClient:
         ready.sort(key=get_load)
         return ready[0].endpoint
 
-    def get_endpoint(self, model_id: str) -> str:
+    async def get_endpoint(self, model_id: str) -> str:
         """Get the best endpoint for a model.
-
-        Args:
-            model_id: Model identifier
-
-        Returns:
-            Endpoint URL (e.g., "http://10.1.48.251:8000")
 
         Raises:
             RuntimeError: If no endpoints available
         """
-        endpoints = self._get_endpoints(model_id)
+        endpoints = await self._get_endpoints(model_id)
         if not endpoints:
             raise RuntimeError(f"No endpoints available for model {model_id}")
 
@@ -193,21 +156,15 @@ class ModelClient:
         return endpoint
 
     def invalidate_cache(self, model_id: str) -> None:
-        """Invalidate endpoint cache for a model."""
         self._endpoint_cache.pop(model_id, None)
 
     def track_pending(self, endpoint: str) -> None:
-        """Increment local pending count for load balancing."""
         self._local_pending[endpoint] = self._local_pending.get(endpoint, 0) + 1
 
     def untrack_pending(self, endpoint: str) -> None:
-        """Decrement local pending count for load balancing."""
-        self._local_pending[endpoint] = max(
-            0, self._local_pending.get(endpoint, 0) - 1
-        )
+        self._local_pending[endpoint] = max(0, self._local_pending.get(endpoint, 0) - 1)
 
-    def close(self) -> None:
-        """Close the HTTP client."""
+    async def close(self) -> None:
         if self._http_client is not None:
-            self._http_client.close()
+            await self._http_client.aclose()
             self._http_client = None

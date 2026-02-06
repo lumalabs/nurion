@@ -67,10 +67,8 @@ class ModelRegistry:
         app.router.add_post("/register", self._handle_register)
         app.router.add_post("/unregister", self._handle_unregister)
         app.router.add_post("/heartbeat", self._handle_heartbeat)
-        app.router.add_get("/endpoints/{model_id}", self._handle_get_endpoints)
-        app.router.add_get(
-            "/endpoints/{model_id}/status", self._handle_get_endpoints_with_status
-        )
+        app.router.add_get("/endpoints", self._handle_get_endpoints)
+        app.router.add_get("/endpoints_status", self._handle_get_endpoints_with_status)
         app.router.add_get("/models", self._handle_get_all_models)
         app.router.add_get("/status", self._handle_get_status)
         app.router.add_get("/health", self._handle_health)
@@ -102,13 +100,13 @@ class ModelRegistry:
         return web.json_response({"ok": True})
 
     async def _handle_get_endpoints(self, request: web.Request) -> web.Response:
-        model_id = request.match_info["model_id"]
+        model_id = request.query.get("model_id", "")
         return web.json_response(self._get_endpoints(model_id))
 
     async def _handle_get_endpoints_with_status(
         self, request: web.Request
     ) -> web.Response:
-        model_id = request.match_info["model_id"]
+        model_id = request.query.get("model_id", "")
         return web.json_response(self._get_endpoints_with_status(model_id))
 
     async def _handle_get_all_models(self, request: web.Request) -> web.Response:

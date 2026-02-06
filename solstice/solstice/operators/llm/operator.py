@@ -143,10 +143,10 @@ class ExternalLLMOperator(Operator):
             )
         return self._model_client
 
-    def _resolve_endpoint(self) -> str:
-        """Resolve endpoint URL (sync — ModelClient uses cached HTTP, fast)."""
+    async def _resolve_endpoint(self) -> str:
+        """Resolve endpoint URL."""
         if self._config.use_model_client:
-            return self._get_model_client().get_endpoint(self._config.model)
+            return await self._get_model_client().get_endpoint(self._config.model)
         return self._config.base_url
 
     async def process_split(
@@ -184,7 +184,7 @@ class ExternalLLMOperator(Operator):
 
     async def _generate_one(self, messages: list[dict]) -> str:
         """Generate response for a single message list with retries."""
-        endpoint = self._resolve_endpoint()
+        endpoint = await self._resolve_endpoint()
         url = f"{endpoint}/v1/chat/completions"
         body = self._build_request_body(messages)
 
