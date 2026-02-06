@@ -168,9 +168,7 @@ class ExternalLLMOperator(Operator):
         outputs: list[str] = []
         for i in range(0, len(messages_list), self._config.batch_size):
             batch = messages_list[i : i + self._config.batch_size]
-            batch_results = await asyncio.gather(
-                *(self._generate_one(m) for m in batch)
-            )
+            batch_results = await asyncio.gather(*(self._generate_one(m) for m in batch))
             outputs.extend(batch_results)
 
         # Add outputs to table

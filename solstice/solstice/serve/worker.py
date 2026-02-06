@@ -129,7 +129,6 @@ class InferenceWorker:
             self._http_client = httpx.AsyncClient(timeout=10.0)
         return self._http_client
 
-
     def _ensure_background_tasks(self) -> None:
         """Ensure background tasks are started (idempotent)."""
         if self._background_tasks_started:
@@ -141,9 +140,7 @@ class InferenceWorker:
         self._ready_task = loop.create_task(self._wait_for_ready())
         logger.info(f"Worker {self._worker_id} background tasks started")
 
-    async def _registry_request(
-        self, method: str, path: str, json: Optional[dict] = None
-    ) -> None:
+    async def _registry_request(self, method: str, path: str, json: Optional[dict] = None) -> None:
         """Make HTTP request to registry.
 
         Args:
@@ -282,8 +279,7 @@ class InferenceWorker:
                     self._state = WorkerState.READY
                     self._is_ready = True
                     logger.info(
-                        f"Worker {self._worker_id} ready "
-                        f"(took {time.time() - start_time:.1f}s)"
+                        f"Worker {self._worker_id} ready (took {time.time() - start_time:.1f}s)"
                     )
 
                     # Register with registry via HTTP
@@ -370,9 +366,7 @@ class InferenceWorker:
 
         while not self._shutdown_event.is_set():
             # Read one line from subprocess stdout in a thread to avoid blocking
-            line_bytes = await loop.run_in_executor(
-                None, self._process.stdout.readline
-            )
+            line_bytes = await loop.run_in_executor(None, self._process.stdout.readline)
 
             if line_bytes:
                 line = line_bytes.decode("utf-8", errors="replace").rstrip()

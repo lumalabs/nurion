@@ -103,9 +103,7 @@ class ModelRegistry:
         model_id = request.query.get("model_id", "")
         return web.json_response(self._get_endpoints(model_id))
 
-    async def _handle_get_endpoints_with_status(
-        self, request: web.Request
-    ) -> web.Response:
+    async def _handle_get_endpoints_with_status(self, request: web.Request) -> web.Response:
         model_id = request.query.get("model_id", "")
         return web.json_response(self._get_endpoints_with_status(model_id))
 
@@ -134,9 +132,7 @@ class ModelRegistry:
 
     def _unregister(self, model_id: str, endpoint: str) -> None:
         if model_id in self._endpoints:
-            self._endpoints[model_id] = [
-                e for e in self._endpoints[model_id] if e != endpoint
-            ]
+            self._endpoints[model_id] = [e for e in self._endpoints[model_id] if e != endpoint]
             if not self._endpoints[model_id]:
                 del self._endpoints[model_id]
         self._worker_status.pop(endpoint, None)
@@ -188,5 +184,3 @@ class ModelRegistry:
             await self._runner.cleanup()
         self._started = False
         logger.info("ModelRegistry stopped")
-
-

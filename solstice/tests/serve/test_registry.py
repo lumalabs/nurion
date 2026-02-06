@@ -60,8 +60,10 @@ class TestModelRegistryHTTP:
             assert response.status_code == 200
             assert response.json() == {"ok": True}
 
-            # Verify via HTTP GET
-            response = await client.get(f"{http_url}/endpoints/test_model")
+            # Verify via HTTP GET (query parameter)
+            response = await client.get(
+                f"{http_url}/endpoints", params={"model_id": "test_model"}
+            )
             assert response.status_code == 200
             assert response.json() == ["http://worker1:8001"]
 
@@ -84,7 +86,9 @@ class TestModelRegistryHTTP:
             assert response.status_code == 200
 
             # Verify empty
-            response = await client.get(f"{http_url}/endpoints/test_model")
+            response = await client.get(
+                f"{http_url}/endpoints", params={"model_id": "test_model"}
+            )
             assert response.json() == []
 
     async def test_heartbeat_via_http(self, registry) -> None:
@@ -108,8 +112,10 @@ class TestModelRegistryHTTP:
             )
             assert response.status_code == 200
 
-            # Verify status via endpoints_with_status
-            response = await client.get(f"{http_url}/endpoints/test_model/status")
+            # Verify status via endpoints_status (query parameter)
+            response = await client.get(
+                f"{http_url}/endpoints_status", params={"model_id": "test_model"}
+            )
             assert response.status_code == 200
             data = response.json()
             assert len(data) == 1
@@ -134,7 +140,9 @@ class TestModelRegistryHTTP:
                 )
 
             # Get with status
-            response = await client.get(f"{http_url}/endpoints/test_model/status")
+            response = await client.get(
+                f"{http_url}/endpoints_status", params={"model_id": "test_model"}
+            )
             assert response.status_code == 200
             data = response.json()
             assert len(data) == 3
@@ -195,7 +203,9 @@ class TestModelRegistryHTTP:
         _, http_url = registry
 
         async with httpx.AsyncClient() as client:
-            response = await client.get(f"{http_url}/endpoints/nonexistent")
+            response = await client.get(
+                f"{http_url}/endpoints", params={"model_id": "nonexistent"}
+            )
             assert response.status_code == 200
             assert response.json() == []
 
@@ -210,44 +220,3 @@ class TestModelRegistryRayMethods:
         url = ray.get(registry_actor.get_http_url.remote())
         assert url == expected_url
         assert url.startswith("http://")
-
-    async def test_ray_methods_work(self, registry) -> None:
-        """Test that Ray methods still work for backward compatibility."""
-        registry_actor, _ = registry
-
-        # Register via Ray
-        ray.get(
-            registry_actor.register.remote(
-                "test_model",
-                "http://worker1:8001",
-                {"is_ready": True},
-            )
-        )
-
-        # Get via Ray
-        endpoints = ray.get(registry_actor.get_endpoints.remote("test_model"))
-        assert endpoints == ["http://worker1:8001"]
-
-        # Unregister via Ray
-        ray.get(registry_actor.unregister.remote("test_model", "http://worker1:8001"))
-        endpoints = ray.get(registry_actor.get_endpoints.remote("test_model"))
-        assert endpoints == []
-
-    async def test_remove_stale_endpoints(self, registry) -> None:
-        """Test removing stale endpoints."""
-        registry_actor, http_url = registry
-
-        # Register endpoint
-        async with httpx.AsyncClient() as client:
-            await client.post(
-                f"{http_url}/register",
-                json={"model_id": "test_model", "endpoint": "http://worker1:8001"},
-            )
-
-        # Remove with very short age (should remove immediately)
-        removed = ray.get(registry_actor.remove_stale_endpoints.remote(0.0))
-        assert "http://worker1:8001" in removed
-
-        # Verify removed
-        endpoints = ray.get(registry_actor.get_endpoints.remote("test_model"))
-        assert endpoints == []

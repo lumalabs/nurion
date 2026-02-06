@@ -96,9 +96,13 @@ class ModelServiceManager:
         self._configs: dict[str, ModelConfig] = {}
 
         # Create registry actor
-        self._registry = ray.remote(ModelRegistry).options(
-            name=REGISTRY_ACTOR_NAME,
-        ).remote()
+        self._registry = (
+            ray.remote(ModelRegistry)
+            .options(
+                name=REGISTRY_ACTOR_NAME,
+            )
+            .remote()
+        )
         ray.get(self._registry.start.remote())
 
         logger.info("ModelServiceManager initialized")
@@ -155,9 +159,13 @@ class ModelServiceManager:
             ray.init(address="auto")
 
         # Create ModelPool actor — pass registry handle so pool holds a ref
-        pool = ray.remote(ModelPool).options(
-            name=get_pool_actor_name(model_id),
-        ).remote(config, self._registry)
+        pool = (
+            ray.remote(ModelPool)
+            .options(
+                name=get_pool_actor_name(model_id),
+            )
+            .remote(config, self._registry)
+        )
 
         self._pools[model_id] = pool
         self._configs[model_id] = config

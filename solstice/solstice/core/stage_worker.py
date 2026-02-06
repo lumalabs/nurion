@@ -397,9 +397,7 @@ class StageWorker:
         output_messages_bytes: list[bytes] = []
         if output_payloads and self.output_queue_name:
             for idx, out_payload in enumerate(output_payloads):
-                out_split_id = (
-                    split_id if len(output_payloads) == 1 else f"{split_id}_{idx}"
-                )
+                out_split_id = split_id if len(output_payloads) == 1 else f"{split_id}_{idx}"
                 payload_key = out_split_id
                 self.payload_store.store(payload_key, out_payload)
 

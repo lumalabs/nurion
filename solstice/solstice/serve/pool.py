@@ -72,10 +72,14 @@ class ModelPool:
         worker_id = f"{self._config.model_id}_worker_{port}"
         resources = self._config.get_worker_resources()
 
-        worker = ray.remote(InferenceWorker).options(
-            name=worker_id,
-            **resources,
-        ).remote(self._config, registry=self._registry, port=port, worker_id=worker_id)
+        worker = (
+            ray.remote(InferenceWorker)
+            .options(
+                name=worker_id,
+                **resources,
+            )
+            .remote(self._config, registry=self._registry, port=port, worker_id=worker_id)
+        )
 
         await worker.start.remote()
 
@@ -211,9 +215,7 @@ class ModelPool:
         if self._autoscale_task is not None:
             return  # Already running
 
-        self._autoscale_task = asyncio.get_event_loop().create_task(
-            self._autoscale_loop()
-        )
+        self._autoscale_task = asyncio.get_event_loop().create_task(self._autoscale_loop())
         logger.info(f"Started autoscaler for model {self._config.model_id}")
 
     def stop_autoscaler(self) -> None:

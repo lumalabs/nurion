@@ -49,12 +49,12 @@ from solstice.core.models import SplitPayload, Split
 
 # All supported return types for process_split
 PayloadResult = Union[
-    None,                                              # drop (filter)
-    SplitPayload,                                      # single output (map)
-    Iterator[SplitPayload],                            # multiple outputs (explode)
-    AsyncIterator[SplitPayload],                       # async multiple outputs
-    Coroutine[Any, Any, Optional[SplitPayload]],       # async single
-    Coroutine[Any, Any, Iterator[SplitPayload]],       # async multiple
+    None,  # drop (filter)
+    SplitPayload,  # single output (map)
+    Iterator[SplitPayload],  # multiple outputs (explode)
+    AsyncIterator[SplitPayload],  # async multiple outputs
+    Coroutine[Any, Any, Optional[SplitPayload]],  # async single
+    Coroutine[Any, Any, Iterator[SplitPayload]],  # async multiple
 ]
 
 if TYPE_CHECKING:
@@ -292,9 +292,7 @@ class Operator(ABC):
     # =========================================================================
 
     @abstractmethod
-    def process_split(
-        self, split: Split, payload: Optional[SplitPayload] = None
-    ) -> PayloadResult:
+    def process_split(self, split: Split, payload: Optional[SplitPayload] = None) -> PayloadResult:
         """Process a split. Can be sync or async, single or multi-output.
 
         Return types:
