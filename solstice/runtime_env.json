@@ -2,6 +2,7 @@
   "working_dir": ".",
   "excludes": [
     "tests/",
+    "luma-only/",
     ".git/",
     "*.lance",
     "*.mp4",
