@@ -279,6 +279,10 @@ class ModelServiceManager:
         if max_workers is not None:
             config.max_workers = max_workers
 
+        # Propagate bounds to pool actor
+        if min_workers is not None or max_workers is not None:
+            ray.get(pool.update_config_bounds.remote(min_workers, max_workers))
+
         # Scale to target
         if target is not None:
             return await pool.scale_to.remote(target)

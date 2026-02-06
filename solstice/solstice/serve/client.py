@@ -131,7 +131,7 @@ class ModelClient:
             return None
         ready = [e for e in endpoints if e.is_ready]
         if not ready:
-            ready = endpoints
+            ready = list(endpoints)
 
         def get_load(ep: EndpointInfo) -> int:
             return ep.pending + self._local_pending.get(ep.endpoint, 0)

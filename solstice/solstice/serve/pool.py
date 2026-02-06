@@ -110,6 +110,13 @@ class ModelPool:
 
     # --- Public API ---
 
+    def update_config_bounds(self, min_workers: Optional[int] = None, max_workers: Optional[int] = None) -> None:
+        """Update min/max worker bounds in the pool's config."""
+        if min_workers is not None:
+            self._config.min_workers = min_workers
+        if max_workers is not None:
+            self._config.max_workers = max_workers
+
     async def scale_to(self, target: int) -> dict[str, Any]:
         """Scale to target number of workers."""
         target = max(self._config.min_workers, min(target, self._config.max_workers))
