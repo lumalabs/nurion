@@ -52,6 +52,7 @@ class ModelPool:
     def __init__(self, config: ModelConfig, registry: "ray.ActorHandle") -> None:
         self._config = config
         self._registry = registry
+        self._registry_url = ray.get(registry.get_http_url.remote())
         self._workers: dict[str, ray.ActorHandle] = {}
         self._worker_ports: dict[str, int] = {}
         self._shutdown_event = asyncio.Event()
