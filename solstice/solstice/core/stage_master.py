@@ -220,10 +220,12 @@ class StageMaster:
             assert planner_queue is not None
             self._queue_client.create_queue(planner_queue)
             self.logger.info(f"Created planner queue {planner_queue}")
+            # Set _running before split production so running_fn check works
+            self._running = True
             await self._source_manager.produce_splits(
                 self._queue_client,
                 backpressure_fn=self._check_backpressure,
-                running_fn=lambda: self._running or not self._start_time,
+                running_fn=lambda: self._running,
             )
             self.upstream_queue_name = planner_queue
 
@@ -246,7 +248,8 @@ class StageMaster:
                 )
 
         self._write_stage_state(status="RUNNING")
-        self._running = True
+        if not self._running:
+            self._running = True
 
         if self._source_manager and self._source_manager.production_done:
             await self._source_manager.notify_splits_done(

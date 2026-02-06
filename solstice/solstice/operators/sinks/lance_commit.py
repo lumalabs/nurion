@@ -218,7 +218,9 @@ class LanceSinkCommitter:
 
         return False
 
-    def _do_commit(self, queue_client: WorkQueueQueueClient, commit_queue_name: str) -> None:
+    def _do_commit(
+        self, queue_client: WorkQueueQueueClient, commit_queue_name: str, retry_count: int = 0
+    ) -> None:
         """Execute LanceDataset.commit() with accumulated fragments, then ack."""
         if not self._pending_fragments:
             return
@@ -254,9 +256,12 @@ class LanceSinkCommitter:
         except Exception as e:
             self._logger.error(f"Commit failed: {e}")
             if "conflict" in str(e).lower() or "version" in str(e).lower():
-                self._logger.info("Retrying commit with updated version...")
+                if retry_count >= 10:
+                    self._logger.error("Max commit retries exceeded")
+                    raise RuntimeError(f"Lance commit failed after {retry_count} retries") from e
+                self._logger.info(f"Retrying commit with updated version (attempt {retry_count + 1})...")
                 self._read_version = self._get_current_version()
-                self._do_commit(queue_client, commit_queue_name)
+                self._do_commit(queue_client, commit_queue_name, retry_count + 1)
             else:
                 raise
 

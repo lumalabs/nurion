@@ -53,7 +53,6 @@ class SourceManager:
         self._planner_queue_name: Optional[str] = (
             f"{job_id}_{stage_id}_planner" if isinstance(source, SplitPlanner) else None
         )
-        self._split_count = 0
         self._production_done = False
 
     @property
@@ -148,7 +147,6 @@ class SourceManager:
             if idx % 100 == 0:
                 self._logger.info(f"Produced {idx} splits")
 
-        self._split_count = idx
         self._production_done = True
         self._logger.info(f"Source {self._stage_id} produced {idx} splits to queue")
 

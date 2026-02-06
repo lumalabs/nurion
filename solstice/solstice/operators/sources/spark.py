@@ -170,45 +170,46 @@ class SparkSplitPlanner:
         # Initialize Spark
         self._init_spark()
 
-        # Get DataFrame
-        df = self._get_dataframe()
+        try:
+            # Get DataFrame
+            df = self._get_dataframe()
 
-        # Repartition if parallelism is specified
-        if self._config.parallelism is not None:
-            num_partitions = df.rdd.getNumPartitions()
-            if num_partitions != self._config.parallelism:
-                df = df.repartition(self._config.parallelism)
+            # Repartition if parallelism is specified
+            if self._config.parallelism is not None:
+                num_partitions = df.rdd.getNumPartitions()
+                if num_partitions != self._config.parallelism:
+                    df = df.repartition(self._config.parallelism)
 
-        # Get the owner for object lifetime management
-        owner = get_raydp_master_owner(self._spark)
+            # Get the owner for object lifetime management
+            owner = get_raydp_master_owner(self._spark)
 
-        # Save DataFrame to object store
-        blocks, block_sizes = _save_spark_df_to_object_store(
-            df,
-            use_batch=False,
-            owner=owner,
-        )
-
-        self._logger.info(
-            f"Persisted Spark DataFrame to object store: "
-            f"{len(blocks)} blocks, {sum(block_sizes)} total records"
-        )
-
-        # Yield splits containing ObjectRef serialized via cloudpickle
-        for idx, (block_ref, block_size) in enumerate(zip(blocks, block_sizes)):
-            object_ref_b64 = base64.b64encode(ray.cloudpickle.dumps(block_ref)).decode("ascii")
-            yield Split(
-                split_id=f"split_{idx}",
-                stage_id=stage_id,
-                data_range={
-                    "object_ref": object_ref_b64,
-                    "block_size": block_size,
-                    "block_index": idx,
-                },
+            # Save DataFrame to object store
+            blocks, block_sizes = _save_spark_df_to_object_store(
+                df,
+                use_batch=False,
+                owner=owner,
             )
 
-        # Stop Spark after planning
-        self._stop_spark()
+            self._logger.info(
+                f"Persisted Spark DataFrame to object store: "
+                f"{len(blocks)} blocks, {sum(block_sizes)} total records"
+            )
+
+            # Yield splits containing ObjectRef serialized via cloudpickle
+            for idx, (block_ref, block_size) in enumerate(zip(blocks, block_sizes)):
+                object_ref_b64 = base64.b64encode(ray.cloudpickle.dumps(block_ref)).decode("ascii")
+                yield Split(
+                    split_id=f"split_{idx}",
+                    stage_id=stage_id,
+                    data_range={
+                        "object_ref": object_ref_b64,
+                        "block_size": block_size,
+                        "block_index": idx,
+                    },
+                )
+        finally:
+            # Stop Spark after planning (even if generator exits early)
+            self._stop_spark()
 
     def _init_spark(self) -> None:
         """Initialize Spark session via raydp."""
