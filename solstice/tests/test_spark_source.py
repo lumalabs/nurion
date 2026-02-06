@@ -16,8 +16,6 @@
 
 from __future__ import annotations
 
-import glob
-import os
 from pathlib import Path
 
 import pytest
@@ -31,7 +29,7 @@ from solstice.operators.filter import FilterOperatorConfig
 from solstice.operators.map import MapOperatorConfig
 from solstice.operators.sources.spark import (
     SparkSourceConfig,
-    SparkSourceMaster,
+    SparkSplitPlanner,
 )
 
 
@@ -39,27 +37,6 @@ from solstice.operators.sources.spark import (
 TESTDATA_DIR = Path(__file__).parent / "testdata" / "resources" / "spark"
 TEST_DATA_1000 = TESTDATA_DIR / "test_data_1000.parquet"
 TEST_DATA_100 = TESTDATA_DIR / "test_data_100.parquet"
-
-
-def _check_raydp_jars_available():
-    """Check if raydp JAR files are available."""
-    try:
-        from raydp.utils import code_search_path
-
-        paths = code_search_path()
-        for path in paths:
-            jars = glob.glob(os.path.join(path, "*.jar"))
-            # Check for raydp-specific jars (not just pyspark jars)
-            raydp_jars = [j for j in jars if "raydp" in os.path.basename(j).lower()]
-            if raydp_jars:
-                return True
-        return False
-    except Exception:
-        return False
-
-
-RAYDP_JARS_AVAILABLE = _check_raydp_jars_available()
-SKIP_RAYDP_REASON = "raydp JAR files not available (need to build java components)"
 
 
 class TestSparkSourceOperator:
@@ -190,7 +167,7 @@ class TestSparkSourcePipeline:
         source = source_config.setup(make_operator_runtime())
 
         split = Split(
-            split_id="spark_split_0",
+            split_id="split_0",
             stage_id="spark_source",
             data_range={
                 "object_ref": object_ref,
@@ -227,7 +204,7 @@ class TestSparkSourcePipeline:
         # Create source and read
         source = SparkSourceConfig().setup(make_operator_runtime())
         split = Split(
-            split_id="spark_split_0",
+            split_id="split_0",
             stage_id="spark_source",
             data_range={
                 "object_ref": object_ref,
@@ -274,7 +251,7 @@ class TestSparkSourcePipeline:
         total_records = 0
         for idx, block_ref in enumerate(blocks):
             split = Split(
-                split_id=f"spark_split_{idx}",
+                split_id=f"split_{idx}",
                 stage_id="spark_source",
                 data_range={
                     "object_ref": block_ref,
@@ -296,11 +273,10 @@ class TestSparkSourcePipeline:
 
 
 @pytest.mark.integration
-@pytest.mark.skipif(not RAYDP_JARS_AVAILABLE, reason=SKIP_RAYDP_REASON)
-class TestSparkSourceMaster:
-    """Integration tests for SparkSourceMaster using raydp.
+class TestSparkSplitPlanner:
+    """Integration tests for SparkSplitPlanner using raydp.
 
-    These tests verify that SparkSourceMaster correctly:
+    These tests verify that SparkSplitPlanner correctly:
     1. Initializes Spark via raydp.init_spark() using config parameters
     2. Calls dataframe_fn to load data
     3. Persists data to Ray object store using raydp
@@ -312,7 +288,7 @@ class TestSparkSourceMaster:
     """
 
     def test_stage_master_plan_splits_with_parquet(self, ray_cluster):
-        """Test SparkSourceMaster.plan_splits() with parquet file.
+        """Test SparkSplitPlanner.plan_splits() with parquet file.
 
         Verifies the full StageMaster flow:
         - StageMaster initializes Spark via raydp.init_spark() using config
@@ -337,7 +313,7 @@ class TestSparkSourceMaster:
         from solstice.core.split_payload_store import RaySplitPayloadStore
 
         payload_store = RaySplitPayloadStore(name="test-plan-splits_store")
-        master = SparkSourceMaster(
+        master = SparkSplitPlanner(
             job_id="test-plan-splits",
             stage=source_stage,
             payload_store=payload_store,
@@ -371,7 +347,7 @@ class TestSparkSourceMaster:
         master._stop_spark()
 
     def test_stage_master_with_sql_query(self, ray_cluster):
-        """Test SparkSourceMaster with SQL query in dataframe_fn.
+        """Test SparkSplitPlanner with SQL query in dataframe_fn.
 
         The dataframe_fn can use any Spark operations including SQL.
         This test creates a temp view and queries it within the dataframe_fn.
@@ -399,7 +375,7 @@ class TestSparkSourceMaster:
         from solstice.core.split_payload_store import RaySplitPayloadStore
 
         payload_store = RaySplitPayloadStore(name="test-sql-query_store")
-        master = SparkSourceMaster(
+        master = SparkSplitPlanner(
             job_id="test-sql-query",
             stage=source_stage,
             payload_store=payload_store,
@@ -428,7 +404,7 @@ class TestSparkSourceMaster:
         master._stop_spark()
 
     def test_stage_master_1000_records_full_pipeline(self, ray_cluster):
-        """Test SparkSourceMaster with 1000 records - verify split generation and data integrity.
+        """Test SparkSplitPlanner with 1000 records - verify split generation and data integrity.
 
         This test verifies:
         1. StageMaster initializes Spark via config and fetches splits
@@ -453,7 +429,7 @@ class TestSparkSourceMaster:
         from solstice.core.split_payload_store import RaySplitPayloadStore
 
         payload_store = RaySplitPayloadStore(name="test-1000-records_store")
-        master = SparkSourceMaster(
+        master = SparkSplitPlanner(
             job_id="test-1000-records",
             stage=source_stage,
             payload_store=payload_store,
@@ -487,7 +463,7 @@ class TestSparkSourceMaster:
         master._stop_spark()
 
     def test_stage_master_with_parallelism(self, ray_cluster):
-        """Test SparkSourceMaster with custom parallelism setting.
+        """Test SparkSplitPlanner with custom parallelism setting.
 
         The parallelism config controls how many partitions/splits are created.
         """
@@ -509,7 +485,7 @@ class TestSparkSourceMaster:
         from solstice.core.split_payload_store import RaySplitPayloadStore
 
         payload_store = RaySplitPayloadStore(name="test-parallelism_store")
-        master = SparkSourceMaster(
+        master = SparkSplitPlanner(
             job_id="test-parallelism",
             stage=source_stage,
             payload_store=payload_store,
@@ -527,7 +503,7 @@ class TestSparkSourceMaster:
         master._stop_spark()
 
     def test_stage_master_complex_dataframe_fn(self, ray_cluster):
-        """Test SparkSourceMaster with complex dataframe_fn logic.
+        """Test SparkSplitPlanner with complex dataframe_fn logic.
 
         The dataframe_fn can contain arbitrary Spark transformations.
         """
@@ -558,7 +534,7 @@ class TestSparkSourceMaster:
         from solstice.core.split_payload_store import RaySplitPayloadStore
 
         payload_store = RaySplitPayloadStore(name="test-complex-df_store")
-        master = SparkSourceMaster(
+        master = SparkSplitPlanner(
             job_id="test-complex-df",
             stage=source_stage,
             payload_store=payload_store,
@@ -586,7 +562,7 @@ class TestSparkSourceMaster:
         """Test complete SparkSource pipeline with WorkQueue queue.
 
         This test verifies the full flow:
-        1. SparkSourceMaster starts and creates source queue
+        1. SparkSplitPlanner starts and creates source queue
         2. Splits are written to source queue
         3. Workers consume splits and produce to output queue
         4. All data is processed through the pipeline
@@ -617,7 +593,7 @@ class TestSparkSourceMaster:
             ),
             upstream_queue_name=None,
         )
-        master = SparkSourceMaster(
+        master = SparkSplitPlanner(
             job_id="test-full-pipeline",
             stage=source_stage,
             payload_store=payload_store,

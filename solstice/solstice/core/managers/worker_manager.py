@@ -97,14 +97,10 @@ class WorkerManager:
         """Get list of current worker IDs."""
         return list(self._workers.keys())
 
-    def set_broker_endpoint(self, endpoint: QueueEndpoint) -> None:
-        """Set broker endpoint (called after queue creation)."""
-        self._broker_endpoint = endpoint
-
     def set_upstream_queue_name(self, queue_name: Optional[str]) -> None:
         """Set upstream queue name.
 
-        Used by SourceMaster to point workers at the source queue.
+        Used by StageMaster (with SplitPlanner) to point workers at the planner queue.
         """
         self._upstream_queue_name = queue_name
 
