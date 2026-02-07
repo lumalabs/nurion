@@ -336,7 +336,7 @@ class TestSparkSplitPlanner:
         assert len(all_records) == 100
 
         # Cleanup
-        planner._stop_spark()
+        planner.cleanup()
 
     def test_stage_master_with_sql_query(self, ray_cluster):
         """Test SparkSplitPlanner with SQL query in dataframe_fn.
@@ -385,7 +385,7 @@ class TestSparkSplitPlanner:
         assert len(all_records) > 0
 
         # Cleanup Spark
-        planner._stop_spark()
+        planner.cleanup()
 
     def test_stage_master_1000_records_full_pipeline(self, ray_cluster):
         """Test SparkSplitPlanner with 1000 records - verify split generation and data integrity.
@@ -436,7 +436,7 @@ class TestSparkSplitPlanner:
         assert len(high_performers) > 0
         print(f"Found {len(high_performers)} high performers out of 1000 records")
 
-        planner._stop_spark()
+        planner.cleanup()
 
     def test_stage_master_with_parallelism(self, ray_cluster):
         """Test SparkSplitPlanner with custom parallelism setting.
@@ -468,7 +468,7 @@ class TestSparkSplitPlanner:
         total_records = sum(s.data_range["block_size"] for s in splits)
         assert total_records == 100
 
-        planner._stop_spark()
+        planner.cleanup()
 
     def test_stage_master_complex_dataframe_fn(self, ray_cluster):
         """Test SparkSplitPlanner with complex dataframe_fn logic.
@@ -515,7 +515,7 @@ class TestSparkSplitPlanner:
                 for record in payload.to_pylist():
                     assert record["age"] > 30
 
-        planner._stop_spark()
+        planner.cleanup()
 
     @pytest.mark.asyncio
     async def test_full_pipeline_with_queue(self, ray_cluster, workqueue_backend):

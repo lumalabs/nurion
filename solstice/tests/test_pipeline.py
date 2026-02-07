@@ -108,6 +108,9 @@ class MockSplitPlanner:
     def __init__(self, config: MockSourceConfig):
         self._config = config
 
+    def cleanup(self) -> None:
+        pass
+
     def plan_splits(self, stage_id: str):
         """Generate splits based on operator config."""
         num_batches = self._config.num_records // self._config.batch_size

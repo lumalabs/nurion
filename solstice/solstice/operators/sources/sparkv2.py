@@ -191,7 +191,7 @@ class SparkDirectProducer:
         self._logger.info(f"JVM write completed: {count} splits to output_queue")
         return count
 
-    async def cleanup(self) -> None:
+    def cleanup(self) -> None:
         """Stop Spark session."""
         if self._spark_initialized:
             import raydp

@@ -177,3 +177,6 @@ class LanceSplitPlanner:
                     return
 
         self._logger.info(f"Planned {split_idx} splits from {len(sorted_fragments)} fragments")
+
+    def cleanup(self) -> None:
+        pass

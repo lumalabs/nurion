@@ -198,7 +198,9 @@ class LanceSinkCommitter:
                 return FragmentMetadata.from_json(json.dumps(frag_json))
 
             # Legacy format: raw fragment JSON
-            return FragmentMetadata.from_json(json.dumps(parsed) if isinstance(parsed, dict) else value.decode())
+            return FragmentMetadata.from_json(
+                json.dumps(parsed) if isinstance(parsed, dict) else value.decode()
+            )
         except Exception as e:
             self._logger.error(f"Error parsing commit record: {e}")
             return None

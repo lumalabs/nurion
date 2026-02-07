@@ -111,11 +111,16 @@ class WorkerManager:
             is_min_worker: If True, worker is required (raises on failure)
 
         Returns:
-            worker_id if successful, None if cancelled due to resources
+            worker_id if successful, None if skipped or cancelled
 
         Raises:
             RuntimeError: If is_min_worker=True and worker cannot start
         """
+        # No point spawning if upstream is already drained
+        if self._safe_to_exit and not is_min_worker:
+            self._logger.debug("Skipping spawn: upstream already drained")
+            return None
+
         worker_id = await self._create_worker()
 
         if not is_min_worker:

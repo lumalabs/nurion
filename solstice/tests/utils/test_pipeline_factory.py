@@ -138,6 +138,9 @@ class TestSplitPlanner:
     def __init__(self, config: TestSourceConfig):
         self._config = config
 
+    def cleanup(self) -> None:
+        pass
+
     def plan_splits(self, stage_id: str):
         """Generate splits based on operator config."""
         num_batches = (

@@ -352,8 +352,8 @@ class StageMaster:
         if self._worker_manager:
             await self._worker_manager.stop_all_workers()
 
-        if self._source_manager and self._source_manager.is_direct_producer:
-            await self._source_manager.cleanup_direct_producer()
+        if self._source_manager:
+            self._source_manager.cleanup()
 
         self.logger.info(f"Stage {self.stage_id} stopped")
 

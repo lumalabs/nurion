@@ -207,8 +207,9 @@ class SparkSplitPlanner:
                 },
             )
 
-        # Stop Spark after planning
-        self._stop_spark()
+        # NOTE: Do NOT stop Spark here. The object refs in splits are owned by
+        # the raydp master; stopping Spark kills the owner and invalidates the
+        # refs. Cleanup happens via cleanup() after workers finish.
 
     def _init_spark(self) -> None:
         """Initialize Spark session via raydp."""
@@ -242,6 +243,14 @@ class SparkSplitPlanner:
 
         self._logger.info("Calling dataframe_fn to load data")
         return self._config.dataframe_fn(self._spark)
+
+    def cleanup(self) -> None:
+        """Clean up resources (stop Spark session).
+
+        Called by SourceManager when the stage finishes, after all workers
+        have read the object refs from the store.
+        """
+        self._stop_spark()
 
     def _stop_spark(self) -> None:
         """Stop Spark session."""

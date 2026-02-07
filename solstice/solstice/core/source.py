@@ -52,6 +52,15 @@ class SplitPlanner(Protocol):
 
     def plan_splits(self, stage_id: str) -> Iterator[Split]: ...
 
+    def cleanup(self) -> None:
+        """Release resources after all workers finish (e.g., stop Spark session).
+
+        Default is a no-op. Override in implementations that hold resources
+        beyond plan_splits() (e.g., SparkSplitPlanner keeps Spark alive
+        so workers can read object refs).
+        """
+        ...
+
 
 @dataclass(frozen=True)
 class DirectProduceContext:
@@ -84,7 +93,7 @@ class DirectProducer(Protocol):
         """
         ...
 
-    async def cleanup(self) -> None:
+    def cleanup(self) -> None:
         """Called during stop() to release resources (e.g., Spark session)."""
         ...
 

@@ -105,10 +105,9 @@ class SourceManager:
         self._logger.info(f"DirectProducer completed: {count} items written")
         return count
 
-    async def cleanup_direct_producer(self) -> None:
-        """Cleanup DirectProducer resources (e.g., Spark session)."""
-        if isinstance(self._source, DirectProducer):
-            await self._source.cleanup()
+    def cleanup(self) -> None:
+        """Clean up source resources (Spark session, etc.)."""
+        self._source.cleanup()
 
     # =========================================================================
     # SplitPlanner
