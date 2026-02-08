@@ -126,12 +126,14 @@ class SourceManager:
             self._production_task.cancel()
             try:
                 await self._production_task
-            except asyncio.CancelledError:
+            except Exception:
+                # Suppress all exceptions (CancelledError, failed task exceptions)
+                # to ensure cleanup proceeds
                 pass
             self._production_task = None
 
-        if isinstance(self._source, DirectProducer):
-            self._source.cleanup()
+        # Clean up source resources (Spark sessions, etc.) for all source types
+        self._source.cleanup()
 
     # =========================================================================
     # Internal: production loop
