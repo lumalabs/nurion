@@ -35,6 +35,7 @@ import ray
 
 from solstice.serve.union_find.client import UFClient
 from solstice.serve.union_find.config import UFClusterConfig
+from solstice.serve.union_find.hash_utils import deterministic_hash
 from solstice.serve.union_find.shard import UFShard, get_shard_actor_name
 from solstice.utils.union_find import UnionFind
 
@@ -239,7 +240,7 @@ class UnionFindServiceManager:
             local_root = key_to_local_root[key]
             global_root = global_uf.find(key)
             if local_root != global_root:
-                shard_id = hash(key) % self._config.num_shards
+                shard_id = deterministic_hash(key) % self._config.num_shards
                 shard_mappings[shard_id][key] = global_root
 
         # Step 5: Apply mappings to shards in parallel

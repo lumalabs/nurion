@@ -36,6 +36,8 @@ from typing import Any
 
 import ray
 
+from solstice.serve.union_find.hash_utils import deterministic_hash
+
 logger = logging.getLogger(__name__)
 
 
@@ -68,7 +70,7 @@ class UFClient:
 
     def _route(self, key: str) -> int:
         """Route a doc_id to a shard index."""
-        return hash(key) % self._num_shards
+        return deterministic_hash(key) % self._num_shards
 
     def batch_union(
         self, pairs: list[tuple[str, str]], timeout: float = 60.0

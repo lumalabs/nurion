@@ -31,6 +31,7 @@ from typing import Any
 
 import pyarrow as pa
 
+from solstice.serve.union_find.hash_utils import deterministic_hash
 from solstice.utils.logging import create_ray_logger
 from solstice.utils.union_find import UnionFind
 
@@ -90,7 +91,7 @@ class UFShard:
 
     def _owns_key(self, key: str) -> bool:
         """Check if this shard owns a key based on hash routing."""
-        return hash(key) % self._num_shards == self._shard_id
+        return deterministic_hash(key) % self._num_shards == self._shard_id
 
     def batch_union(self, pairs: list[tuple[str, str]]) -> dict[str, int]:
         """Union multiple pairs of document IDs.
@@ -240,12 +241,33 @@ class UFShard:
         return count
 
     def export_clusters(self) -> pa.Table:
-        """Export all (doc_id, cluster_id) mappings in this shard.
+        """Export all (doc_id, cluster_id) mappings owned by this shard.
+
+        Only exports docs where _owns_key(doc_id) returns True, ensuring
+        each doc_id appears exactly once across all shard exports.
 
         Returns:
             Arrow Table with columns (doc_id: string, cluster_id: string)
         """
-        return self._uf.export_clusters()
+        all_clusters = self._uf.export_clusters()
+        if all_clusters.num_rows == 0:
+            return all_clusters
+
+        # Filter to only include docs owned by this shard
+        doc_ids = all_clusters.column("doc_id").to_pylist()
+        cluster_ids = all_clusters.column("cluster_id").to_pylist()
+
+        owned_doc_ids = []
+        owned_cluster_ids = []
+        for doc_id, cluster_id in zip(doc_ids, cluster_ids):
+            if self._owns_key(doc_id):
+                owned_doc_ids.append(doc_id)
+                owned_cluster_ids.append(cluster_id)
+
+        return pa.table({
+            "doc_id": pa.array(owned_doc_ids, type=pa.string()),
+            "cluster_id": pa.array(owned_cluster_ids, type=pa.string()),
+        })
 
     def get_status(self) -> dict[str, Any]:
         """Get shard status and metrics."""
