@@ -23,8 +23,8 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "c3d4e5f6a7b8"
-down_revision: str = "b2c3d4e5f6a7"
+revision: str = "0003_add_k8s_clusters"
+down_revision: str = "0002_add_iceberg_namespaces_and_tables"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
