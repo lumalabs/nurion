@@ -219,7 +219,7 @@ Templates use Jinja2 and should extend `base.html`:
 
 The UI uses:
 - **Pico CSS** for base styles (10KB, semantic)
-- **Custom styles** in `static/css/solstice.css`
+- **Custom styles** in `static/css/nurion.css`
 - **HTMX** for dynamic updates
 - **Alpine.js** for interactive components
 - **Chart.js** for metrics visualization

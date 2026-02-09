@@ -16,7 +16,7 @@
 
 This module contains the original MinHash signature computation operator.
 For the current dedup implementation using Union-Find Service architecture,
-see ``solstice.operators.dedup`` instead.
+see ``_internal.operators.dedup`` instead.
 """
 
 from _internal.operators.minhash.compute import (

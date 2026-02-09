@@ -100,7 +100,7 @@ def main(job_id: str, wait_time: int):
     output_path = os.path.join(job_dir, "output_slices.lance")
 
     # Shared WorkQueue storage path (same across runs to show completed jobs)
-    workqueue_db_path = "file:///tmp/solstice-workqueue"
+    workqueue_db_path = "file:///tmp/nurion-workqueue"
 
     # Create input data
     create_test_lance_table(input_path)
@@ -148,7 +148,7 @@ def main(job_id: str, wait_time: int):
             logger.info(
                 f"WebUI available at: http://localhost:{runner.webui_port}{runner.webui_path}"
             )
-            logger.info(f"Portal: http://localhost:{runner.webui_port}/solstice/")
+            logger.info(f"Portal: http://localhost:{runner.webui_port}/nurion/")
 
         try:
             status = await runner.run(timeout=600)

@@ -79,7 +79,7 @@ async def start_inference_server(
     min_workers: int,
     max_workers: int,
 ):
-    """Start vLLM inference server via solstice.serve.
+    """Start vLLM inference server via _internal.serve.
 
     Returns:
         ModelServiceManager instance. Caller MUST hold this reference —

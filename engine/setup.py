@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-Setup script for solstice package.
+Setup script for engine package.
 Uses pyproject.toml for metadata.
 """
 

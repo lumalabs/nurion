@@ -596,14 +596,14 @@ java/raydp-main/src/main/scala/org/apache/spark/sql/raydp/
 
 ```python
 # V1 (existing)
-from solstice.operators.sources.spark import SparkSourceConfig
+from _internal.operators.sources.spark import SparkSourceConfig
 
 config_v1 = SparkSourceConfig(
     dataframe_fn=lambda spark: spark.read.parquet("/data"),
 )
 
 # V2 (new)
-from solstice.operators.sources.sparkv2 import SparkSourceV2Config
+from _internal.operators.sources.sparkv2 import SparkSourceV2Config
 
 config_v2 = SparkSourceV2Config(
     dataframe_fn=lambda spark: spark.read.parquet("/data"),
@@ -821,10 +821,10 @@ async def run_benchmark(
     
     # Setup
     if version == "v1":
-        from solstice.operators.sources.spark import SparkSourceConfig
+        from _internal.operators.sources.spark import SparkSourceConfig
         config_class = SparkSourceConfig
     else:
-        from solstice.operators.sources.sparkv2 import SparkSourceV2Config
+        from _internal.operators.sources.sparkv2 import SparkSourceV2Config
         config_class = SparkSourceV2Config
     
     config = config_class(
@@ -984,7 +984,7 @@ engine/tests/test_spark_source_v2.py                 # New: V2 tests
 ### C.4 Usage
 
 ```python
-from solstice.operators.sources.sparkv2 import SparkSourceV2Config
+from _internal.operators.sources.sparkv2 import SparkSourceV2Config
 
 config = SparkSourceV2Config(
     dataframe_fn=lambda spark: spark.read.parquet("/data"),

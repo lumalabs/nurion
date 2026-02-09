@@ -16,10 +16,10 @@
 Utility script to materialize Lance and Iceberg datasets for integration tests.
 
 This script is intended to be executed manually (or via CI) to refresh the on-disk
-test resources under `solstice/tests/testdata/resources/`.
+test resources under `engine/tests/testdata/resources/`.
 
 Example:
-    uv run python solstice/tests/testdata/generate_datasets.py
+    uv run python engine/tests/testdata/generate_datasets.py
 """
 
 from __future__ import annotations

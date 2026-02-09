@@ -947,7 +947,7 @@ New component for large data transfer:
 | `stage_master_v2.py` | Merged into `stage_master.py` |
 | `ray_runner_v2.py` | Merged into `ray_runner.py` |
 | `worker.py` (old) | Reimplemented |
-| `output_buffer.py` | Replaced by `solstice.queue` |
+| `output_buffer.py` | Replaced by `_internal.queue` |
 | `checkpoint_manager.py` | Replaced by queue offset mechanism |
 | `state/store.py` | No longer needed |
 | `actors/meta_service.py` | Simplified architecture, removed |
@@ -1046,9 +1046,9 @@ runtime/
 ### Usage Example
 
 ```python
-from solstice.core import StageMasterV2, StageConfigV2, QueueType
-from solstice.runtime import RayJobRunnerV2, run_pipeline
-from solstice.queue import RayBackend, TansuBackend
+from _internal.core import StageMasterV2, StageConfigV2, QueueType
+from _internal.runtime import RayJobRunnerV2, run_pipeline
+from _internal.queue import RayBackend, TansuBackend
 
 # Create job
 job = Job(job_id="my_pipeline")
@@ -1141,7 +1141,7 @@ await worker_backend.start()
 1. **Read this document** for context
 2. **Run tests** to verify current state:
    ```bash
-   cd /root/workspace/nurion/solstice
+   cd /root/workspace/nurion/engine
    pytest tests/test_queue_backend.py tests/test_stage_master_v2.py tests/test_pipeline_v2.py -v
    ```
 3. **Debug Tansu S3** if needed:

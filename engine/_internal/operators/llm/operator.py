@@ -19,7 +19,7 @@ Uses OpenAI-compatible Chat Completions API (/v1/chat/completions).
 Two modes for endpoint discovery:
 1. Direct mode: Set `base_url` to call a specific endpoint
 2. ModelClient mode: Set `use_model_client=True` for dynamic endpoint
-   discovery and load balancing via solstice.serve
+   discovery and load balancing via _internal.serve
 """
 
 from __future__ import annotations

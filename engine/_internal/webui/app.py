@@ -277,7 +277,7 @@ def create_webui_app(
     @app.get("/health")
     async def health():
         """Health check."""
-        return {"status": "ok", "service": "solstice-webui"}
+        return {"status": "ok", "service": "nurion-webui"}
 
     logger.info("WebUI app created")
     return app

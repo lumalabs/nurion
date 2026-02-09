@@ -22,7 +22,7 @@ Tests:
 1. Registry creation and HTTP server start
 2. Register/unregister endpoints
 3. ModelClient discovers registry and gets endpoints
-4. Registry survives across async operations (simulating Solstice workflow)
+4. Registry survives across async operations (simulating Nurion engine workflow)
 5. Registry visibility from actors created by the same job
 """
 

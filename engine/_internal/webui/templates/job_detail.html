@@ -136,7 +136,7 @@
 {% block content %}
 <article class="compact"
          hx-get="{{ base_path }}/jobs/{{ job.job_id }}/"
-         hx-trigger="solstice-poll from:body"
+         hx-trigger="nurion-poll from:body"
          hx-swap="outerHTML"
          hx-select="article.compact">
     <header>

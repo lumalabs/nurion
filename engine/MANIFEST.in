@@ -1,7 +1,7 @@
 include LICENSE
 include README.md
 include pyproject.toml
-recursive-include solstice/webui/templates *.html
-recursive-include solstice/webui/static *.css *.js *.json
+recursive-include _internal/webui/templates *.html
+recursive-include _internal/webui/static *.css *.js *.json
 
 

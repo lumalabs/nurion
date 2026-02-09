@@ -5,7 +5,7 @@
 {% block content %}
 <article class="compact"
          hx-get="{{ base_path }}/jobs/{{ job_id }}/workers/{{ worker.worker_id }}"
-         hx-trigger="solstice-poll from:body"
+         hx-trigger="nurion-poll from:body"
          hx-swap="outerHTML"
          hx-select="article.compact">
     <header>
@@ -196,7 +196,7 @@
         <h3>Live Stacktrace (py-spy)</h3>
         <div style="background: #1e293b; color: #e2e8f0; padding: 0.75rem; border-radius: 4px; font-family: monospace; font-size: 0.75rem; max-height: 300px; overflow: auto;">
             <div hx-get="{{ base_path }}/api/jobs/{{ job_id }}/workers/{{ worker.worker_id }}/stacktrace" 
-                 hx-trigger="load, solstice-poll from:body"
+                 hx-trigger="load, nurion-poll from:body"
                  hx-swap="innerHTML">
                 <em>Loading stacktrace... (requires py-spy installed)</em>
             </div>

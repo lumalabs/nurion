@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Elasticity tests for distributed Solstice pipelines.
+"""Elasticity tests for distributed Nurion engine pipelines.
 
 These are P1 tests that verify:
 - Dynamic worker scaling up during processing

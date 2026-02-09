@@ -29,7 +29,7 @@ Local Cache Mode:
         pytest tests/test_minhash_dedup_workflow.py -v -m workflow
 
 NOTE: Current pipeline limitation - documents without candidate pairs are not
-output. This is because Solstice doesn't yet support multi-upstream stages.
+output. This is because Nurion engine doesn't yet support multi-upstream stages.
 """
 
 import asyncio

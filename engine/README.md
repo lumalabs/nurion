@@ -95,14 +95,14 @@ Instead, it is focused on:
 
 ```bash
 # Install using uv (recommended)
-cd /path/to/nurion/solstice
+cd /path/to/nurion/engine
 uv sync --dev
 
 # Or install with pip
 pip install -e .
 ```
 
-Note: Prefer the `nurion` CLI; `solstice` remains as a compatibility alias. Some URLs/metrics still use the legacy `solstice` prefix.
+Note: Prefer the `nurion` CLI; `solstice` CLI remains as a compatibility alias. Legacy: Some URLs use `/solstice` path, metrics use `nurion_` prefix.
 
 ### Python API
 
@@ -361,7 +361,7 @@ See `workflows/` and `examples/` directories:
 
 ```bash
 # Run tests (unit tests, no external dependencies)
-cd solstice
+cd engine
 uv run pytest tests/ -v --tb=short -m "not integration"
 
 # Run integration tests (requires Java 11; Control Plane for Iceberg; RayDP JARs for Spark)

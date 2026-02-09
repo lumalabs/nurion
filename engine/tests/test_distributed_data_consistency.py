@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""End-to-end data consistency tests for distributed Solstice pipelines.
+"""End-to-end data consistency tests for distributed Nurion engine pipelines.
 
 These are P0 (highest priority) tests that verify:
 - No data loss in simple and complex pipelines

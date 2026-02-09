@@ -98,7 +98,7 @@ class SparkSourceV2Config(OperatorConfig):
     """
 
     # Spark configuration
-    app_name: str = "solstice-spark-v2"
+    app_name: str = "nurion-spark-v2"
     num_executors: int = 1
     executor_cores: int = 2
     executor_memory: str = "1g"

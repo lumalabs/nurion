@@ -8,7 +8,7 @@
 |-----------|--------|-------|
 | **EmbeddedLLMOperator** | ✅ Complete | `operators/llm/embedded.py` - vLLM/SGLang offline batch |
 | **ExternalLLMOperator** | ✅ Complete | `operators/llm/operator.py` - External HTTP API calls |
-| **solstice.serve** | ✅ Complete | Multi-model inference service layer |
+| **_internal.serve** | ✅ Complete | Multi-model inference service layer |
 | **ModelServiceManager** | ✅ Complete | Control plane for deploy/scale/shutdown |
 | **ModelRegistry** | ✅ Complete | aiohttp service discovery (embedded in Ray actor) |
 | **ModelClient** | ✅ Complete | Async endpoint discovery + caching |
@@ -25,7 +25,7 @@ Nurion Runtime provides three modes for LLM inference:
 | Mode | Class | Use Case | Throughput |
 |------|-------|----------|------------|
 | **Embedded** | `EmbeddedLLMOperator` | Batch processing with dedicated GPUs | **Highest** |
-| **External (solstice.serve)** | `ExternalLLMOperator` + `ModelServiceManager` | Multi-model serving with dynamic scaling | High |
+| **External (_internal.serve)** | `ExternalLLMOperator` + `ModelServiceManager` | Multi-model serving with dynamic scaling | High |
 | **External (direct)** | `ExternalLLMOperator` + `base_url` | Existing external services | Medium |
 
 ---
@@ -88,14 +88,14 @@ For scenarios requiring multiple models, autoscaling, and service discovery.
 
 ---
 
-## solstice.serve Components
+## _internal.serve Components
 
 ### ModelServiceManager
 
 Control plane entry point. Creates registry, deploys models, manages lifecycle.
 
 ```python
-from solstice.serve import ModelServiceManager, ModelConfig
+from _internal.serve import ModelServiceManager, ModelConfig
 
 manager = ModelServiceManager()
 
@@ -254,7 +254,7 @@ engine/
 ### Example 1: Embedded VLM Captioning
 
 ```python
-from solstice.operators.llm import EmbeddedLLMOperatorConfig
+from _internal.operators.llm import EmbeddedLLMOperatorConfig
 
 job.add_stage(Stage(
     stage_id="caption",
@@ -272,11 +272,11 @@ job.add_stage(Stage(
 ))
 ```
 
-### Example 2: External with solstice.serve
+### Example 2: External with _internal.serve
 
 ```python
-from solstice.serve import ModelServiceManager, ModelConfig
-from solstice.operators.llm import ExternalLLMOperatorConfig
+from _internal.serve import ModelServiceManager, ModelConfig
+from _internal.operators.llm import ExternalLLMOperatorConfig
 
 # STEP 1: Deploy model
 manager = ModelServiceManager()
@@ -325,7 +325,7 @@ job.add_stage(Stage(
 Zero overhead: direct Python call, zero-copy via Ray Object Store, natural backpressure.
 HTTP mode has 1-5ms latency per request, serialization cost, and connection management.
 
-### 2. Why solstice.serve instead of Ray Serve?
+### 2. Why _internal.serve instead of Ray Serve?
 
 - **Imperative control**: `deploy_model()` returns when ready, `scale_to()` returns when done
 - **Compatible with Ray Data**: No abstraction mismatch

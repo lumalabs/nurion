@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Queue and network fault tests for distributed Solstice pipelines.
+"""Queue and network fault tests for distributed Nurion engine pipelines.
 
 These are P1 tests that verify:
 - WorkQueue broker restart recovery (with SlateDB persistence)

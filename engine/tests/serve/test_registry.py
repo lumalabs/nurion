@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for solstice.serve.registry with HTTP server."""
+"""Tests for _internal.serve.registry with HTTP server."""
 
 import pytest
 import ray

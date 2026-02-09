@@ -497,7 +497,7 @@ class TestLocalQueueService:
     @pytest.mark.asyncio
     async def test_list_queues(self, db_session, cluster_with_queue):
         """Test listing LocalQueues."""
-        from aether.services.localqueue_service import list_queues
+        from control.services.localqueue_service import list_queues
 
         result = list_queues(cluster_with_queue)
 
@@ -508,7 +508,7 @@ class TestLocalQueueService:
     @pytest.mark.asyncio
     async def test_get_namespace_for_queue(self, db_session, cluster_with_queue):
         """Test getting namespace for a queue."""
-        from aether.services.localqueue_service import get_namespace_for_queue
+        from control.services.localqueue_service import get_namespace_for_queue
 
         namespace = get_namespace_for_queue("test-queue", cluster_with_queue)
 
@@ -517,7 +517,7 @@ class TestLocalQueueService:
     @pytest.mark.asyncio
     async def test_get_namespace_for_queue_not_found(self, db_session, cluster_with_queue):
         """Test getting namespace for non-existent queue."""
-        from aether.services.localqueue_service import get_namespace_for_queue
+        from control.services.localqueue_service import get_namespace_for_queue
 
         with pytest.raises(RuntimeError, match="not found"):
             get_namespace_for_queue("non-existent-queue", cluster_with_queue)

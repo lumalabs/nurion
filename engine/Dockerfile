@@ -1,12 +1,12 @@
-# Nurion Runtime Base Image
+# Nurion Engine Base Image
 # Includes: Python 3.12, JVM 17, FFmpeg, Ray, workqueue-py
 # Based on Ubuntu 24.04
 # 
-# This is a base image - runtime code is NOT included.
-# Mount or copy the runtime code at build/runtime.
+# This is a base image - engine code is NOT included.
+# Mount or copy the engine code at build/runtime.
 #
 # Build from nurion root directory:
-#   docker build -f solstice/Dockerfile -t nurion-runtime-base .
+#   docker build -f engine/Dockerfile -t nurion-engine-base .
 
 FROM ubuntu:24.04
 

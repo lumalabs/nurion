@@ -19,26 +19,26 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 ENV PATH="/root/.local/bin:$PATH"
 
 # Copy dependency files from workspace root
-# Build context should be workspace root (nurion/), not aether/
+# Build context should be workspace root (nurion/), not control/
 COPY pyproject.toml uv.lock ./
-COPY aether/pyproject.toml ./aether/
+COPY control/pyproject.toml ./control/
 
 # Create venv and install dependencies (without workspace package)
-RUN uv sync --package aether --no-dev --no-install-workspace
+RUN uv sync --package control --no-dev --no-install-workspace
 
-# Copy aether source code
-COPY aether/ ./aether/
+# Copy control source code
+COPY control/ ./control/
 
-# Install aether package
-RUN uv sync --package aether --no-dev
+# Install control package
+RUN uv sync --package control --no-dev
 
-WORKDIR /app/aether
+WORKDIR /app/control
 
 # Use venv directly to avoid uv sync on every startup
 ENV PATH="/app/.venv/bin:$PATH"
 
 # Copy and make entrypoint executable
-COPY aether/scripts/entrypoint.sh /entrypoint.sh
+COPY control/scripts/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 CMD ["/entrypoint.sh"]

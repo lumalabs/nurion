@@ -70,7 +70,7 @@ class TestCircuitBreaker:
 
     def test_transitions_to_half_open(self):
         """Circuit transitions to HALF_OPEN after recovery timeout."""
-        with patch("solstice.operators.http.circuit_breaker.time") as mock_time:
+        with patch("_internal.operators.http.circuit_breaker.time") as mock_time:
             mock_time.time.return_value = 1000.0
             cb = CircuitBreaker(
                 CircuitBreakerConfig(
@@ -89,7 +89,7 @@ class TestCircuitBreaker:
 
     def test_half_open_closes_on_success(self):
         """Circuit closes after successful requests in HALF_OPEN."""
-        with patch("solstice.operators.http.circuit_breaker.time") as mock_time:
+        with patch("_internal.operators.http.circuit_breaker.time") as mock_time:
             mock_time.time.return_value = 1000.0
             cb = CircuitBreaker(
                 CircuitBreakerConfig(
@@ -111,7 +111,7 @@ class TestCircuitBreaker:
 
     def test_half_open_reopens_on_failure(self):
         """Circuit reopens on failure in HALF_OPEN state."""
-        with patch("solstice.operators.http.circuit_breaker.time") as mock_time:
+        with patch("_internal.operators.http.circuit_breaker.time") as mock_time:
             mock_time.time.return_value = 1000.0
             cb = CircuitBreaker(
                 CircuitBreakerConfig(
@@ -130,7 +130,7 @@ class TestCircuitBreaker:
 
     def test_failure_window(self):
         """Failures outside window are not counted."""
-        with patch("solstice.operators.http.circuit_breaker.time") as mock_time:
+        with patch("_internal.operators.http.circuit_breaker.time") as mock_time:
             mock_time.time.return_value = 1000.0
             cb = CircuitBreaker(
                 CircuitBreakerConfig(
@@ -149,7 +149,7 @@ class TestCircuitBreaker:
 
     def test_get_time_until_retry(self):
         """Can get time until retry is possible."""
-        with patch("solstice.operators.http.circuit_breaker.time") as mock_time:
+        with patch("_internal.operators.http.circuit_breaker.time") as mock_time:
             mock_time.time.return_value = 1000.0
             cb = CircuitBreaker(
                 CircuitBreakerConfig(
@@ -223,7 +223,7 @@ class TestNodeBlacklist:
         """Blacklisted nodes are removed after TTL."""
         from _internal.core.fault_tolerance import NodeBlacklist, NodeBlacklistConfig
 
-        with patch("solstice.core.fault_tolerance.time") as mock_time:
+        with patch("_internal.core.fault_tolerance.time") as mock_time:
             mock_time.time.return_value = 1000.0
             blacklist = NodeBlacklist(
                 NodeBlacklistConfig(
@@ -271,7 +271,7 @@ class TestNodeBlacklist:
         """Failures outside window are not counted."""
         from _internal.core.fault_tolerance import NodeBlacklist, NodeBlacklistConfig
 
-        with patch("solstice.core.fault_tolerance.time") as mock_time:
+        with patch("_internal.core.fault_tolerance.time") as mock_time:
             mock_time.time.return_value = 1000.0
             blacklist = NodeBlacklist(
                 NodeBlacklistConfig(
@@ -323,7 +323,7 @@ class TestTimeoutMonitor:
         """Detects timed out workers."""
         from _internal.core.fault_tolerance import TimeoutConfig, TimeoutMonitor
 
-        with patch("solstice.core.fault_tolerance.time") as mock_time:
+        with patch("_internal.core.fault_tolerance.time") as mock_time:
             mock_time.time.return_value = 1000.0
             monitor = TimeoutMonitor(
                 TimeoutConfig(
@@ -350,7 +350,7 @@ class TestTimeoutMonitor:
         """
         from _internal.core.fault_tolerance import TimeoutConfig, TimeoutMonitor
 
-        with patch("solstice.core.fault_tolerance.time") as mock_time:
+        with patch("_internal.core.fault_tolerance.time") as mock_time:
             mock_time.time.return_value = 1000.0
             # timeout=60s, grace=10s
             # elapsed timeout: 70s
@@ -377,7 +377,7 @@ class TestTimeoutMonitor:
         """Disabled monitor never detects timeouts."""
         from _internal.core.fault_tolerance import TimeoutConfig, TimeoutMonitor
 
-        with patch("solstice.core.fault_tolerance.time") as mock_time:
+        with patch("_internal.core.fault_tolerance.time") as mock_time:
             mock_time.time.return_value = 1000.0
             monitor = TimeoutMonitor(
                 TimeoutConfig(

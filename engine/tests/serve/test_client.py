@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for solstice.serve.client."""
+"""Tests for _internal.serve.client."""
 
 from unittest.mock import AsyncMock, MagicMock
 

@@ -63,7 +63,7 @@ class SparkSourceConfig(OperatorConfig):
     """
 
     # raydp init_spark parameters
-    app_name: str = "solstice-spark-source"
+    app_name: str = "nurion-spark-source"
     num_executors: int = 1
     executor_cores: int = 2
     executor_memory: str = "1g"

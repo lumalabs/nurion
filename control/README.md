@@ -30,7 +30,7 @@ The control plane connects tasks, infrastructure, and data products across the p
 5. (Optional) Run the API locally:
 
    ```bash
-   uv run uvicorn aether.app:create_app --factory --reload
+   uv run uvicorn control.app:create_app --factory --reload
    ```
 
 ## CI/CD
@@ -69,13 +69,13 @@ Or run individual commands:
 
 ```bash
 # Linting only
-cd aether && uv run ruff check .
+cd control && uv run ruff check .
 
 # Formatting check only
-cd aether && uv run ruff format --check .
+cd control && uv run ruff format --check .
 
 # Tests with coverage only
-cd aether && uv run pytest tests/ -v --cov=aether --cov-report=term-missing
+cd control && uv run pytest tests/ -v --cov=control --cov-report=term-missing
 ```
 
 ## Pull Request Guidelines

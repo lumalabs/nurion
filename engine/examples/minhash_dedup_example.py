@@ -27,7 +27,7 @@ Architecture:
 - 3-stage pipeline: MinHashEncoder -> BucketUnion -> DedupFilter
 
 Run:
-    cd solstice
+    cd engine
     python examples/minhash_dedup_example.py
 """
 

@@ -14,10 +14,10 @@ integration, and data lake catalog APIs.
 
 ## Dev Commands
 - `uv venv` then `uv sync`
-- `uv run uvicorn aether.app:create_app --factory --reload`
+- `uv run uvicorn control.app:create_app --factory --reload`
 - `uv run ruff check .`
 - `uv run ruff format --check .`
-- `uv run pytest tests/ -v --cov=aether --cov-report=term-missing`
+- `uv run pytest tests/ -v --cov=control --cov-report=term-missing`
 
 ## CI Notes
 PR titles must follow Conventional Commits: `<type>: <description>`.

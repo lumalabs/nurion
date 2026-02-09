@@ -20,7 +20,7 @@ It reads directly from WorkQueue storage (pyO3).
 Usage:
     from _internal.webui.portal import start_portal
     start_portal("file:///path/to/workqueue.db")
-    # Access at http://localhost:8000/solstice/
+    # Access at http://localhost:8000/nurion/
 """
 
 from fastapi import Request
@@ -41,7 +41,7 @@ def create_portal_app(workqueue_db_path: str):
         FastAPI application
     """
     storage = JobStateManager(workqueue_db_path)
-    # Portal runs at /solstice/ via Ray Serve route_prefix
+    # Portal runs at /nurion/ via Ray Serve route_prefix
     return create_webui_app(storage, title="Nurion Portal", base_path="/solstice")
 
 
@@ -118,7 +118,7 @@ def start_portal(workqueue_db_path: str, port: int = 8000) -> str:
 
     # Deploy portal
     handle = NurionPortal.bind(workqueue_db_path)  # type: ignore[attr-defined]
-    serve.run(handle, name="solstice-portal", route_prefix="/solstice")
+    serve.run(handle, name="nurion-portal", route_prefix="/solstice")
     logger.info(f"Deployed Nurion Portal at /solstice with storage: {workqueue_db_path}")
 
     return "/solstice"
@@ -128,6 +128,6 @@ def portal_exists() -> bool:
     """Check if portal is already deployed."""
     try:
         status = serve.status()
-        return "solstice-portal" in status.applications
+        return "nurion-portal" in status.applications
     except Exception:
         return False
