@@ -213,7 +213,6 @@ class OperatorConfig(ABC):
     """
 
     operator_class: ClassVar[Optional[Type["Operator"]]] = None
-    master_class: ClassVar[Optional[Type["StageMaster"]]] = None
 
     def get_merge_upstream(self) -> int:
         """Number of upstream messages to merge into one process_split() call.
