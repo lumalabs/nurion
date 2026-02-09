@@ -91,6 +91,8 @@ class LanceTableSource(SourceOperator):
         fragment_id = data_range.pop("fragment_id")
 
         fragment = dataset.get_fragment(fragment_id)
+        if fragment is None:
+            raise ValueError(f"Fragment {fragment_id} not found in dataset")
         fragment_scanner = fragment.scanner(
             **data_range,
             with_row_id=True,

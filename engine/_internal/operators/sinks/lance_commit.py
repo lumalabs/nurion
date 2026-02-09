@@ -244,6 +244,7 @@ class LanceSinkCommitter:
         num_fragments = len(self._pending_fragments)
 
         try:
+            op: LanceOperation.Overwrite | LanceOperation.Append
             if self._first_commit and self._mode in ("create", "overwrite"):
                 schema = self._get_schema()
                 op = LanceOperation.Overwrite(schema, self._pending_fragments)
