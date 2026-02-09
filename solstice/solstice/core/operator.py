@@ -62,7 +62,6 @@ if TYPE_CHECKING:
     from solstice.core.models import QueueEndpoint
     from solstice.core.source import SourceStrategy
     from solstice.core.sink import SinkCommitter
-    from solstice.core.stage_master import StageMaster
 
 
 T = TypeVar("T", bound="Operator")

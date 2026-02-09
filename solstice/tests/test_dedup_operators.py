@@ -423,13 +423,13 @@ class TestUFShard:
         shard = UFShard(shard_id=0, num_shards=1)
         shard.batch_union([("a", "b"), ("c", "d"), ("b", "c")])
 
-        # Checkpoint
-        table = shard.checkpoint()
-        assert table.num_rows == 4
+        # Checkpoint (returns dict of tables)
+        tables = shard.checkpoint()
+        assert tables["uf"].num_rows == 4
 
         # Create new shard and restore
         shard2 = UFShard(shard_id=0, num_shards=1)
-        shard2.restore(table)
+        shard2.restore(tables)
 
         # Verify state
         results = shard2.batch_find(["a", "b", "c", "d"])
@@ -511,3 +511,71 @@ class TestUFShard:
 
         roots = shard.batch_find(["doc_a", "doc_b", "doc_c"])
         assert roots[0] == roots[1] == roots[2]
+
+    def test_batch_match_idempotent(self):
+        """Test that re-sending the same entries is idempotent (crash recovery)."""
+        shard = UFShard(shard_id=0, num_shards=1)
+
+        # First call
+        shard.batch_match_and_union([(100, "doc_a"), (100, "doc_b")])
+        roots_1 = shard.batch_find(["doc_a", "doc_b"])
+
+        # Simulate re-delivery (same entries sent again)
+        shard.batch_match_and_union([(100, "doc_a"), (100, "doc_b")])
+        roots_2 = shard.batch_find(["doc_a", "doc_b"])
+
+        # State should be identical
+        assert roots_1 == roots_2
+        assert shard.get_status()["num_components"] == 1
+
+    def test_checkpoint_roundtrip_full_state(self):
+        """Test that checkpoint/restore preserves all shard state."""
+        shard = UFShard(shard_id=0, num_shards=1)
+
+        # Build some state: UF + band_hash_index + cross_shard_edges
+        shard.batch_match_and_union([
+            (100, "doc_a"),
+            (100, "doc_b"),  # match
+            (200, "doc_c"),
+        ])
+
+        # Checkpoint
+        tables = shard.checkpoint()
+        assert "uf" in tables
+        assert "band_index" in tables
+        assert "cross_edges" in tables
+        assert tables["uf"].num_rows == 3  # a, b, c
+        assert tables["band_index"].num_rows == 2  # hash 100, 200
+
+        # Restore into fresh shard
+        shard2 = UFShard(shard_id=0, num_shards=1)
+        shard2.restore(tables)
+
+        # Verify UF state
+        roots = shard2.batch_find(["doc_a", "doc_b", "doc_c"])
+        assert roots[0] == roots[1]  # a,b still connected
+        assert roots[2] != roots[0]  # c still separate
+
+        # Verify band_hash_index: new doc with hash 100 should match
+        r = shard2.batch_match_and_union([(100, "doc_d")])
+        assert r["matches"] == 1  # doc_d matched existing hash 100
+
+    def test_ops_since_checkpoint_counter(self):
+        """Test that ops counter tracks operations and resets on checkpoint."""
+        shard = UFShard(shard_id=0, num_shards=1)
+        assert shard.get_ops_since_checkpoint() == 0
+
+        shard.batch_match_and_union([(1, "a"), (2, "b")])
+        assert shard.get_ops_since_checkpoint() == 2
+
+        shard.checkpoint()
+        assert shard.get_ops_since_checkpoint() == 0
+
+    def test_clear_resets_all_state(self):
+        """Test that clear resets everything."""
+        shard = UFShard(shard_id=0, num_shards=1)
+        shard.batch_match_and_union([(100, "doc_a")])
+        shard.clear()
+        assert shard.get_status()["checkpoint_count"] == 0
+        assert shard.get_status()["band_hash_index_size"] == 0
+        assert shard.get_status()["num_elements"] == 0

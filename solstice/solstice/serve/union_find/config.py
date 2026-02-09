@@ -26,10 +26,11 @@ class UFClusterConfig:
     Attributes:
         cluster_id: Unique identifier for this cluster instance
         num_shards: Number of UFShard actors to create. Each shard manages
-            a portion of the doc_id space (by hash). More shards = more
-            parallelism but more cross-shard edges to resolve.
-        checkpoint_interval: Number of union operations between checkpoints
-            per shard. Set to 0 to disable periodic checkpoints.
+            a portion of the band_hash space. More shards = more parallelism
+            but more cross-shard edges to resolve.
+        checkpoint_interval: Number of operations between auto-checkpoints
+            per shard. Set to 0 to disable. Only effective if PayloadStore
+            is provided at deploy time.
         shard_memory_mb: Memory limit per shard actor (MB). Used for Ray
             resource scheduling.
         shard_num_cpus: CPU allocation per shard actor.

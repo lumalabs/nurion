@@ -60,9 +60,7 @@ class UFClient:
             num_shards: Total number of shards (must match len(shards))
         """
         if len(shards) != num_shards:
-            raise ValueError(
-                f"Expected {num_shards} shard handles, got {len(shards)}"
-            )
+            raise ValueError(f"Expected {num_shards} shard handles, got {len(shards)}")
         self._shards = shards
         self._num_shards = num_shards
 
@@ -70,9 +68,7 @@ class UFClient:
         """Route a doc_id to a shard index."""
         return hash(key) % self._num_shards
 
-    def batch_union(
-        self, pairs: list[tuple[str, str]], timeout: float = 60.0
-    ) -> dict[str, int]:
+    def batch_union(self, pairs: list[tuple[str, str]], timeout: float = 60.0) -> dict[str, int]:
         """Union multiple pairs, routing to correct shards.
 
         For each pair (A, B):
@@ -108,9 +104,7 @@ class UFClient:
         # Send to shards in parallel
         futures = []
         for shard_id, shard_pair_list in shard_pairs.items():
-            futures.append(
-                self._shards[shard_id].batch_union.remote(shard_pair_list)
-            )
+            futures.append(self._shards[shard_id].batch_union.remote(shard_pair_list))
 
         results = ray.get(futures, timeout=timeout)
 
@@ -152,9 +146,7 @@ class UFClient:
         # Send to shards in parallel
         futures = []
         for shard_id, shard_entry_list in shard_entries.items():
-            futures.append(
-                self._shards[shard_id].batch_match_and_union.remote(shard_entry_list)
-            )
+            futures.append(self._shards[shard_id].batch_match_and_union.remote(shard_entry_list))
 
         results = ray.get(futures, timeout=timeout)
 
@@ -165,9 +157,7 @@ class UFClient:
             "cross_shard": sum(r.get("cross_shard", 0) for r in results),
         }
 
-    def batch_find(
-        self, keys: list[str], timeout: float = 60.0
-    ) -> list[str]:
+    def batch_find(self, keys: list[str], timeout: float = 60.0) -> list[str]:
         """Find cluster representatives for multiple keys.
 
         Routes each key to its owning shard and collects results.
@@ -191,9 +181,7 @@ class UFClient:
         for shard_id, idx_key_list in shard_keys.items():
             shard_id_order.append(shard_id)
             just_keys = [k for _, k in idx_key_list]
-            futures.append(
-                self._shards[shard_id].batch_find.remote(just_keys)
-            )
+            futures.append(self._shards[shard_id].batch_find.remote(just_keys))
 
         results = ray.get(futures, timeout=timeout)
 

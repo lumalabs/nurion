@@ -43,6 +43,7 @@ from solstice.operators.dedupe import (
     HashDedupeOperator,
     HashDedupeConfig,
 )
+
 # New dedup operators (Union-Find Service architecture)
 from solstice.operators.dedup import (
     MinHashEncoderConfig,

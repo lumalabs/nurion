@@ -57,9 +57,7 @@ class DedupFilterOperatorConfig(OperatorConfig):
 
     def __post_init__(self) -> None:
         if self.uf_client is None and self.cluster_table is None:
-            raise ValueError(
-                "Either uf_client or cluster_table must be provided"
-            )
+            raise ValueError("Either uf_client or cluster_table must be provided")
 
 
 @operator(DedupFilterOperatorConfig)
@@ -113,9 +111,7 @@ class DedupFilterOperator(Operator):
         if self._client is not None:
             cluster_ids = self._client.batch_find(str_doc_ids)
         elif self._cluster_lookup is not None:
-            cluster_ids = [
-                self._cluster_lookup.get(d, d) for d in str_doc_ids
-            ]
+            cluster_ids = [self._cluster_lookup.get(d, d) for d in str_doc_ids]
         else:
             # No dedup info: pass through all documents
             return payload
