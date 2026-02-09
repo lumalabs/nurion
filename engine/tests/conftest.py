@@ -332,16 +332,16 @@ def aether_server(
     from sqlalchemy import create_engine, text
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-    # Add aether to path
-    aether_path = os.path.join(os.path.dirname(__file__), "..", "..", "aether")
-    if aether_path not in sys.path:
-        sys.path.insert(0, aether_path)
+    # Add control to path
+    control_path = os.path.join(os.path.dirname(__file__), "..", "..", "control")
+    if control_path not in sys.path:
+        sys.path.insert(0, control_path)
 
-    from aether.app import create_app
-    from aether.core.settings import IcebergCatalogSettings, Settings, get_settings
-    from aether.db import session as db_session_module
-    from aether.models.base import BaseModel
-    from aether.services.iceberg_catalog_service import clear_catalog_cache
+    from control.app import create_app
+    from control.core.settings import IcebergCatalogSettings, Settings, get_settings
+    from control.db import session as db_session_module
+    from control.models.base import BaseModel
+    from control.services.iceberg_catalog_service import clear_catalog_cache
 
     # Clear caches
     get_settings.cache_clear()
