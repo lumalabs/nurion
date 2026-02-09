@@ -187,7 +187,7 @@ class UFShard:
         count = 0
         for doc_id, global_root in global_mappings.items():
             if self._owns_key(doc_id):
-                if self._uf.union(doc_id, global_root):
+                if self._uf.force_root(doc_id, global_root):
                     count += 1
         self._logger.info(f"Applied {count} cross-shard resolutions")
         return count

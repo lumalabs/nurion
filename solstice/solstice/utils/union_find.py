@@ -141,6 +141,35 @@ class UnionFind:
         self._num_components -= 1
         return True
 
+    def force_root(self, key: str, desired_root: str) -> bool:
+        """Force a key's component to have a specific root.
+
+        Unlike union(), this directly sets the parent pointer to enforce
+        desired_root as the root, ignoring rank. Used for cross-shard
+        resolution where a global root must be enforced.
+
+        Args:
+            key: Element to reroot
+            desired_root: The root that should represent key's component
+
+        Returns:
+            True if a change was made (key's root was different from desired_root),
+            False if key already had desired_root as its root.
+        """
+        idx = self._ensure_key(key)
+        desired_idx = self._ensure_key(desired_root)
+
+        current_root = self._find_idx(idx)
+        desired_root_idx = self._find_idx(desired_idx)
+
+        if current_root == desired_root_idx:
+            return False
+
+        # Force current root to point to desired root
+        self._parent[current_root] = desired_root_idx
+        self._num_components -= 1
+        return True
+
     def batch_union(self, pairs: list[tuple[str, str]]) -> int:
         """Union multiple pairs at once.
 
