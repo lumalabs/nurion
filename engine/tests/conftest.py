@@ -246,7 +246,7 @@ def ensure_spark_testdata():
 @pytest.fixture(scope="module")
 def postgres_container():
     """Start PostgreSQL container for the test module."""
-    from testcontainers.postgres import PostgresContainer
+    from testcontainers.postgres import PostgresContainer  # type: ignore[import-untyped]
 
     with PostgresContainer("postgres:16-alpine") as postgres:
         yield postgres
@@ -255,7 +255,7 @@ def postgres_container():
 @pytest.fixture(scope="module")
 def minio_container():
     """Start MinIO container for S3-compatible object storage."""
-    from testcontainers.minio import MinioContainer
+    from testcontainers.minio import MinioContainer  # type: ignore[import-untyped]
     from minio import Minio
 
     with MinioContainer() as minio:
@@ -337,11 +337,17 @@ def control_server(
     if control_path not in sys.path:
         sys.path.insert(0, control_path)
 
-    from control.app import create_app
-    from control.core.settings import IcebergCatalogSettings, Settings, get_settings
-    from control.db import session as db_session_module
-    from control.models.base import BaseModel
-    from control.services.iceberg_catalog_service import clear_catalog_cache
+    from control.app import create_app  # type: ignore[import-not-found]
+    from control.core.settings import (  # type: ignore[import-not-found]
+        IcebergCatalogSettings,
+        Settings,
+        get_settings,
+    )
+    from control.db import session as db_session_module  # type: ignore[import-not-found]
+    from control.models.base import BaseModel  # type: ignore[import-not-found]
+    from control.services.iceberg_catalog_service import (  # type: ignore[import-not-found]
+        clear_catalog_cache,
+    )
 
     # Clear caches
     get_settings.cache_clear()
@@ -386,22 +392,6 @@ def control_server(
         )
         conn.commit()
     sync_engine.dispose()
-
-    # Create Iceberg default namespace
-    from pyiceberg.catalog.sql import SqlCatalog
-    from pyiceberg.exceptions import NamespaceAlreadyExistsError
-
-    iceberg_catalog = SqlCatalog(
-        "control_catalog",
-        **{
-            "uri": sync_database_url,
-            "warehouse": f"file://{test_warehouse_dir}",
-        },
-    )
-    try:
-        iceberg_catalog.create_namespace(("default",))
-    except NamespaceAlreadyExistsError:
-        pass
 
     # Find free port
     port = find_free_port()
@@ -460,6 +450,19 @@ def control_server(
             time.sleep(0.1)
     else:
         raise RuntimeError("Control server failed to respond within 10 seconds")
+
+    # Create Iceberg default namespace via REST API
+    try:
+        resp = requests.post(
+            f"{base_url}/api/iceberg-catalog/v1/namespaces",
+            json={"namespace": ["default"], "properties": {}},
+            timeout=5,
+        )
+        # 200 = created, 409 = already exists (both OK)
+        if resp.status_code not in (200, 409):
+            print(f"Warning: Failed to create default namespace: {resp.status_code} {resp.text}")
+    except Exception as e:
+        print(f"Warning: Failed to create default namespace: {e}")
 
     try:
         yield base_url
