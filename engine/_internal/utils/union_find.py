@@ -129,14 +129,25 @@ class UnionFind:
         if root_a == root_b:
             return False
 
-        # Union by rank
-        if self._rank[root_a] < self._rank[root_b]:
+        # Union by rank, with deterministic tie-breaking by key lexicographic order
+        rank_a = self._rank[root_a]
+        rank_b = self._rank[root_b]
+        
+        if rank_a < rank_b:
             self._parent[root_a] = root_b
-        elif self._rank[root_a] > self._rank[root_b]:
+        elif rank_a > rank_b:
             self._parent[root_b] = root_a
         else:
-            self._parent[root_b] = root_a
-            self._rank[root_a] += 1
+            # Ranks equal: use lexicographic order for deterministic root selection
+            # Always make the smaller key the root
+            key_root_a = self._idx_to_key[root_a]
+            key_root_b = self._idx_to_key[root_b]
+            if key_root_a < key_root_b:
+                self._parent[root_b] = root_a
+                self._rank[root_a] += 1
+            else:
+                self._parent[root_a] = root_b
+                self._rank[root_b] += 1
 
         self._num_components -= 1
         return True

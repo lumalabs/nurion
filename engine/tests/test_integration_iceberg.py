@@ -12,10 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Integration tests for IcebergSource using aether REST catalog.
+"""Integration tests for IcebergSource using control REST catalog.
 
 Tests the full pipeline flow:
-1. Create Iceberg table via aether REST catalog
+1. Create Iceberg table via control REST catalog
 2. Write test data to table
 3. Run IcebergSource through StageMaster with WorkQueue queue
 4. Verify data is processed correctly
@@ -41,8 +41,8 @@ pytestmark = pytest.mark.integration
 
 @pytest.fixture(scope="module")
 def iceberg_catalog(iceberg_catalog_uri: str) -> RestCatalog:
-    """Create a pyiceberg RestCatalog connected to aether."""
-    return RestCatalog(name="aether_catalog", uri=iceberg_catalog_uri)
+    """Create a pyiceberg RestCatalog connected to control."""
+    return RestCatalog(name="control_catalog", uri=iceberg_catalog_uri)
 
 
 @pytest.fixture
@@ -87,7 +87,7 @@ def iceberg_test_table(iceberg_catalog: RestCatalog, iceberg_catalog_uri: str):
 
 
 class TestIcebergSource:
-    """Integration tests for IcebergSource with aether REST catalog."""
+    """Integration tests for IcebergSource with control REST catalog."""
 
     def test_iceberg_source_reads_table(self, iceberg_test_table):
         """Test reading Iceberg table via IcebergSource operator."""

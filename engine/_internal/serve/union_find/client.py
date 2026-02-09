@@ -30,6 +30,7 @@ Usage:
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from collections import defaultdict
 from typing import Any
@@ -37,6 +38,15 @@ from typing import Any
 import ray
 
 logger = logging.getLogger(__name__)
+
+
+def _deterministic_hash(key: str) -> int:
+    """Compute deterministic hash using SHA-256.
+    
+    Python's built-in hash() is non-deterministic across runs due to
+    hash randomization. We need deterministic routing for Union-Find shards.
+    """
+    return int(hashlib.sha256(key.encode("utf-8")).hexdigest()[:16], 16)
 
 
 class UFClient:
@@ -65,8 +75,8 @@ class UFClient:
         self._num_shards = num_shards
 
     def _route(self, key: str) -> int:
-        """Route a doc_id to a shard index."""
-        return hash(key) % self._num_shards
+        """Route a doc_id to a shard index using deterministic hash."""
+        return _deterministic_hash(key) % self._num_shards
 
     def batch_union(self, pairs: list[tuple[str, str]], timeout: float = 60.0) -> dict[str, int]:
         """Union multiple pairs, routing to correct shards.

@@ -314,7 +314,7 @@ def sync_database_url(postgres_container) -> str:
 
 
 @pytest.fixture(scope="module")
-def aether_server(
+def control_server(
     postgres_container,
     minio_container,
     database_url: str,
@@ -322,9 +322,9 @@ def aether_server(
     minio_endpoint: str,
     minio_credentials: dict,
 ) -> Generator[str, None, None]:
-    """Start Aether REST catalog server and return base URL.
+    """Start Control REST catalog server and return base URL.
 
-    This fixture starts the aether app with testcontainer backends,
+    This fixture starts the control app with testcontainer backends,
     suitable for testing Iceberg and Lance catalog operations.
     """
     import requests
@@ -332,16 +332,16 @@ def aether_server(
     from sqlalchemy import create_engine, text
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-    # Add aether to path
-    aether_path = os.path.join(os.path.dirname(__file__), "..", "..", "aether")
-    if aether_path not in sys.path:
-        sys.path.insert(0, aether_path)
+    # Add control to path
+    control_path = os.path.join(os.path.dirname(__file__), "..", "..", "control")
+    if control_path not in sys.path:
+        sys.path.insert(0, control_path)
 
-    from aether.app import create_app
-    from aether.core.settings import IcebergCatalogSettings, Settings, get_settings
-    from aether.db import session as db_session_module
-    from aether.models.base import BaseModel
-    from aether.services.iceberg_catalog_service import clear_catalog_cache
+    from control.app import create_app
+    from control.core.settings import IcebergCatalogSettings, Settings, get_settings
+    from control.db import session as db_session_module
+    from control.models.base import BaseModel
+    from control.services.iceberg_catalog_service import clear_catalog_cache
 
     # Clear caches
     get_settings.cache_clear()
@@ -363,7 +363,7 @@ def aether_server(
         local_root_path=test_warehouse_dir,
     )
     test_settings = Settings(
-        app_name="Aether Test",
+        app_name="Control Test",
         environment="test",
         database_url=database_url,
         iceberg=iceberg_settings,
@@ -392,7 +392,7 @@ def aether_server(
     from pyiceberg.exceptions import NamespaceAlreadyExistsError
 
     iceberg_catalog = SqlCatalog(
-        "aether_catalog",
+        "control_catalog",
         **{
             "uri": sync_database_url,
             "warehouse": f"file://{test_warehouse_dir}",
@@ -448,7 +448,7 @@ def aether_server(
     server_started.wait(timeout=10)
 
     if server_error:
-        raise RuntimeError(f"Aether server failed to start: {server_error}")
+        raise RuntimeError(f"Control server failed to start: {server_error}")
 
     # Wait for server to be ready
     for _ in range(100):
@@ -459,7 +459,7 @@ def aether_server(
         except Exception:
             time.sleep(0.1)
     else:
-        raise RuntimeError("Aether server failed to respond within 10 seconds")
+        raise RuntimeError("Control server failed to respond within 10 seconds")
 
     try:
         yield base_url
@@ -470,15 +470,15 @@ def aether_server(
 
 
 @pytest.fixture(scope="module")
-def iceberg_catalog_uri(aether_server: str) -> str:
+def iceberg_catalog_uri(control_server: str) -> str:
     """Get Iceberg REST catalog URI."""
-    return f"{aether_server}/api/iceberg-catalog"
+    return f"{control_server}/api/iceberg-catalog"
 
 
 @pytest.fixture(scope="module")
-def lance_namespace_uri(aether_server: str) -> str:
+def lance_namespace_uri(control_server: str) -> str:
     """Get Lance namespace API URI."""
-    return f"{aether_server}/api/lance-namespace"
+    return f"{control_server}/api/lance-namespace"
 
 
 # ============================================================================

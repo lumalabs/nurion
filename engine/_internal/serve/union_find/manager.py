@@ -28,6 +28,7 @@ Checkpoint design:
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import time
 from typing import TYPE_CHECKING, Any, Optional
@@ -44,6 +45,14 @@ if TYPE_CHECKING:
     from _internal.core.split_payload_store import SplitPayloadStore
 
 logger = logging.getLogger(__name__)
+
+
+def _deterministic_hash(key: str) -> int:
+    """Compute deterministic hash using SHA-256.
+    
+    Must match the implementation in client.py for consistent routing.
+    """
+    return int(hashlib.sha256(key.encode("utf-8")).hexdigest()[:16], 16)
 
 
 class UnionFindServiceManager:
@@ -197,16 +206,24 @@ class UnionFindServiceManager:
             logger.info("No cross-shard edges to resolve")
             return {"total_cross_edges": 0, "resolutions": 0, "duration_s": 0.0}
 
-        unique_edges: set[tuple[str, str]] = set()
+        # Use set for dedup but convert to sorted list for deterministic iteration
+        unique_edges_set: set[tuple[str, str]] = set()
         for a, b in all_cross_edges:
-            unique_edges.add((min(a, b), max(a, b)))
+            unique_edges_set.add((min(a, b), max(a, b)))
+        
+        # Sort edges for deterministic processing order
+        unique_edges = sorted(unique_edges_set)
 
         logger.info(f"Resolving {len(unique_edges)} unique cross-shard edges")
 
-        all_keys: set[str] = set()
+        # Collect all keys in deterministic order
+        all_keys_set: set[str] = set()
         for a, b in unique_edges:
-            all_keys.add(a)
-            all_keys.add(b)
+            all_keys_set.add(a)
+            all_keys_set.add(b)
+        
+        # Sort keys for deterministic processing
+        all_keys = sorted(all_keys_set)
 
         client = self.create_client()
         local_roots = client.batch_find(list(all_keys), timeout=timeout)
@@ -220,13 +237,24 @@ class UnionFindServiceManager:
             global_uf.union(a, root_a)
             global_uf.union(b, root_b)
 
+        # Build shard mappings: send both key->global_root and ensure global_root is known
         shard_mappings: dict[int, dict[str, str]] = {i: {} for i in range(self._config.num_shards)}
         for key in all_keys:
             local_root = key_to_local_root[key]
             global_root = global_uf.find(key)
             if local_root != global_root:
-                shard_id = hash(key) % self._config.num_shards
-                shard_mappings[shard_id][key] = global_root
+                key_shard = _deterministic_hash(key) % self._config.num_shards
+                root_shard = _deterministic_hash(global_root) % self._config.num_shards
+                
+                # Send mapping to key's shard
+                shard_mappings[key_shard][key] = global_root
+                
+                # If global_root belongs to a different shard, ensure it knows about itself
+                # This handles the case where key is in shard A, global_root is in shard B
+                if key_shard != root_shard:
+                    # Make sure root_shard has global_root pointing to itself
+                    if global_root not in shard_mappings[root_shard]:
+                        shard_mappings[root_shard][global_root] = global_root
 
         resolve_futures = []
         for shard_id, mappings in shard_mappings.items():

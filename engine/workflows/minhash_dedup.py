@@ -153,6 +153,7 @@ def create_union_job(
     )
 
     # Stage 2: MinHash Encode + shuffle by bucket_id
+    seed = int(config.get("seed", 1))  # Default seed=1 for reproducibility
     encoder_stage = Stage(
         stage_id="encoder",
         operator_config=MinHashEncoderConfig(
@@ -161,6 +162,7 @@ def create_union_job(
             num_buckets=num_buckets,
             hashes_per_bucket=hashes_per_bucket,
             ngram_size=ngram_size,
+            seed=seed,
             partition_keys=["bucket_id"],
             num_partitions=num_partitions,
         ),
