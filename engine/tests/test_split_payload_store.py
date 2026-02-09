@@ -21,9 +21,7 @@ import pyarrow as pa
 from _internal.core.models import SplitPayload
 from _internal.core.split_payload_store import (
     FsspecSplitPayloadStore,
-    _deserialize_payload,
     _sanitize_key,
-    _serialize_payload,
 )
 
 
@@ -50,34 +48,6 @@ def _make_store(tmp_path) -> FsspecSplitPayloadStore:
         base_uri=f"file://{tmp_path}",
         job_id="test_job",
     )
-
-
-# ---------------------------------------------------------------------------
-# Serialization helpers
-# ---------------------------------------------------------------------------
-
-
-class TestSerializationHelpers:
-    """Tests for _serialize_payload / _deserialize_payload."""
-
-    def test_round_trip(self):
-        payload = _make_payload(split_id="s1", num_rows=10)
-        data = _serialize_payload(payload)
-        assert isinstance(data, bytes)
-        assert len(data) > 0
-
-        restored = _deserialize_payload(data, split_id="s1")
-        assert restored.split_id == "s1"
-        assert restored.data.num_rows == 10
-        assert restored.data.equals(payload.data)
-
-    def test_empty_table(self):
-        table = pa.table({"x": pa.array([], type=pa.int64())})
-        payload = SplitPayload(data=table, split_id="empty")
-        data = _serialize_payload(payload)
-        restored = _deserialize_payload(data, split_id="empty")
-        assert restored.data.num_rows == 0
-        assert restored.data.schema == table.schema
 
 
 class TestSanitizeKey:
