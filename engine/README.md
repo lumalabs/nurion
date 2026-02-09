@@ -102,7 +102,7 @@ uv sync --dev
 pip install -e .
 ```
 
-Note: Prefer the `nurion` CLI; `solstice` CLI remains as a compatibility alias. Legacy: Some URLs use `/solstice` path, metrics use `nurion_` prefix.
+Use the `nurion` CLI to run jobs.
 
 ### Python API
 

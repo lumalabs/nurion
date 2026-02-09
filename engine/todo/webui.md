@@ -42,7 +42,7 @@ Major architectural simplification: Portal and History Server use the same read-
 
 ### Core Architecture
 
-- [x] **Portal Service** - Ray Serve deployment with `/solstice` route prefix (read-only; legacy path)
+- [x] **Portal Service** - Ray Serve deployment with `/nurion` route prefix (read-only)
 - [x] **WorkQueueStateWriter** - gRPC state writes from JobRunner/StageMaster
 - [x] **Unified Architecture** - Portal and History Server use same read-only code
 - [x] **No cross-process state** - Removed broken registry pattern

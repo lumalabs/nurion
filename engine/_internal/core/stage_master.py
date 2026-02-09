@@ -55,7 +55,6 @@ class BackpressureProvider(Protocol):
     def should_pause(self, stage_id: str) -> bool: ...
 
 
-# Re-export for compatibility
 __all__ = [
     "StageMaster",
     "StageWorker",

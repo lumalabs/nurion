@@ -369,7 +369,6 @@ async def run_dedup_pipeline(
     }
 
 
-# For CLI compatibility with _internal.main --workflow
 def create_job(job_id: str, config: Dict[str, Any]) -> Job:
     """Create a union job for CLI usage.
 

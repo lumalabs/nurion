@@ -264,7 +264,7 @@ def history_server_cmd(workqueue_db_path: str, host: str, port: int, reload: boo
 
 
 def main():
-    """Main entry point (compatibility wrapper)."""
+    """Main entry point."""
     cli()
 
 

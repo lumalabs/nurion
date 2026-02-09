@@ -114,7 +114,7 @@ WorkQueue storage is configured via `JobConfig.workqueue_db_path`.
 
 ## Prometheus Metrics
 
-Nurion Runtime exports the following metrics (legacy `solstice_` prefix):
+Nurion Engine exports the following metrics with `nurion_` prefix:
 
 ### Stage-Level Metrics
 
