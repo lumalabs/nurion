@@ -171,9 +171,9 @@ def app_server(
     import asyncio
     import os
 
-    from aether.core.settings import get_settings
-    from aether.db import session as db_session_module
-    from aether.services.iceberg_catalog_service import clear_catalog_cache
+    from control.core.settings import get_settings
+    from control.db import session as db_session_module
+    from control.services.iceberg_catalog_service import clear_catalog_cache
 
     # Clear caches and set environment variables so get_settings() and SqlCatalog pick them up
     get_settings.cache_clear()
@@ -241,7 +241,7 @@ def app_server(
     db_session_module.async_session_factory = test_factory
 
     # Import app after patching
-    from aether.app import create_app
+    from control.app import create_app
 
     # Create app without lifespan (we already initialized the database)
     app = create_app(settings=test_settings, skip_lifespan=True)
@@ -308,7 +308,7 @@ def app_server(
 @pytest.fixture
 async def db_session(db_engine, db_session_factory) -> AsyncGenerator[AsyncSession]:
     """Create a fresh database session with clean tables for each test."""
-    from aether.services import lance_table_service
+    from control.services import lance_table_service
 
     # Recreate tables for each test
     async with db_engine.begin() as conn:
