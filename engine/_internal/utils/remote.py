@@ -404,7 +404,7 @@ def ensure_local_file(
     if use_cache:
         global _CACHE_DIR
         if _CACHE_DIR is None:
-            cache_base = os.environ.get("NURION_CACHE_DIR", "/tmp/solstice_cache")
+            cache_base = os.environ.get("NURION_CACHE_DIR", "/tmp/nurion_cache")
             _CACHE_DIR = Path(cache_base)
         _CACHE_DIR.mkdir(parents=True, exist_ok=True)
         url_hash = hashlib.md5(path.encode()).hexdigest()[:16]
@@ -431,7 +431,7 @@ def clear_cache() -> None:
     """Clear the download cache."""
     import shutil
 
-    cache_dir = Path(os.environ.get("NURION_CACHE_DIR", "/tmp/solstice_cache"))
+    cache_dir = Path(os.environ.get("NURION_CACHE_DIR", "/tmp/nurion_cache"))
     if cache_dir.exists():
         shutil.rmtree(cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
