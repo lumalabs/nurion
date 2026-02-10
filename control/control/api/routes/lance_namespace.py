@@ -293,6 +293,10 @@ async def register_table(
         namespace_name = "default"
         table_name = id
 
+    # Filter out reserved parameter names to avoid duplicate keyword argument errors
+    reserved_keys = {"lance_path", "name", "storage_options", "namespace_name", "db"}
+    filtered_properties = {k: v for k, v in properties.items() if k not in reserved_keys}
+
     try:
         table = await lance_table_service.create_lance_table(
             lance_path=request.location,
@@ -300,7 +304,7 @@ async def register_table(
             storage_options=request.storage_options,
             namespace_name=namespace_name,
             db=db,
-            **properties,
+            **filtered_properties,
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc

@@ -264,6 +264,68 @@ async def list_rayjobs(
         ) from e
 
 
+@router.get("/jobs/history", response_model=ListRayJobsResponse)
+async def list_rayjobs_history(
+    queue: Annotated[str | None, Query(description="Filter by queue name")] = None,
+    user: Annotated[str | None, Query(description="Filter by user")] = None,
+    status_filter: Annotated[str | None, Query(description="Filter by status")] = None,
+    cluster: Annotated[str | None, Query(description="Target cluster")] = None,
+    limit: Annotated[int, Query(description="Maximum number of jobs to return")] = 100,
+    db: AsyncSession = Depends(get_db_session),
+) -> ListRayJobsResponse:
+    """List RayJobs from database history (includes completed/deleted jobs).
+
+    This endpoint queries the database cache, which may not reflect real-time K8s state.
+    Use GET /jobs for real-time status from Kubernetes.
+    """
+    try:
+        # Build query
+        query = select(RayJob).join(K8sCluster, RayJob.cluster_id == K8sCluster.id, isouter=True)
+
+        if cluster:
+            query = query.where(K8sCluster.name == cluster)
+
+        if queue:
+            query = query.where(RayJob.queue_name == queue)
+
+        if user:
+            query = query.where(RayJob.user.ilike(f"%{user}%"))
+
+        if status_filter:
+            query = query.where(RayJob.status == status_filter)
+
+        query = query.order_by(RayJob.created_at.desc()).limit(limit)
+
+        result = await db.execute(query)
+        job_records = result.scalars().all()
+
+        jobs = []
+        for job in job_records:
+            cluster_obj = await db.get(K8sCluster, job.cluster_id) if job.cluster_id else None
+            jobs.append(
+                RayJobInfo(
+                    id=job.id,
+                    job_name=job.job_name,
+                    namespace=job.namespace,
+                    job_status=job.status,
+                    queue_name=job.queue_name,
+                    user=job.user,
+                    cluster_name=cluster_obj.name if cluster_obj else None,
+                    created_at=job.created_at,
+                    start_time=job.started_at,
+                )
+            )
+
+        return ListRayJobsResponse(jobs=jobs, total=len(jobs))
+
+    except Exception as e:
+        logger.exception("Failed to list RayJobs history")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e),
+        ) from e
+
+
 @router.get("/jobs/{job_name}", response_model=RayJobStatusResponse)
 async def get_rayjob_status(
     job_name: Annotated[str, Path(description="Job name")],
@@ -432,68 +494,6 @@ async def sync_rayjobs() -> dict[str, str]:
         return {"message": "Sync completed successfully"}
     except Exception as e:
         logger.exception("Failed to sync RayJobs")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e),
-        ) from e
-
-
-@router.get("/jobs/history", response_model=ListRayJobsResponse)
-async def list_rayjobs_history(
-    queue: Annotated[str | None, Query(description="Filter by queue name")] = None,
-    user: Annotated[str | None, Query(description="Filter by user")] = None,
-    status_filter: Annotated[str | None, Query(description="Filter by status")] = None,
-    cluster: Annotated[str | None, Query(description="Target cluster")] = None,
-    limit: Annotated[int, Query(description="Maximum number of jobs to return")] = 100,
-    db: AsyncSession = Depends(get_db_session),
-) -> ListRayJobsResponse:
-    """List RayJobs from database history (includes completed/deleted jobs).
-
-    This endpoint queries the database cache, which may not reflect real-time K8s state.
-    Use GET /jobs for real-time status from Kubernetes.
-    """
-    try:
-        # Build query
-        query = select(RayJob).join(K8sCluster, RayJob.cluster_id == K8sCluster.id, isouter=True)
-
-        if cluster:
-            query = query.where(K8sCluster.name == cluster)
-
-        if queue:
-            query = query.where(RayJob.queue_name == queue)
-
-        if user:
-            query = query.where(RayJob.user.ilike(f"%{user}%"))
-
-        if status_filter:
-            query = query.where(RayJob.status == status_filter)
-
-        query = query.order_by(RayJob.created_at.desc()).limit(limit)
-
-        result = await db.execute(query)
-        job_records = result.scalars().all()
-
-        jobs = []
-        for job in job_records:
-            cluster_obj = await db.get(K8sCluster, job.cluster_id) if job.cluster_id else None
-            jobs.append(
-                RayJobInfo(
-                    id=job.id,
-                    job_name=job.job_name,
-                    namespace=job.namespace,
-                    job_status=job.status,
-                    queue_name=job.queue_name,
-                    user=job.user,
-                    cluster_name=cluster_obj.name if cluster_obj else None,
-                    created_at=job.created_at,
-                    start_time=job.started_at,
-                )
-            )
-
-        return ListRayJobsResponse(jobs=jobs, total=len(jobs))
-
-    except Exception as e:
-        logger.exception("Failed to list RayJobs history")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e),
