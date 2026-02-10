@@ -276,6 +276,13 @@ class ModelServiceManager:
         pool = self._pools[model_id]
         config = self._configs.get(model_id)
 
+        # When using connect(), configs are not available locally
+        if config is None and (min_workers is not None or max_workers is not None):
+            raise RuntimeError(
+                f"Cannot update autoscale bounds for {model_id} after connect(). "
+                f"Bounds updates require deploying models from this manager instance."
+            )
+
         if config:
             if min_workers is not None:
                 config.min_workers = min_workers
