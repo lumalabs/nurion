@@ -87,9 +87,7 @@ class ModelServiceManager:
         if detached:
             actor_options["lifetime"] = "detached"
 
-        self._registry = (
-            ray.remote(ModelRegistry).options(**actor_options).remote()
-        )
+        self._registry = ray.remote(ModelRegistry).options(**actor_options).remote()
         ray.get(self._registry.start.remote())
 
         mode = "detached" if detached else "attached"
@@ -131,10 +129,7 @@ class ModelServiceManager:
             except ValueError:
                 logger.warning(f"Pool actor for {model_id} not found, skipping")
 
-        logger.info(
-            f"Connected to detached serve layer: "
-            f"{len(instance._pools)} model(s) active"
-        )
+        logger.info(f"Connected to detached serve layer: {len(instance._pools)} model(s) active")
         return instance
 
     @property

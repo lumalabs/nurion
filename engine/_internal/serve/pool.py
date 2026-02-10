@@ -176,8 +176,7 @@ class ModelPool:
 
             if all_failed and self._workers:
                 logger.error(
-                    f"All workers for {self._config.model_id} have failed, "
-                    f"aborting wait_ready"
+                    f"All workers for {self._config.model_id} have failed, aborting wait_ready"
                 )
                 return False
 
