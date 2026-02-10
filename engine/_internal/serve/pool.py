@@ -107,6 +107,9 @@ class ModelPool:
         try:
             if graceful:
                 await worker.shutdown.remote()
+                # For detached actors, also kill the actor to release resources
+                if self._detached:
+                    ray.kill(worker)
             else:
                 ray.kill(worker)
         except Exception as e:

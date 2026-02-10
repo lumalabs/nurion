@@ -206,6 +206,8 @@ class ModelServiceManager:
             is_ready = await pool.wait_ready.remote(timeout=timeout)
             if not is_ready:
                 elapsed = time.time() - result["started_at"]
+                # Clean up detached actors before raising
+                await self.undeploy_model(model_id)
                 raise RuntimeError(
                     f"Model {model_id} failed to start after {elapsed:.1f}s. "
                     f"Check worker logs for details (e.g. model download errors, "
