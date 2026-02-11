@@ -506,12 +506,56 @@ class InferenceWorker:
             await self._http_client.aclose()
             self._http_client = None
 
-        # Stop the server process (force-kills all descendants including TP workers)
-        self._force_kill_process()
+        # Stop the server process: try graceful SIGTERM first, then SIGKILL
+        await self._graceful_shutdown_process()
 
         self._state = WorkerState.STOPPED
         self._is_ready = False
         logger.info(f"Worker {self._worker_id} shutdown complete")
+
+    async def _graceful_shutdown_process(self) -> None:
+        """Gracefully shutdown the server: SIGTERM, wait, then SIGKILL.
+
+        Sends SIGTERM to the process group to allow vLLM to finish in-flight
+        requests and clean up. After a 30-second grace period, escalates to
+        SIGKILL for any remaining processes.
+        """
+        proc = getattr(self, "_process", None)
+        if proc is None:
+            return
+
+        pid = proc.pid
+
+        # Phase 1: Send SIGTERM to process group for graceful shutdown
+        try:
+            os.killpg(os.getpgid(pid), signal.SIGTERM)
+            logger.info(f"Worker {self._worker_id} sent SIGTERM to process group")
+        except (ProcessLookupError, PermissionError, OSError) as e:
+            logger.warning(f"Failed to send SIGTERM: {e}")
+            # Process may already be dead, continue to force-kill
+            self._force_kill_process()
+            return
+
+        # Phase 2: Wait up to 30 seconds for graceful shutdown
+        grace_period = 30.0
+        start_time = time.time()
+        while time.time() - start_time < grace_period:
+            if proc.poll() is not None:
+                # Process exited gracefully
+                logger.info(
+                    f"Worker {self._worker_id} exited gracefully after "
+                    f"{time.time() - start_time:.1f}s"
+                )
+                self._process = None
+                return
+            await asyncio.sleep(0.5)
+
+        # Phase 3: Grace period expired, escalate to SIGKILL
+        logger.warning(
+            f"Worker {self._worker_id} did not exit after {grace_period}s, "
+            f"escalating to SIGKILL"
+        )
+        self._force_kill_process()
 
     def _force_kill_process(self) -> None:
         """Force-kill the server subprocess and ALL descendant processes.

@@ -324,6 +324,13 @@ class ModelServiceManager:
             except Exception as e:
                 logger.warning(f"Error undeploying {model_id}: {e}")
 
+        # Kill the registry actor explicitly
+        try:
+            ray.kill(self._registry)
+            logger.info("Killed registry actor")
+        except Exception as e:
+            logger.warning(f"Failed to kill registry actor: {e}")
+
         # Then, kill ALL remaining actors in the serve namespace
         # (catches orphans from previous failed deployments)
         killed = 0
