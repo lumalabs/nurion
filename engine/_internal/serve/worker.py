@@ -162,7 +162,7 @@ class InferenceWorker:
         cusparselt, etc.) are visible to the subprocess via LD_LIBRARY_PATH.
         Without this, torch/vllm fail with 'libcudnn.so.9: cannot open'.
         """
-        import importlib
+        import importlib.util
         import pathlib
 
         env = os.environ.copy()

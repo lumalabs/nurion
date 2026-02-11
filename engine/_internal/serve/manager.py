@@ -109,9 +109,7 @@ class ModelServiceManager:
 
         # Look up existing registry in the well-known namespace
         try:
-            instance._registry = ray.get_actor(
-                REGISTRY_ACTOR_NAME, namespace=SERVE_NAMESPACE
-            )
+            instance._registry = ray.get_actor(REGISTRY_ACTOR_NAME, namespace=SERVE_NAMESPACE)
         except ValueError:
             raise RuntimeError(
                 "No detached serve layer found. "
@@ -126,9 +124,7 @@ class ModelServiceManager:
 
         for model_id in models:
             try:
-                pool = ray.get_actor(
-                    get_pool_actor_name(model_id), namespace=SERVE_NAMESPACE
-                )
+                pool = ray.get_actor(get_pool_actor_name(model_id), namespace=SERVE_NAMESPACE)
                 instance._pools[model_id] = pool
                 logger.info(f"Reconnected to pool for model {model_id}")
             except ValueError:
@@ -331,9 +327,7 @@ class ModelServiceManager:
             if actor_info.get("namespace") != SERVE_NAMESPACE:
                 continue
             try:
-                handle = ray.get_actor(
-                    actor_info["name"], namespace=SERVE_NAMESPACE
-                )
+                handle = ray.get_actor(actor_info["name"], namespace=SERVE_NAMESPACE)
                 ray.kill(handle)
                 killed += 1
             except Exception:
