@@ -35,7 +35,6 @@ from _internal.serve.worker import InferenceWorker
 from _internal.utils.network import find_free_port
 
 logger = logging.getLogger(__name__)
-_SPAWN_WAIT_TIMEOUT_SECONDS = 120.0
 
 
 class ModelPool:
@@ -95,22 +94,7 @@ class ModelPool:
                 .options(**actor_options)
                 .remote(self._config, registry=self._registry, port=port, worker_id=worker_id)
             )
-            # Bound actor-creation wait so unschedulable resources fail fast.
-            await asyncio.wait_for(
-                worker.start.remote(),
-                timeout=_SPAWN_WAIT_TIMEOUT_SECONDS,
-            )
-        except asyncio.TimeoutError as exc:
-            if worker is not None:
-                try:
-                    ray.kill(worker)
-                except Exception:
-                    pass
-            raise RuntimeError(
-                f"Timed out spawning worker {worker_id} after "
-                f"{_SPAWN_WAIT_TIMEOUT_SECONDS:.0f}s. "
-                "Likely unschedulable resources or cluster capacity exhaustion."
-            ) from exc
+            await worker.start.remote()
         finally:
             self._spawning_workers = max(0, self._spawning_workers - 1)
 
