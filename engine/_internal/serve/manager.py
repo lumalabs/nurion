@@ -334,9 +334,7 @@ class ModelServiceManager:
                 if actor_info.get("namespace") != SERVE_NAMESPACE:
                     continue
                 try:
-                    handle = ray.get_actor(
-                        actor_info["name"], namespace=SERVE_NAMESPACE
-                    )
+                    handle = ray.get_actor(actor_info["name"], namespace=SERVE_NAMESPACE)
                     ray.kill(handle)
                     killed += 1
                 except Exception:
