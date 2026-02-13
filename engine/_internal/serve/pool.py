@@ -80,7 +80,7 @@ class ModelPool:
 
     # --- Worker lifecycle ---
 
-    async def _spawn_worker(self) -> tuple[str, ray.actor.ActorHandle]:
+    async def _spawn_worker(self, node_id: Optional[str] = None) -> tuple[str, ray.actor.ActorHandle]:
         port = find_free_port()
         worker_id = f"{self._config.model_id}_worker_{port}"
         resources = self._config.get_worker_resources()
@@ -91,15 +91,16 @@ class ModelPool:
             actor_options["namespace"] = SERVE_NAMESPACE
 
         # Best-fit node suggestion from allocator (direct call, no RPC)
-        if self._allocator is not None:
+        if node_id is None and self._allocator is not None:
             gpus = resources.get("num_gpus", 0)
             if gpus > 0:
                 suggestions = self._allocator.suggest_nodes(float(gpus), 1)
                 node_id = suggestions[0] if suggestions else None
-                if node_id is not None:
-                    actor_options["scheduling_strategy"] = NodeAffinitySchedulingStrategy(
-                        node_id=node_id, soft=True
-                    )
+        
+        if node_id is not None:
+            actor_options["scheduling_strategy"] = NodeAffinitySchedulingStrategy(
+                node_id=node_id, soft=True
+            )
 
         worker: Optional[ray.actor.ActorHandle] = None
         self._spawning_workers += 1
@@ -185,7 +186,18 @@ class ModelPool:
         }
 
         if target > current:
-            tasks = [self._spawn_worker() for _ in range(target - current)]
+            # Batch node suggestion for anti-fragmentation scheduling
+            suggested_nodes: list[Optional[str]] = []
+            if self._allocator is not None:
+                gpus = self._config.get_worker_resources().get("num_gpus", 0)
+                if gpus > 0:
+                    suggested_nodes = self._allocator.suggest_nodes(float(gpus), target - current)
+            
+            # Pad with None if allocator didn't provide suggestions
+            while len(suggested_nodes) < target - current:
+                suggested_nodes.append(None)
+            
+            tasks = [self._spawn_worker(node_id=suggested_nodes[i]) for i in range(target - current)]
             spawned = await asyncio.gather(*tasks, return_exceptions=True)
             for item in spawned:
                 if isinstance(item, tuple):

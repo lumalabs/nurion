@@ -88,6 +88,11 @@ class ModelRoutingConfig:
         for i in range(1, len(self.routes)):
             if self.routes[i].max_tokens <= self.routes[i - 1].max_tokens:
                 raise ValueError("routes must have strictly increasing max_tokens")
+        
+        # Validate unique model_id values to prevent infinite recursion in next_model
+        model_ids = [r.model_id for r in self.routes]
+        if len(model_ids) != len(set(model_ids)):
+            raise ValueError("routes must have unique model_id values")
 
 
 # ---------------------------------------------------------------------------

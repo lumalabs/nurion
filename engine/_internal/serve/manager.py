@@ -309,17 +309,16 @@ class ModelServiceManager:
             if not evict_wids:
                 return await pool._spawn_worker()
 
-            # Freeze autoscalers for affected pools
-            affected_pools: list[ModelPool] = []
+            # Freeze autoscalers for affected pools and collect owned worker IDs
+            affected_pools: list[tuple[ModelPool, list[str]]] = []
             for p in self._pools.values():
                 owns = p.stop_workers_by_ids(evict_wids)
                 if owns:
                     p.freeze_autoscaler()
-                    affected_pools.append(p)
+                    affected_pools.append((p, owns))
 
-            # Evict workers
-            for p in self._pools.values():
-                owned_wids = p.stop_workers_by_ids(evict_wids)
+            # Evict workers from affected pools
+            for p, owned_wids in affected_pools:
                 for wid in owned_wids:
                     await p._stop_worker(wid, graceful=True)
 
@@ -329,7 +328,7 @@ class ModelServiceManager:
             finally:
                 # Unfreeze — autoscalers will respawn evicted workers
                 # on allocator-suggested nodes (not the cleared node)
-                for p in affected_pools:
+                for p, _ in affected_pools:
                     p.unfreeze_autoscaler()
 
             return result
