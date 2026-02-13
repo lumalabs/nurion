@@ -283,7 +283,7 @@ class ExternalLLMOperator(Operator):
                     f"Context length exceeded on largest model {current}: {e}"
                 )
                 return f"[ERROR: context length exceeded on largest model]"
-            logger.info(
+            self.logger.info(
                 f"Context length exceeded on {current}, "
                 f"falling back to {next_model}"
             )

@@ -242,9 +242,11 @@ class ModelServiceManager:
         """
         self._allocator.refresh_nodes()
 
-        sorted_configs = sorted(
-            configs,
-            key=lambda c: c.get_worker_resources().get("num_gpus", 0),
+        # Track original indices to preserve input order in results
+        indexed_configs = list(enumerate(configs))
+        sorted_indexed = sorted(
+            indexed_configs,
+            key=lambda ic: ic[1].get_worker_resources().get("num_gpus", 0),
             reverse=True,
         )
 
@@ -253,38 +255,41 @@ class ModelServiceManager:
         tp_threshold = max_node_gpus / 2
 
         large = [
-            c for c in sorted_configs
+            (idx, c) for idx, c in sorted_indexed
             if c.get_worker_resources().get("num_gpus", 0) > tp_threshold
         ]
         small = [
-            c for c in sorted_configs
+            (idx, c) for idx, c in sorted_indexed
             if c.get_worker_resources().get("num_gpus", 0) <= tp_threshold
         ]
 
-        results: list[dict[str, Any]] = []
+        # Results stored with original index
+        indexed_results: list[tuple[int, dict[str, Any]]] = []
 
         # Phase 1: large models sequentially (need contiguous GPU blocks)
-        for config in large:
+        for idx, config in large:
             r = await self._deploy_one(config, wait_ready=wait_ready, timeout=timeout)
-            results.append(r)
+            indexed_results.append((idx, r))
 
         # Phase 2: small models in parallel
         if small:
             small_results = await asyncio.gather(
                 *(
                     self._deploy_one(c, wait_ready=wait_ready, timeout=timeout)
-                    for c in small
+                    for _, c in small
                 ),
                 return_exceptions=True,
             )
-            for item in small_results:
+            for (idx, _), item in zip(small, small_results):
                 if isinstance(item, Exception):
                     logger.warning(f"Failed to deploy model: {item}")
-                    results.append({"status": "error", "error": str(item)})
+                    indexed_results.append((idx, {"status": "error", "error": str(item)}))
                 else:
-                    results.append(item)
+                    indexed_results.append((idx, item))
 
-        return results
+        # Restore original input order
+        indexed_results.sort(key=lambda ir: ir[0])
+        return [result for _, result in indexed_results]
 
     # --- Compaction ---
 
