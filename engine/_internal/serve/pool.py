@@ -97,10 +97,8 @@ class ModelPool:
                 suggestions = self._allocator.suggest_nodes(float(gpus), 1)
                 node_id = suggestions[0] if suggestions else None
                 if node_id is not None:
-                    actor_options["scheduling_strategy"] = (
-                        NodeAffinitySchedulingStrategy(
-                            node_id=node_id, soft=True
-                        )
+                    actor_options["scheduling_strategy"] = NodeAffinitySchedulingStrategy(
+                        node_id=node_id, soft=True
                     )
 
         worker: Optional[ray.actor.ActorHandle] = None

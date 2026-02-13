@@ -12,25 +12,38 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for length-based model routing in ExternalLLMOperator.
+"""Tests for length-based model routing.
 
-Unit tests for ModelRoutingConfig validation, token estimation, and model
-picking logic. No HTTP/Ray needed — we exercise the operator methods directly.
+Unit tests for ModelRoutingConfig validation, token estimation, model picking,
+and RoutedChatCompletionsClient logic. No HTTP/Ray needed.
 """
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+import math
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from _internal.operators.llm.operator import (
+from _internal.operators.llm.client import (
     ContextLengthError,
-    ExternalLLMOperator,
-    ExternalLLMOperatorConfig,
     ModelRoute,
     ModelRoutingConfig,
+    RoutedChatCompletionsClient,
 )
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_routed_client(
+    routing_config: ModelRoutingConfig,
+) -> RoutedChatCompletionsClient:
+    """Create a RoutedChatCompletionsClient with a mock base client."""
+    base = MagicMock()
+    return RoutedChatCompletionsClient(base, routing_config)
 
 
 # ---------------------------------------------------------------------------
@@ -81,23 +94,6 @@ class TestModelRoutingConfigValidation:
 # ---------------------------------------------------------------------------
 
 
-def _make_operator(routing_config: ModelRoutingConfig) -> ExternalLLMOperator:
-    """Create an ExternalLLMOperator with routing config for unit testing."""
-    config = ExternalLLMOperatorConfig(
-        use_model_client=True,
-        model="default",
-        model_routing=routing_config,
-    )
-    runtime = MagicMock()
-    runtime.worker_id = "test_worker_0"
-    op = ExternalLLMOperator.__new__(ExternalLLMOperator)
-    op._config = config
-    op._http_client = None
-    op._model_client = None
-    op.logger = MagicMock()
-    return op
-
-
 class TestTokenEstimation:
     def _routing_config(self) -> ModelRoutingConfig:
         return ModelRoutingConfig(
@@ -107,14 +103,14 @@ class TestTokenEstimation:
         )
 
     def test_text_only(self) -> None:
-        op = _make_operator(self._routing_config())
+        rc = _make_routed_client(self._routing_config())
         messages = [{"role": "user", "content": "a" * 400}]
-        tokens = op._estimate_tokens(messages)
+        tokens = rc.estimate_tokens(messages)
         # 400 chars / 4.0 chars_per_token = 100
         assert tokens == 100
 
     def test_image_content_block(self) -> None:
-        op = _make_operator(self._routing_config())
+        rc = _make_routed_client(self._routing_config())
         messages = [
             {
                 "role": "user",
@@ -124,27 +120,27 @@ class TestTokenEstimation:
                 ],
             }
         ]
-        tokens = op._estimate_tokens(messages)
+        tokens = rc.estimate_tokens(messages)
         # 80/4 + 1000 = 20 + 1000 = 1020
         assert tokens == 1020
 
     def test_multiple_messages(self) -> None:
-        op = _make_operator(self._routing_config())
+        rc = _make_routed_client(self._routing_config())
         messages = [
             {"role": "system", "content": "a" * 40},
             {"role": "user", "content": "b" * 80},
         ]
-        tokens = op._estimate_tokens(messages)
+        tokens = rc.estimate_tokens(messages)
         # 40/4 + 80/4 = 10 + 20 = 30
         assert tokens == 30
 
     def test_empty_messages(self) -> None:
-        op = _make_operator(self._routing_config())
-        tokens = op._estimate_tokens([])
+        rc = _make_routed_client(self._routing_config())
+        tokens = rc.estimate_tokens([])
         assert tokens == 0
 
     def test_multiple_images(self) -> None:
-        op = _make_operator(self._routing_config())
+        rc = _make_routed_client(self._routing_config())
         messages = [
             {
                 "role": "user",
@@ -155,7 +151,7 @@ class TestTokenEstimation:
                 ],
             }
         ]
-        tokens = op._estimate_tokens(messages)
+        tokens = rc.estimate_tokens(messages)
         # 2 * 1000 + len("describe")/4 = 2000 + 2 = 2002
         assert tokens == 2002
 
@@ -175,34 +171,38 @@ class TestModelPicking:
             ],
         )
 
+    def _pick(self, rc: RoutedChatCompletionsClient, estimated_tokens: int) -> str:
+        """Pick model by constructing messages with the right estimated length."""
+        # chars_per_token defaults to 3.5; ceil to avoid int() truncation
+        text_len = math.ceil(estimated_tokens * 3.5)
+        messages = [{"role": "user", "content": "a" * text_len}]
+        return rc.pick_model(messages)
+
     def test_fits_first_route(self) -> None:
-        op = _make_operator(self._routing_config())
-        assert op._pick_model(100) == "small-ctx"
+        rc = _make_routed_client(self._routing_config())
+        assert self._pick(rc, 100) == "small-ctx"
 
     def test_fits_exact_boundary(self) -> None:
-        op = _make_operator(self._routing_config())
-        assert op._pick_model(4096) == "small-ctx"
+        rc = _make_routed_client(self._routing_config())
+        assert self._pick(rc, 4096) == "small-ctx"
 
     def test_fits_second_route(self) -> None:
-        op = _make_operator(self._routing_config())
-        assert op._pick_model(4097) == "medium-ctx"
+        rc = _make_routed_client(self._routing_config())
+        assert self._pick(rc, 4097) == "medium-ctx"
 
     def test_fits_last_route(self) -> None:
-        op = _make_operator(self._routing_config())
-        assert op._pick_model(16385) == "large-ctx"
+        rc = _make_routed_client(self._routing_config())
+        assert self._pick(rc, 16385) == "large-ctx"
 
     def test_overflow_to_largest(self) -> None:
-        op = _make_operator(self._routing_config())
-        model = op._pick_model(100000)
-        assert model == "large-ctx"
-        # Should have logged a warning
-        op.logger.warning.assert_not_called()  # warning is via logging, not op.logger
+        rc = _make_routed_client(self._routing_config())
+        assert self._pick(rc, 100000) == "large-ctx"
 
     def test_single_route_always_matches(self) -> None:
         cfg = ModelRoutingConfig(routes=[ModelRoute("only", 8192)])
-        op = _make_operator(cfg)
-        assert op._pick_model(1) == "only"
-        assert op._pick_model(8192) == "only"
+        rc = _make_routed_client(cfg)
+        assert self._pick(rc, 1) == "only"
+        assert self._pick(rc, 8192) == "only"
 
 
 # ---------------------------------------------------------------------------
@@ -221,28 +221,93 @@ class TestNextModel:
         )
 
     def test_returns_next_larger(self) -> None:
-        op = _make_operator(self._routing_config())
-        assert op._next_model("small-ctx") == "medium-ctx"
-        assert op._next_model("medium-ctx") == "large-ctx"
+        rc = _make_routed_client(self._routing_config())
+        assert rc.next_model("small-ctx") == "medium-ctx"
+        assert rc.next_model("medium-ctx") == "large-ctx"
 
     def test_largest_returns_none(self) -> None:
-        op = _make_operator(self._routing_config())
-        assert op._next_model("large-ctx") is None
+        rc = _make_routed_client(self._routing_config())
+        assert rc.next_model("large-ctx") is None
 
     def test_unknown_model_returns_none(self) -> None:
-        op = _make_operator(self._routing_config())
-        assert op._next_model("nonexistent") is None
-
-    def test_no_routing_returns_none(self) -> None:
-        config = ExternalLLMOperatorConfig(model="default")
-        op = ExternalLLMOperator.__new__(ExternalLLMOperator)
-        op._config = config
-        op.logger = MagicMock()
-        assert op._next_model("anything") is None
+        rc = _make_routed_client(self._routing_config())
+        assert rc.next_model("nonexistent") is None
 
 
 # ---------------------------------------------------------------------------
-# ContextLengthError detection
+# Generate with routing + fallback
+# ---------------------------------------------------------------------------
+
+
+class TestRoutedGenerate:
+    def _routing_config(self) -> ModelRoutingConfig:
+        return ModelRoutingConfig(
+            routes=[
+                ModelRoute("small-ctx", 4096),
+                ModelRoute("large-ctx", 65536),
+            ],
+            chars_per_token=4.0,
+        )
+
+    @pytest.mark.asyncio
+    async def test_auto_picks_model(self) -> None:
+        """Non-route model_id triggers automatic model selection."""
+        base = MagicMock()
+        base.generate = AsyncMock(return_value="ok")
+        rc = RoutedChatCompletionsClient(base, self._routing_config())
+
+        # Short message → should pick small-ctx
+        body = {"messages": [{"role": "user", "content": "a" * 40}], "model": "default"}
+        result = await rc.generate("default", body)
+
+        assert result == "ok"
+        call_args = base.generate.call_args
+        assert call_args[0][0] == "small-ctx"
+        assert call_args[0][1]["model"] == "small-ctx"
+
+    @pytest.mark.asyncio
+    async def test_explicit_route_model_skips_picking(self) -> None:
+        """When model_id IS a route model, use it directly without re-picking."""
+        base = MagicMock()
+        base.generate = AsyncMock(return_value="ok")
+        rc = RoutedChatCompletionsClient(base, self._routing_config())
+
+        body = {"messages": [{"role": "user", "content": "hi"}]}
+        result = await rc.generate("large-ctx", body)
+
+        assert result == "ok"
+        # Should use large-ctx as-is, not re-pick
+        assert base.generate.call_args[0][0] == "large-ctx"
+
+    @pytest.mark.asyncio
+    async def test_fallback_on_context_length_error(self) -> None:
+        """ContextLengthError on small model falls back to large model."""
+        base = MagicMock()
+        base.generate = AsyncMock(side_effect=[ContextLengthError("too long"), "fallback ok"])
+        rc = RoutedChatCompletionsClient(base, self._routing_config())
+
+        body = {"messages": [{"role": "user", "content": "hi"}], "model": "small-ctx"}
+        result = await rc.generate("small-ctx", body)
+
+        assert result == "fallback ok"
+        assert base.generate.call_count == 2
+        # Second call should be with large-ctx
+        assert base.generate.call_args[0][0] == "large-ctx"
+
+    @pytest.mark.asyncio
+    async def test_raises_when_largest_model_fails(self) -> None:
+        """ContextLengthError on the largest model propagates to caller."""
+        base = MagicMock()
+        base.generate = AsyncMock(side_effect=ContextLengthError("too long"))
+        rc = RoutedChatCompletionsClient(base, self._routing_config())
+
+        body = {"messages": [{"role": "user", "content": "hi"}], "model": "large-ctx"}
+        with pytest.raises(ContextLengthError):
+            await rc.generate("large-ctx", body)
+
+
+# ---------------------------------------------------------------------------
+# ContextLengthError
 # ---------------------------------------------------------------------------
 
 

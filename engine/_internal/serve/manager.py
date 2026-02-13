@@ -115,9 +115,7 @@ class ModelServiceManager:
             RuntimeError: If no detached serve layer is running.
         """
         try:
-            return ray.get_actor(
-                MANAGER_ACTOR_NAME, namespace=SERVE_NAMESPACE
-            )
+            return ray.get_actor(MANAGER_ACTOR_NAME, namespace=SERVE_NAMESPACE)
         except ValueError:
             raise RuntimeError(
                 "No detached serve layer found. "
@@ -253,12 +251,10 @@ class ModelServiceManager:
         tp_threshold = max_node_gpus / 2
 
         large = [
-            c for c in sorted_configs
-            if c.get_worker_resources().get("num_gpus", 0) > tp_threshold
+            c for c in sorted_configs if c.get_worker_resources().get("num_gpus", 0) > tp_threshold
         ]
         small = [
-            c for c in sorted_configs
-            if c.get_worker_resources().get("num_gpus", 0) <= tp_threshold
+            c for c in sorted_configs if c.get_worker_resources().get("num_gpus", 0) <= tp_threshold
         ]
 
         results: list[dict[str, Any]] = []
@@ -271,14 +267,11 @@ class ModelServiceManager:
         # Phase 2: small models in parallel
         if small:
             small_results = await asyncio.gather(
-                *(
-                    self._deploy_one(c, wait_ready=wait_ready, timeout=timeout)
-                    for c in small
-                ),
+                *(self._deploy_one(c, wait_ready=wait_ready, timeout=timeout) for c in small),
                 return_exceptions=True,
             )
             for item in small_results:
-                if isinstance(item, Exception):
+                if isinstance(item, BaseException):
                     logger.warning(f"Failed to deploy model: {item}")
                     results.append({"status": "error", "error": str(item)})
                 else:
@@ -288,9 +281,7 @@ class ModelServiceManager:
 
     # --- Compaction ---
 
-    async def spawn_with_compaction(
-        self, model_id: str
-    ) -> tuple[str, ray.actor.ActorHandle]:
+    async def spawn_with_compaction(self, model_id: str) -> tuple[str, ray.actor.ActorHandle]:
         """Spawn a worker with one compaction retry on failure.
 
         Compaction is coordinated entirely within the Manager:
@@ -309,10 +300,7 @@ class ModelServiceManager:
             if gpus <= 0:
                 raise
 
-            logger.warning(
-                f"Spawn failed for {model_id} ({gpus} GPUs), "
-                f"attempting compaction..."
-            )
+            logger.warning(f"Spawn failed for {model_id} ({gpus} GPUs), attempting compaction...")
 
             plan = self._allocator.plan_compaction(gpus)  # direct call
             if plan is None:
@@ -483,8 +471,4 @@ def create_manager(
     if detached:
         options["lifetime"] = "detached"
         options["namespace"] = SERVE_NAMESPACE
-    return (
-        ray.remote(ModelServiceManager)
-        .options(**options)
-        .remote(autoscale_config, detached)
-    )
+    return ray.remote(ModelServiceManager).options(**options).remote(autoscale_config, detached)

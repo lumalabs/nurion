@@ -61,9 +61,7 @@ class GPUAllocator:
         # Prune placements on dead nodes
         live = set(self._node_total)
         self._placements = {
-            wid: (nid, g)
-            for wid, (nid, g) in self._placements.items()
-            if nid in live
+            wid: (nid, g) for wid, (nid, g) in self._placements.items() if nid in live
         }
         logger.info(
             f"GPUAllocator refreshed: {len(self._node_total)} GPU node(s), "
@@ -84,10 +82,7 @@ class GPUAllocator:
         used: dict[str, float] = defaultdict(float)
         for _, (node_id, gpus) in self._placements.items():
             used[node_id] += gpus
-        return {
-            nid: total - used.get(nid, 0.0)
-            for nid, total in self._node_total.items()
-        }
+        return {nid: total - used.get(nid, 0.0) for nid, total in self._node_total.items()}
 
     def reconcile(self, active_worker_ids: set[str]) -> int:
         """Remove placements for workers that no longer exist.
@@ -132,9 +127,7 @@ class GPUAllocator:
 
         return results
 
-    def suggest_workers_to_stop(
-        self, worker_ids: list[str], count: int
-    ) -> list[str]:
+    def suggest_workers_to_stop(self, worker_ids: list[str], count: int) -> list[str]:
         """Pick which workers to stop to best consolidate free GPUs.
 
         Strategy: prefer workers on nodes with the most free GPUs (least
@@ -164,9 +157,7 @@ class GPUAllocator:
 
     # --- Compaction ---
 
-    def plan_compaction(
-        self, gpus_needed: float
-    ) -> Optional[tuple[str, list[str]]]:
+    def plan_compaction(self, gpus_needed: float) -> Optional[tuple[str, list[str]]]:
         """Find the cheapest eviction plan to free ``gpus_needed`` GPUs on one node.
 
         Returns ``(node_id, [worker_ids_to_evict])`` or ``None``.
