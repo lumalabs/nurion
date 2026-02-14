@@ -29,9 +29,9 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+import httpx
 import pytest
 import pytest_asyncio
-import ray
 
 from _internal.serve.client import ModelClient
 from _internal.serve.config import AutoscaleConfig, ModelConfig
@@ -114,6 +114,30 @@ async def manager_with_autoscale(ray_cluster_with_gpus):
 # ---------------------------------------------------------------------------
 
 
+async def _wait_all_workers_ready(manager: Any, model_id: str, timeout: float = 60.0) -> None:
+    """Wait until all workers in a pool are ready and registered with the registry.
+
+    With the fake backend, InferenceWorker polls /health every 2s, so workers
+    become ready asynchronously after deploy_model returns. After becoming ready,
+    the worker registers with the registry, so we also wait for the endpoint
+    count to match the worker count.
+    """
+    import time
+
+    pool = manager._pools[model_id]
+    expected = len(pool._workers)
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        results = await asyncio.gather(*[w.is_ready.remote() for w in pool._workers.values()])
+        if all(results):
+            # Also wait for registry to have all endpoints
+            status = await pool.get_status()
+            if len(status.get("endpoints", [])) >= expected:
+                return
+        await asyncio.sleep(1.0)
+    raise TimeoutError(f"Not all workers for {model_id} became ready within {timeout}s")
+
+
 async def _set_worker_metrics(manager: Any, model_id: str, pending: int, running: int) -> None:
     """Set load metrics on all workers of a model via the fake server.
 
@@ -187,10 +211,11 @@ class TestManagerDeploySingle:
     async def test_deploy_min_workers_respected(self, manager) -> None:
         """Deploy with min_workers=2, verify 2 endpoints appear."""
         config = _make_config("multi_worker", tp=1, min_workers=2, max_workers=4)
-        result = await manager.deploy_model(config, wait_ready=True, timeout=30.0)
+        await manager.deploy_model(config, wait_ready=True, timeout=30.0)
+        await _wait_all_workers_ready(manager, "multi_worker")
 
-        assert result["status"] == "ready"
-        assert len(result["endpoints"]) == 2
+        status = await manager._pools["multi_worker"].get_status()
+        assert len(status.get("endpoints", [])) == 2
 
     async def test_deploy_duplicate_model_raises(self, manager) -> None:
         """Deploying the same model_id twice raises an error."""
@@ -331,6 +356,7 @@ class TestClientEndpointDiscovery:
         """ModelClient discovers endpoints registered by deployed workers."""
         config = _make_config("discoverable", tp=1, min_workers=2, max_workers=2)
         await manager.deploy_model(config, wait_ready=True, timeout=30.0)
+        await _wait_all_workers_ready(manager, "discoverable")
 
         registry = manager.get_registry()
         client = ModelClient(registry, cache_ttl_seconds=0.0)
@@ -448,10 +474,7 @@ class TestManagerShutdown:
 
     async def test_shutdown_cleans_up_all_models(self, manager) -> None:
         """Deploy 3 models, shutdown, verify all gone."""
-        configs = [
-            _make_config(f"model_{i}", tp=1, min_workers=1, max_workers=1)
-            for i in range(3)
-        ]
+        configs = [_make_config(f"model_{i}", tp=1, min_workers=1, max_workers=1) for i in range(3)]
         await manager.deploy_model(configs, wait_ready=True, timeout=30.0)
 
         models = manager.list_models()
@@ -514,11 +537,12 @@ class TestMultiModelCompaction:
 
         config_a = _make_config("model_a", tp=4, min_workers=4, max_workers=4)
         await mgr.deploy_model(config_a, wait_ready=True, timeout=60.0)
+        await _wait_all_workers_ready(mgr, "model_a")
         assert await _pool_worker_count(mgr, "model_a") == 4
 
         # Create model_b pool manually (skip deploy_model to avoid auto-spawn)
         config_b = _make_config("model_b", tp=8, min_workers=1, max_workers=2)
-        pool_b = _create_empty_pool(mgr, config_b)
+        _create_empty_pool(mgr, config_b)
 
         # spawn_with_compaction: fail → plan compaction → evict → retry → succeed
         worker_id, _ = await mgr.spawn_with_compaction("model_b")
@@ -541,9 +565,9 @@ class TestMultiModelCompaction:
 
         config_tp2 = _make_config("model_tp2", tp=2, min_workers=4, max_workers=4)
         config_tp1 = _make_config("model_tp1", tp=1, min_workers=8, max_workers=8)
-        await mgr.deploy_model(
-            [config_tp2, config_tp1], wait_ready=True, timeout=60.0
-        )
+        await mgr.deploy_model([config_tp2, config_tp1], wait_ready=True, timeout=60.0)
+        await _wait_all_workers_ready(mgr, "model_tp2")
+        await _wait_all_workers_ready(mgr, "model_tp1")
 
         assert await _pool_worker_count(mgr, "model_tp2") == 4
         assert await _pool_worker_count(mgr, "model_tp1") == 8
@@ -570,6 +594,7 @@ class TestMultiModelCompaction:
 
         config_a = _make_config("fz_model_a", tp=4, min_workers=4, max_workers=4)
         await mgr.deploy_model(config_a, wait_ready=True, timeout=60.0)
+        await _wait_all_workers_ready(mgr, "fz_model_a")
 
         # Start autoscaler for model_a
         pool_a = mgr._pools["fz_model_a"]
@@ -584,9 +609,7 @@ class TestMultiModelCompaction:
         # After compaction completes, autoscaler should be unfrozen
         assert not pool_a._autoscale_frozen
 
-    async def test_undeploy_frees_gpus_for_new_large_model(
-        self, manager_for_compaction
-    ) -> None:
+    async def test_undeploy_frees_gpus_for_new_large_model(self, manager_for_compaction) -> None:
         """Undeploy to free GPUs, then deploy large model — no compaction needed."""
         mgr = manager_for_compaction
 
@@ -596,9 +619,11 @@ class TestMultiModelCompaction:
         await mgr.undeploy_model("fill_model")
 
         config_b = _make_config("large_tp8", tp=8, min_workers=2, max_workers=2)
-        result = await mgr.deploy_model(config_b, wait_ready=True, timeout=60.0)
-        assert result["status"] == "ready"
-        assert len(result["endpoints"]) == 2
+        await mgr.deploy_model(config_b, wait_ready=True, timeout=60.0)
+        await _wait_all_workers_ready(mgr, "large_tp8")
+
+        status = await mgr._pools["large_tp8"].get_status()
+        assert len(status.get("endpoints", [])) == 2
 
 
 def _create_empty_pool(manager: Any, config: ModelConfig) -> Any:
@@ -688,9 +713,7 @@ class TestMultiModelAutoscaler:
         config_tp2 = _make_config("as_tp2", tp=2, min_workers=1, max_workers=3)
         # TP=1 model uses 1 GPU per worker, max 4 workers = 4 GPUs
         config_tp1 = _make_config("as_tp1", tp=1, min_workers=1, max_workers=4)
-        await mgr.deploy_model(
-            [config_tp2, config_tp1], wait_ready=True, timeout=30.0
-        )
+        await mgr.deploy_model([config_tp2, config_tp1], wait_ready=True, timeout=30.0)
 
         # Apply heavy load to both
         await _set_worker_metrics(mgr, "as_tp2", pending=50, running=50)
