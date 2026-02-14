@@ -60,7 +60,7 @@ class LanceTable(BaseModel):
     __tablename__ = "catalog_lance_tables"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    name: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     description: Mapped[str | None] = mapped_column(String(1024), nullable=True, default=None)
     lance_path: Mapped[str] = mapped_column(String(255), nullable=False)
     lance_schema: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=None)
@@ -91,6 +91,12 @@ class LanceTable(BaseModel):
     )
 
     __table_args__ = (
+        Index(
+            "ix_catalog_lance_tables_namespace_name",
+            "namespace_id",
+            "name",
+            unique=True,
+        ),
         Index(
             "idx_catalog_lance_tables_tags",
             "tags",

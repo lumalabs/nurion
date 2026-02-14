@@ -42,14 +42,7 @@ def create_app(settings: Settings | None = None, *, skip_lifespan: bool = False)
             Useful for testing when the database is already initialized.
     """
 
-    app = FastAPI(  # noqa: FBT003 - explicit bool for clarity
-        title="Nurion Control Plane",
-        description=("Task orchestration, Kubernetes management, and data lake catalog services."),
-        version="0.1.0",
-    )
-
-    app.state.settings = settings or get_settings()
-
+    # Define lifespan context manager before creating app
     if not skip_lifespan:
 
         @asynccontextmanager
@@ -60,7 +53,24 @@ def create_app(settings: Settings | None = None, *, skip_lifespan: bool = False)
             finally:
                 await on_shutdown()
 
-        app.router.lifespan_context = lifespan
+        app = FastAPI(  # noqa: FBT003 - explicit bool for clarity
+            title="Nurion Control Plane",
+            description=(
+                "Task orchestration, Kubernetes management, and data lake catalog services."
+            ),
+            version="0.1.0",
+            lifespan=lifespan,
+        )
+    else:
+        app = FastAPI(  # noqa: FBT003 - explicit bool for clarity
+            title="Nurion Control Plane",
+            description=(
+                "Task orchestration, Kubernetes management, and data lake catalog services."
+            ),
+            version="0.1.0",
+        )
+
+    app.state.settings = settings or get_settings()
 
     register_routes(app)
 
@@ -106,3 +116,6 @@ async def on_shutdown() -> None:
     """Shutdown hook registered via lifespan."""
     logger.info("Stopping RayJob sync service...")
     await stop_sync_service()
+    
+    logger.info("Disposing database engine...")
+    await async_engine.dispose()

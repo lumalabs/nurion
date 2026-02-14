@@ -48,7 +48,7 @@ class K8sCluster(BaseModel):
 
     # Relationship to RayJobs
     rayjobs: Mapped[list[RayJob]] = relationship(
-        "RayJob", back_populates="cluster", cascade="all, delete-orphan"
+        "RayJob", back_populates="cluster"
     )
 
 

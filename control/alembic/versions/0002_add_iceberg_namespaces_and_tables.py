@@ -60,7 +60,7 @@ def upgrade() -> None:
     op.create_table(
         "catalog_iceberg_tables",
         sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
-        sa.Column("name", sa.String(length=255), nullable=False, unique=True),
+        sa.Column("name", sa.String(length=255), nullable=False, index=True),
         sa.Column("metadata_location", sa.String(length=512), nullable=False),
         sa.Column(
             "namespace_id",
@@ -83,9 +83,6 @@ def upgrade() -> None:
         ),
     )
     op.create_index(
-        "ix_catalog_iceberg_tables_name", "catalog_iceberg_tables", ["name"], unique=True
-    )
-    op.create_index(
         "ix_catalog_iceberg_tables_namespace_name",
         "catalog_iceberg_tables",
         ["namespace_id", "name"],
@@ -95,7 +92,6 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_index("ix_catalog_iceberg_tables_namespace_name", table_name="catalog_iceberg_tables")
-    op.drop_index("ix_catalog_iceberg_tables_name", table_name="catalog_iceberg_tables")
     op.drop_table("catalog_iceberg_tables")
 
     op.drop_index("ix_catalog_iceberg_namespaces_name", table_name="catalog_iceberg_namespaces")

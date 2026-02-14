@@ -58,7 +58,7 @@ def upgrade() -> None:
     op.create_table(
         "catalog_lance_tables",
         sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
-        sa.Column("name", sa.String(length=255), nullable=False, unique=True),
+        sa.Column("name", sa.String(length=255), nullable=False, index=True),
         sa.Column("description", sa.String(length=1024), nullable=True),
         sa.Column("lance_path", sa.String(length=255), nullable=False),
         sa.Column("lance_schema", sa.JSON(), nullable=True),
@@ -87,7 +87,12 @@ def upgrade() -> None:
             server_default=sa.text("CURRENT_TIMESTAMP"),
         ),
     )
-    op.create_index("ix_catalog_lance_tables_name", "catalog_lance_tables", ["name"], unique=True)
+    op.create_index(
+        "ix_catalog_lance_tables_namespace_name",
+        "catalog_lance_tables",
+        ["namespace_id", "name"],
+        unique=True,
+    )
     op.create_index(
         "idx_catalog_lance_tables_tags",
         "catalog_lance_tables",
@@ -105,7 +110,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_index("idx_catalog_lance_tables_custom_values", table_name="catalog_lance_tables")
     op.drop_index("idx_catalog_lance_tables_tags", table_name="catalog_lance_tables")
-    op.drop_index("ix_catalog_lance_tables_name", table_name="catalog_lance_tables")
+    op.drop_index("ix_catalog_lance_tables_namespace_name", table_name="catalog_lance_tables")
     op.drop_table("catalog_lance_tables")
 
     op.drop_index("ix_catalog_namespaces_name", table_name="catalog_namespaces")
