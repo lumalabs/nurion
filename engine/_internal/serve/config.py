@@ -153,7 +153,7 @@ class ModelConfig:
             }
             if self.quantization:
                 kwargs["quantization"] = self.quantization
-        else:  # sglang
+        elif self.backend == "sglang":
             kwargs = {
                 "model_path": self.model_source,
                 "tp_size": self.tensor_parallel_size,
@@ -161,6 +161,8 @@ class ModelConfig:
             }
             if self.quantization:
                 kwargs["quantization"] = self.quantization
+        else:  # fake
+            kwargs = {}
 
         kwargs.update(self.extra_engine_kwargs)
         return kwargs
