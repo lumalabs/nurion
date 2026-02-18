@@ -458,12 +458,12 @@ async def count_table_rows(
             table_info.lance_path, table_info.storage_options
         )
         dataset = lance.dataset(normalized_path, storage_options=storage_options)
-        row_count = dataset.count_rows()
 
         if request.filter:
-            filtered_count = len(dataset.to_table(filter=request.filter))
+            filtered_count = dataset.count_rows(filter=request.filter)
             return CountTableRowsResponse(count=filtered_count)
 
+        row_count = dataset.count_rows()
         return CountTableRowsResponse(count=row_count)
     except Exception as exc:  # pragma: no cover
         logger.warning("Could not get fresh row count for table '%s': %s", id, exc)
