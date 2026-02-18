@@ -108,14 +108,14 @@ def create_webui_app(
         1,
     )
     # Rewrite relative asset paths to absolute so deep routes work
-    _spa_html = _spa_html.replace('"./assets/', '"/assets/')
-    _spa_html = _spa_html.replace("'./assets/", "'/assets/")
+    _spa_html = _spa_html.replace('"./assets/', f'"{base_path}/assets/')
+    _spa_html = _spa_html.replace("'./assets/", f"'{base_path}/assets/")
 
     # Mount Vite assets directory
     spa_assets = SPA_DIST_DIR / "assets"
     if spa_assets.exists():
         app.mount(
-            "/assets",
+            f"{base_path}/assets",
             StaticFiles(directory=str(spa_assets)),
             name="spa-assets",
         )
