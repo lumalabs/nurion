@@ -461,6 +461,14 @@ class ModelServiceManager:
             except Exception as e:
                 logger.warning(f"Error undeploying {model_id}: {e}")
 
+        # Stop state writer
+        if self._state_writer is not None:
+            try:
+                self._state_writer.stop()
+                logger.info("State writer stopped")
+            except Exception as e:
+                logger.warning(f"Error stopping state writer: {e}")
+
         # Kill registry
         try:
             ray.kill(self._registry)

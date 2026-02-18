@@ -43,7 +43,7 @@ from _internal.core.split_payload_store import SplitPayloadStore
 from _internal.core.stage_worker import StageWorker
 from _internal.queue import WorkQueueQueueClient
 from _internal.utils.logging import create_ray_logger
-from _internal.webui.state.schema import encode_json, job_namespace, stage_key, worker_key
+from _internal.webui.state.schema import decode_json, encode_json, job_namespace, stage_key, worker_key
 
 if TYPE_CHECKING:
     from _internal.core.stage import Stage, StageRuntime
@@ -380,6 +380,18 @@ class StageMaster:
             data["start_time"] = time.time()
         if status in ("COMPLETED", "FAILED", "STOPPED"):
             data["end_time"] = time.time()
+            try:
+                existing = self._queue_client.state_get(
+                    job_namespace(self.job_id),
+                    [worker_key(self.stage_id, worker_id)],
+                )
+                key = worker_key(self.stage_id, worker_id)
+                if key in existing:
+                    prev_data = decode_json(existing[key])
+                    if "start_time" in prev_data:
+                        data["start_time"] = prev_data["start_time"]
+            except Exception as e:
+                self.logger.debug(f"Failed to read previous worker state: {e}")
         data.update(extra)
         try:
             self._queue_client.state_put(
