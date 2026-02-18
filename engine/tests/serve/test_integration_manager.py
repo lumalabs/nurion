@@ -96,7 +96,7 @@ async def manager_with_autoscale(ray_cluster_with_gpus):
         enabled=True,
         check_interval_seconds=0.5,
         scale_up_threshold=5,
-        scale_down_idle_seconds=2.0,
+        scale_down_idle_seconds=0.5,
         cooldown_seconds=1.0,
         max_scale_step=2,
     )
@@ -763,9 +763,11 @@ class TestMultiModelAutoscaler:
         config_tp1 = _make_config("as_tp1", tp=1, min_workers=1, max_workers=4)
         await mgr.deploy_model([config_tp2, config_tp1], wait_ready=True, timeout=30.0)
 
-        # Apply heavy load to both
-        await _set_worker_metrics(mgr, "as_tp2", pending=50, running=50)
-        await _set_worker_metrics(mgr, "as_tp1", pending=50, running=50)
+        # Apply heavy load to both (parallel to share one heartbeat wait)
+        await asyncio.gather(
+            _set_worker_metrics(mgr, "as_tp2", pending=50, running=50),
+            _set_worker_metrics(mgr, "as_tp1", pending=50, running=50),
+        )
 
         # Wait until at least one model has scaled up (then check both respect max_workers)
         deadline = asyncio.get_event_loop().time() + 15.0
@@ -797,9 +799,11 @@ class TestMultiModelAutoscaler:
         # Freeze model_a
         mgr.freeze_model("frozen_a")
 
-        # Apply load to both (frozen model still receives load metrics)
-        await _set_worker_metrics(mgr, "frozen_a", pending=30, running=30)
-        await _set_worker_metrics(mgr, "active_b", pending=30, running=30)
+        # Apply load to both (parallel to share one heartbeat wait)
+        await asyncio.gather(
+            _set_worker_metrics(mgr, "frozen_a", pending=30, running=30),
+            _set_worker_metrics(mgr, "active_b", pending=30, running=30),
+        )
 
         # Wait until active_b has scaled up, then verify frozen_a is unchanged
         await _wait_for_pool_worker_count(mgr, "active_b", lambda n: n > 1)
