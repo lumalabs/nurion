@@ -40,14 +40,3 @@ async def list_serve_workers(
     """List InferenceWorker lifecycle status."""
     storage = request.app.state.storage
     return storage.list_serve_workers(model_id=model_id, limit=limit)
-
-
-@router.get("/serve/events")
-async def list_serve_events(
-    request: Request,
-    model_id: Optional[str] = Query(None),
-    limit: int = Query(100, ge=1, le=10000),
-) -> List[Dict[str, Any]]:
-    """List serve event history."""
-    storage = request.app.state.storage
-    return storage.list_serve_events(model_id=model_id, limit=limit)

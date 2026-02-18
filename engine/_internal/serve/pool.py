@@ -260,15 +260,19 @@ class ModelPool:
         start = time.time()
         while time.time() - start < timeout:
             all_failed = True
+            at_least_one_ready = False
             for wid, worker in self._workers.items():
                 try:
                     if await worker.is_ready.remote():
                         self._write_serve_worker_state(wid, "READY")
-                        return True
+                        at_least_one_ready = True
                     if not await worker.is_failed.remote():
                         all_failed = False
                 except Exception:
                     pass  # Actor dead — counts as failed
+
+            if at_least_one_ready:
+                return True
 
             if all_failed and self._workers:
                 logger.error(

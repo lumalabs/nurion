@@ -308,20 +308,3 @@ class JobStateManager:
                 continue
         workers.sort(key=lambda x: x.get("timestamp", 0), reverse=True)
         return workers[:limit]
-
-    def list_serve_events(
-        self,
-        model_id: Optional[str] = None,
-        limit: int = 100,
-    ) -> List[Dict[str, Any]]:
-        """List serve events from serve namespace."""
-        prefix = f"event:{model_id}:" if model_id else "event:"
-        entries = self._storage.state_scan_prefix(serve_namespace(), prefix=prefix, limit=0)
-        events: List[Dict[str, Any]] = []
-        for entry in entries:
-            try:
-                events.append(decode_json(entry["value"]))
-            except Exception:
-                continue
-        events.sort(key=lambda x: x.get("timestamp", 0), reverse=True)
-        return events[:limit]

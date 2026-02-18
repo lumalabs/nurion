@@ -285,6 +285,7 @@ class StageMaster:
                         if worker_id is None:
                             await asyncio.sleep(0.5)
                             continue
+                        self._write_worker_state(worker_id, "RUNNING")
                     else:
                         self._finished = True
                         break

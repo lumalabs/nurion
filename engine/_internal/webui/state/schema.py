@@ -82,10 +82,6 @@ def serve_worker_key(model_id: str, worker_id: str) -> str:
     return f"worker:{model_id}:{worker_id}"
 
 
-def serve_event_key(model_id: str, ts_ns: int, worker_id: str) -> str:
-    return f"event:{model_id}:{ts_ns}:{worker_id}"
-
-
 def encode_json(data: Dict[str, Any]) -> bytes:
     return json.dumps(data, separators=(",", ":"), sort_keys=False).encode("utf-8")
 
