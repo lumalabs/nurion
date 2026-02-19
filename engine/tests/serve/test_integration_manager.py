@@ -138,40 +138,6 @@ async def _wait_all_workers_ready(manager: Any, model_id: str, timeout: float = 
     raise TimeoutError(f"Not all workers for {model_id} became ready within {timeout}s")
 
 
-async def _set_worker_metrics(
-    manager: Any,
-    model_id: str,
-    pending: int,
-    running: int,
-    timeout: float = 10.0,
-) -> None:
-    """Set load metrics on all workers of a model via the fake server.
-
-    POSTs to the fake server's ``/internal/set_metrics`` endpoint via
-    ``InferenceWorker.set_test_metrics()``. Then polls until at least one
-    heartbeat cycle has propagated the metrics to the registry.
-    """
-    pool = manager._pools[model_id]
-    tasks = [w.set_test_metrics.remote(pending, running) for w in pool._workers.values()]
-    await asyncio.gather(*tasks)
-    # Poll until the registry reflects the updated metrics (propagated via heartbeat)
-    num_workers = len(pool._workers)
-    expected_pending = pending * num_workers
-    expected_running = running * num_workers
-    deadline = asyncio.get_event_loop().time() + timeout
-    while asyncio.get_event_loop().time() < deadline:
-        status = await pool.get_status()
-        if (
-            status.get("total_pending", -1) == expected_pending
-            and status.get("total_running", -1) == expected_running
-        ):
-            return
-        await asyncio.sleep(0.1)
-    raise TimeoutError(
-        f"Metrics not propagated for {model_id} within {timeout}s "
-        f"(expected pending={expected_pending}, running={expected_running})"
-    )
-
 
 def _make_config(
     model_id: str = "test_model",
@@ -706,6 +672,66 @@ async def _wait_for_pool_worker_count(
 class TestMultiModelAutoscaler:
     """Autoscaler with multiple models deployed — each scales independently."""
 
+    @staticmethod
+    async def _set_pool_metrics(
+        manager: Any,
+        model_id: str,
+        pending: int,
+        running: int,
+        timeout: float = 10.0,
+    ) -> None:
+        """Inject fake load metrics into every worker of a pool and wait for
+        the registry to reflect the new values.
+
+        POSTs directly to each worker's ``/internal/set_metrics`` endpoint
+        (fake-server HTTP API) after all workers are ready, then polls until
+        the registry's aggregated totals match.
+        """
+        pool = manager._pools[model_id]
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+
+        # Wait until every worker is ready and its endpoint is registered.
+        while loop.time() < deadline:
+            status = await pool.get_status()
+            total = status.get("total_workers", 0)
+            if total > 0 and status.get("ready_workers", 0) == total:
+                break
+            await asyncio.sleep(0.1)
+        else:
+            raise TimeoutError(
+                f"Workers for {model_id} did not become ready within {timeout}s"
+            )
+
+        # POST directly to the fake server's private /internal/set_metrics endpoint.
+        endpoints = status.get("endpoints", [])
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            await asyncio.gather(
+                *[
+                    client.post(
+                        f"{ep}/internal/set_metrics",
+                        json={"pending": pending, "running": running},
+                    )
+                    for ep in endpoints
+                ]
+            )
+
+        # Poll until the registry reflects the injected metrics.
+        expected_pending = pending * len(endpoints)
+        expected_running = running * len(endpoints)
+        while loop.time() < deadline:
+            status = await pool.get_status()
+            if (
+                status.get("total_pending", -1) == expected_pending
+                and status.get("total_running", -1) == expected_running
+            ):
+                return
+            await asyncio.sleep(0.1)
+        raise TimeoutError(
+            f"Metrics not propagated for {model_id} within {timeout}s "
+            f"(expected pending={expected_pending}, running={expected_running})"
+        )
+
     async def test_independent_scale_up_under_load(self, manager_with_autoscale) -> None:
         """Deploy two models. Apply load to one, verify only that one scales up."""
         mgr = manager_with_autoscale
@@ -715,7 +741,7 @@ class TestMultiModelAutoscaler:
         await mgr.deploy_model([config_a, config_b], wait_ready=True, timeout=30.0)
 
         # Inject high load on model_a only (propagated via heartbeat)
-        await _set_worker_metrics(mgr, "auto_a", pending=20, running=20)
+        await self._set_pool_metrics(mgr, "auto_a", pending=20, running=20)
 
         # Wait for autoscaler to act
         await _wait_for_pool_worker_count(mgr, "auto_a", lambda n: n > 1)
@@ -734,14 +760,14 @@ class TestMultiModelAutoscaler:
         await mgr.deploy_model(config, wait_ready=True, timeout=30.0)
 
         # Inject high load → trigger scale up
-        await _set_worker_metrics(mgr, "scaledown_model", pending=30, running=30)
+        await self._set_pool_metrics(mgr, "scaledown_model", pending=30, running=30)
 
         await _wait_for_pool_worker_count(mgr, "scaledown_model", lambda n: n > 1)
         count_after_load = await _pool_worker_count(mgr, "scaledown_model")
         assert count_after_load > 1, f"Should have scaled up, got {count_after_load}"
 
         # Remove all load → trigger scale down after idle period
-        await _set_worker_metrics(mgr, "scaledown_model", pending=0, running=0)
+        await self._set_pool_metrics(mgr, "scaledown_model", pending=0, running=0)
 
         await _wait_for_pool_worker_count(
             mgr, "scaledown_model", lambda n: n < count_after_load, timeout=15.0
@@ -765,8 +791,8 @@ class TestMultiModelAutoscaler:
 
         # Apply heavy load to both (parallel to share one heartbeat wait)
         await asyncio.gather(
-            _set_worker_metrics(mgr, "as_tp2", pending=50, running=50),
-            _set_worker_metrics(mgr, "as_tp1", pending=50, running=50),
+            self._set_pool_metrics(mgr, "as_tp2", pending=50, running=50),
+            self._set_pool_metrics(mgr, "as_tp1", pending=50, running=50),
         )
 
         # Wait until at least one model has scaled up (then check both respect max_workers)
@@ -801,8 +827,8 @@ class TestMultiModelAutoscaler:
 
         # Apply load to both (parallel to share one heartbeat wait)
         await asyncio.gather(
-            _set_worker_metrics(mgr, "frozen_a", pending=30, running=30),
-            _set_worker_metrics(mgr, "active_b", pending=30, running=30),
+            self._set_pool_metrics(mgr, "frozen_a", pending=30, running=30),
+            self._set_pool_metrics(mgr, "active_b", pending=30, running=30),
         )
 
         # Wait until active_b has scaled up, then verify frozen_a is unchanged
