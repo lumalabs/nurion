@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # update-claude-memory.sh
-# 更新 .claude/memory/recent-changes.md
-# 用法：
-#   手动运行：bash scripts/update-claude-memory.sh
-#   由 Claude Code PostToolUse hook 自动调用
+# Regenerates .claude/memory/recent-changes.md from git state.
+# Usage:
+#   Manual:  bash scripts/update-claude-memory.sh
+#   Auto:    triggered by Claude Code PostToolUse hook after every Edit/Write
 
 set -euo pipefail
 
@@ -14,42 +14,42 @@ OUTPUT="$MEMORY_DIR/recent-changes.md"
 mkdir -p "$MEMORY_DIR"
 
 {
-  echo "# 最近变更记录"
+  echo "# Recent Changes"
   echo ""
-  echo "> 自动生成，每次代码变更后更新。运行 \`scripts/update-claude-memory.sh\` 手动刷新。"
-  echo "> 最后更新：$(date '+%Y-%m-%d %H:%M:%S')"
+  echo "> Auto-generated — do not edit manually. Run \`scripts/update-claude-memory.sh\` to refresh."
+  echo "> Last updated: $(date '+%Y-%m-%d %H:%M:%S')"
   echo ""
 
-  echo "## 最近 Git 提交（最新在前）"
+  echo "## Recent Git Commits (newest first)"
   echo ""
   echo '```'
   git -C "$REPO_ROOT" log --oneline -20 2>/dev/null || echo "(no commits yet)"
   echo '```'
   echo ""
 
-  echo "## 工作区未提交变更"
+  echo "## Uncommitted Workspace Changes"
   echo ""
   STAGED=$(git -C "$REPO_ROOT" diff --cached --name-only 2>/dev/null)
   UNSTAGED=$(git -C "$REPO_ROOT" diff --name-only 2>/dev/null)
   UNTRACKED=$(git -C "$REPO_ROOT" ls-files --others --exclude-standard 2>/dev/null)
 
   if [ -z "$STAGED" ] && [ -z "$UNSTAGED" ] && [ -z "$UNTRACKED" ]; then
-    echo "_工作区干净，无未提交变更。_"
+    echo "_Working tree is clean — no uncommitted changes._"
   else
     if [ -n "$STAGED" ]; then
-      echo "### 已暂存（待提交）"
+      echo "### Staged (ready to commit)"
       echo '```'
       echo "$STAGED"
       echo '```'
     fi
     if [ -n "$UNSTAGED" ]; then
-      echo "### 已修改（未暂存）"
+      echo "### Modified (not staged)"
       echo '```'
       echo "$UNSTAGED"
       echo '```'
     fi
     if [ -n "$UNTRACKED" ]; then
-      echo "### 新文件（未跟踪）"
+      echo "### New files (untracked)"
       echo '```'
       echo "$UNTRACKED"
       echo '```'
@@ -57,7 +57,7 @@ mkdir -p "$MEMORY_DIR"
   fi
   echo ""
 
-  echo "## 最近 7 天修改的源文件"
+  echo "## Source Files Changed in the Last 7 Days"
   echo ""
   echo '```'
   git -C "$REPO_ROOT" log \
@@ -69,9 +69,9 @@ mkdir -p "$MEMORY_DIR"
     | sort -u \
     | grep -v '^$' \
     | head -40 \
-    || echo "(无)"
+    || echo "(none)"
   echo '```'
 
 } > "$OUTPUT"
 
-echo "已更新：$OUTPUT"
+echo "Updated: $OUTPUT"

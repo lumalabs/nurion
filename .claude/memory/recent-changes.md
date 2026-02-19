@@ -1,11 +1,12 @@
-# 最近变更记录
+# Recent Changes
 
-> 自动生成，每次代码变更后更新。运行 `scripts/update-claude-memory.sh` 手动刷新。
-> 最后更新：2026-02-19 08:02:48
+> Auto-generated — do not edit manually. Run `scripts/update-claude-memory.sh` to refresh.
+> Last updated: 2026-02-19 08:22:44
 
-## 最近 Git 提交（最新在前）
+## Recent Git Commits (newest first)
 
 ```
+8dd98fd docs: add hierarchical Claude Code index and memory system
 4d114ac chore: upgrade pyiceberg to 0.11.0 (#54)
 3a10aed refactor: new webui (#53)
 c247d0f chore: refactor webui API (#52)
@@ -25,17 +26,11 @@ bf78e5f feat: redesign backpressure & webui (#38)
 c36be4a refactor: remove outdated code (#37)
 b9efccb chore: optimize claim API (#36)
 893f448 feat: use new queue implement replace tansu (#35)
-f7de8ef fix: partition assign error in multi workers (#34)
 ```
 
-## 工作区未提交变更
+## Uncommitted Workspace Changes
 
-### 已修改（未暂存）
-```
-.claude/settings.json
-CLAUDE.md
-```
-### 新文件（未跟踪）
+### Modified (not staged)
 ```
 .claude/memory/control-index.md
 .claude/memory/engine-index.md
@@ -44,7 +39,7 @@ CLAUDE.md
 scripts/update-claude-memory.sh
 ```
 
-## 最近 7 天修改的源文件
+## Source Files Changed in the Last 7 Days
 
 ```
 .agents/skills/webapp-testing/examples/console_logging.py

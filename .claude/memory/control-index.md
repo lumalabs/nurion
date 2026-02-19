@@ -1,97 +1,97 @@
-# Control 模块索引
+# Control Plane Module Index
 
-> 自动维护文件，勿手动编辑。运行 `scripts/update-claude-memory.sh` 刷新。
-> 源码根目录：`control/`，主应用：`control/control/`
+> Auto-maintained — do not edit manually. Run `scripts/update-claude-memory.sh` to refresh.
+> Source root: `control/`, main app: `control/control/`
 
 ---
 
-## 架构概览
+## Architecture Overview
 
 ```
 control/
-├── control/app.py          # FastAPI 应用工厂 create_app()
-├── control/api/routes/     # REST API 路由
-├── control/models/         # SQLAlchemy ORM 模型
-├── control/schemas/        # Pydantic 请求/响应 Schema
-├── control/services/       # 业务逻辑
-├── control/core/           # 配置和工具
-├── alembic/                # 数据库迁移
-└── tests/                  # 单元测试
+├── control/app.py          # FastAPI application factory: create_app()
+├── control/api/routes/     # REST API routes
+├── control/models/         # SQLAlchemy ORM models
+├── control/schemas/        # Pydantic request/response schemas
+├── control/services/       # Business logic
+├── control/core/           # Configuration and utilities
+├── alembic/                # Database migrations
+└── tests/                  # Unit tests
 ```
 
 ---
 
-## API 路由 (`control/api/routes/`)
+## API Routes (`control/api/routes/`)
 
-| 文件 | 前缀 | 说明 |
-|------|------|------|
-| `health.py` | `/health` | 健康检查 |
-| `k8s.py` | `/k8s` | Kubernetes 集群 CRUD |
-| `iceberg_catalog.py` | `/iceberg` | Iceberg 目录管理 |
-| `lance_namespace.py` | `/lance` | Lance 命名空间管理 |
-
----
-
-## ORM 模型 (`control/models/`)
-
-| 文件 | 模型类 | 说明 |
-|------|--------|------|
-| `base.py` | `Base` | SQLAlchemy 声明式基类 |
-| `k8s.py` | `K8sCluster` | Kubernetes 集群记录 |
-| `iceberg.py` | `IcebergCatalog`, `IcebergNamespace` | Iceberg 元数据 |
-| `lance.py` | `LanceNamespace` | Lance 命名空间记录 |
+| File | Prefix | Notes |
+|------|--------|-------|
+| `health.py` | `/health` | Health check |
+| `k8s.py` | `/k8s` | Kubernetes cluster CRUD |
+| `iceberg_catalog.py` | `/iceberg` | Iceberg catalog management |
+| `lance_namespace.py` | `/lance` | Lance namespace management |
 
 ---
 
-## Pydantic Schema (`control/schemas/`)
+## ORM Models (`control/models/`)
 
-| 文件 | Schema 类 | 说明 |
-|------|-----------|------|
-| `k8s.py` | `K8sClusterCreate`, `K8sClusterResponse` 等 | K8s 请求/响应 |
-| `iceberg.py` | `IcebergCatalogCreate`, `IcebergCatalogResponse` 等 | Iceberg 请求/响应 |
-| `lance.py` | `LanceNamespaceCreate`, `LanceNamespaceResponse` 等 | Lance 请求/响应 |
-
----
-
-## 服务层 (`control/services/`)
-
-| 文件 | 关键类/函数 | 说明 |
-|------|------------|------|
-| `k8s_cluster_service.py` | `K8sClusterService` | Kubernetes 集群 CRUD |
-| `k8s_connection.py` | `K8sConnection` | Kubernetes 连接管理 |
-| `rayjob_service.py` | `RayJobService` | Ray 作业提交/管理 |
-| `rayjob_sync_service.py` | `RayJobSyncService` | Ray 作业状态同步 |
-| `iceberg_catalog_service.py` | `IcebergCatalogService` | Iceberg 目录 CRUD |
-| `lance_table_service.py` | `LanceTableService` | Lance 表管理 |
-| `localqueue_service.py` | `LocalQueueService` | 本地队列服务 |
+| File | Model Class | Notes |
+|------|------------|-------|
+| `base.py` | `Base` | SQLAlchemy declarative base |
+| `k8s.py` | `K8sCluster` | Kubernetes cluster record |
+| `iceberg.py` | `IcebergCatalog`, `IcebergNamespace` | Iceberg metadata |
+| `lance.py` | `LanceNamespace` | Lance namespace record |
 
 ---
 
-## 核心配置 (`control/core/`)
+## Pydantic Schemas (`control/schemas/`)
 
-| 文件 | 说明 |
-|------|------|
-| `settings.py` | `Settings`（环境变量配置，使用 pydantic-settings） |
-| `store.py` | 存储接口抽象 |
-
----
-
-## 数据库
-
-| 文件 | 说明 |
-|------|------|
-| `control/db/session.py` | `AsyncSession` 工厂，`get_db()` 依赖注入 |
-| `alembic/env.py` | Alembic 迁移环境 |
-| `alembic/versions/` | 迁移脚本 |
+| File | Schema Classes | Notes |
+|------|---------------|-------|
+| `k8s.py` | `K8sClusterCreate`, `K8sClusterResponse`, etc. | K8s request/response |
+| `iceberg.py` | `IcebergCatalogCreate`, `IcebergCatalogResponse`, etc. | Iceberg request/response |
+| `lance.py` | `LanceNamespaceCreate`, `LanceNamespaceResponse`, etc. | Lance request/response |
 
 ---
 
-## 开发命令
+## Services (`control/services/`)
+
+| File | Key Class | Notes |
+|------|-----------|-------|
+| `k8s_cluster_service.py` | `K8sClusterService` | Kubernetes cluster CRUD |
+| `k8s_connection.py` | `K8sConnection` | Kubernetes connection management |
+| `rayjob_service.py` | `RayJobService` | Ray job submission and management |
+| `rayjob_sync_service.py` | `RayJobSyncService` | Ray job state synchronization |
+| `iceberg_catalog_service.py` | `IcebergCatalogService` | Iceberg catalog CRUD |
+| `lance_table_service.py` | `LanceTableService` | Lance table management |
+| `localqueue_service.py` | `LocalQueueService` | Local queue service |
+
+---
+
+## Core Config (`control/core/`)
+
+| File | Notes |
+|------|-------|
+| `settings.py` | `Settings` — environment variable config via pydantic-settings |
+| `store.py` | Storage interface abstraction |
+
+---
+
+## Database
+
+| File | Notes |
+|------|-------|
+| `control/db/session.py` | `AsyncSession` factory, `get_db()` dependency injection |
+| `alembic/env.py` | Alembic migration environment |
+| `alembic/versions/` | Migration scripts |
+
+---
+
+## Dev Commands
 
 ```bash
 cd control
-uv run uvicorn control.app:create_app --factory --reload  # 启动开发服务器
-uv run pytest tests/ -v --cov=control                    # 运行测试
-alembic revision --autogenerate -m "描述"                 # 生成迁移
-alembic upgrade head                                      # 应用迁移
+uv run uvicorn control.app:create_app --factory --reload  # start dev server
+uv run pytest tests/ -v --cov=control                    # run tests
+alembic revision --autogenerate -m "description"          # generate migration
+alembic upgrade head                                      # apply migrations
 ```
