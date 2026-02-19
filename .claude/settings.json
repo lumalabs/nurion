@@ -15,5 +15,18 @@
       "Bash(cargo doc:*)",
       "WebSearch"
     ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash /home/user/nurion/scripts/update-claude-memory.sh"
+          }
+        ]
+      }
+    ]
   }
 }
