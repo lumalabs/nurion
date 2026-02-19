@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from alembic import context
 from control.core.settings import get_settings
-from control.models import iceberg, lance  # noqa: F401 - ensure models are imported
+from control.models import iceberg, k8s, lance  # noqa: F401 - ensure models are imported
 from control.models.base import BaseModel
 from control.models.iceberg import IcebergNamespace, IcebergTable  # noqa: F401
 
