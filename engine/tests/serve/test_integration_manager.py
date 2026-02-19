@@ -138,7 +138,6 @@ async def _wait_all_workers_ready(manager: Any, model_id: str, timeout: float = 
     raise TimeoutError(f"Not all workers for {model_id} became ready within {timeout}s")
 
 
-
 def _make_config(
     model_id: str = "test_model",
     tp: int = 1,
@@ -699,9 +698,7 @@ class TestMultiModelAutoscaler:
                 break
             await asyncio.sleep(0.1)
         else:
-            raise TimeoutError(
-                f"Workers for {model_id} did not become ready within {timeout}s"
-            )
+            raise TimeoutError(f"Workers for {model_id} did not become ready within {timeout}s")
 
         # POST directly to the fake server's private /internal/set_metrics endpoint.
         endpoints = status.get("endpoints", [])
