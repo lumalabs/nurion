@@ -45,6 +45,8 @@ from typing import (
 import asyncio
 import logging
 
+import pyarrow as pa
+
 from _internal.core.models import RawOutputBytes, SplitPayload, Split
 
 # All supported return types for process_split
@@ -227,6 +229,17 @@ class OperatorConfig(ABC):
         Default: 1 (no merge, process each message individually).
         """
         return 1
+
+    def get_source_schema(self) -> Optional[pa.Schema]:
+        """Return the Arrow schema of data this source produces.
+
+        Override in source configs to enable schema validation for Union and
+        Anti-Join operations. Reads only metadata (no data scan).
+
+        Returns:
+            The output schema, or None if unknown / not applicable.
+        """
+        return None
 
     def create_source(self) -> Optional["SourceStrategy"]:
         """Create a source strategy for this operator.
