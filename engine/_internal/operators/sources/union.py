@@ -36,13 +36,17 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Iterator, List, Optional
+from typing import TYPE_CHECKING, Iterator, List, Optional
 
 import pyarrow as pa
 
-from _internal.core.models import Split
-from _internal.core.operator import OperatorConfig
+from _internal.core.models import Split, SplitPayload
+from _internal.core.operator import OperatorConfig, OperatorRuntime
 from _internal.core.source import SplitPlanner
+from _internal.core.source_operator import SourceOperator
+
+if TYPE_CHECKING:
+    from _internal.core.split_payload_store import SplitPayloadStore
 
 
 @dataclass
@@ -81,6 +85,15 @@ class UnionSourceConfig(OperatorConfig):
                 )
             planners.append((src, planner))
         return UnionSplitPlanner(planners)
+
+    def prepare(self, payload_store: "SplitPayloadStore") -> None:
+        """Propagate prepare() to all nested source configs."""
+        for src in self.sources:
+            src.prepare(payload_store)
+
+    def setup(self, runtime: OperatorRuntime) -> "UnionSourceOperator":
+        """Create the worker-side operator that dispatches reads to the right sub-source."""
+        return UnionSourceOperator(config=self, runtime=runtime)
 
 
 class UnionSplitPlanner:
@@ -154,6 +167,58 @@ class UnionSplitPlanner:
                 )
 
         self._logger.debug(
-            f"UnionSplitPlanner: schema validation passed for "
-            f"{len(self._planners)} sources"
+            f"UnionSplitPlanner: schema validation passed for {len(self._planners)} sources"
         )
+
+
+def _parse_union_source_idx(split_id: str) -> int:
+    """Parse the source index from a union split ID.
+
+    Union split IDs have the format ``union_{source_idx}_split_{global_idx}``.
+    For example ``union_2_split_15`` → 2.
+
+    Raises:
+        ValueError: If the split_id does not match the expected format.
+    """
+    try:
+        after_prefix = split_id[len("union_") :]  # "2_split_15"
+        source_idx_str = after_prefix.split("_split_")[0]  # "2"
+        return int(source_idx_str)
+    except (IndexError, ValueError) as exc:
+        raise ValueError(
+            f"Cannot parse source index from union split_id '{split_id}'. "
+            f"Expected format: 'union_{{source_idx}}_split_{{global_idx}}'."
+        ) from exc
+
+
+class UnionSourceOperator(SourceOperator):
+    """Worker-side operator that dispatches reads to the correct sub-source operator.
+
+    Each split produced by ``UnionSplitPlanner`` encodes the originating
+    sub-source index in its split_id (``union_{source_idx}_split_{global_idx}``).
+    This operator parses that index and forwards the read to the corresponding
+    inner operator, so that each sub-source's serialization logic (e.g. Lance
+    fragment reading) is used transparently.
+    """
+
+    def __init__(self, config: UnionSourceConfig, runtime: OperatorRuntime) -> None:
+        super().__init__(config, runtime)
+        inner_ops = [src.setup(runtime) for src in config.sources]
+        assert all(isinstance(op, SourceOperator) for op in inner_ops), (
+            "All sub-sources in UnionSourceConfig must produce SourceOperator instances"
+        )
+        self._inner_operators: List[SourceOperator] = inner_ops  # type: ignore[assignment]
+
+    def read(self, split: Split) -> Optional[SplitPayload]:
+        """Dispatch the read to the sub-source operator identified by the split ID."""
+        source_idx = _parse_union_source_idx(split.split_id)
+        if source_idx >= len(self._inner_operators):
+            raise ValueError(
+                f"source_idx {source_idx} is out of range; "
+                f"UnionSourceConfig has {len(self._inner_operators)} sources."
+            )
+        return self._inner_operators[source_idx].read(split)
+
+    def close(self) -> None:
+        for op in self._inner_operators:
+            op.close()

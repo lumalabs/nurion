@@ -45,15 +45,19 @@ pytestmark = pytest.mark.integration
 # Fixtures
 # =============================================================================
 
-_SCHEMA_AB = pa.schema([
-    pa.field("id", pa.int64()),
-    pa.field("value", pa.string()),
-])
+_SCHEMA_AB = pa.schema(
+    [
+        pa.field("id", pa.int64()),
+        pa.field("value", pa.string()),
+    ]
+)
 
-_SCHEMA_DIFFERENT = pa.schema([
-    pa.field("id", pa.int64()),
-    pa.field("label", pa.string()),  # different column name
-])
+_SCHEMA_DIFFERENT = pa.schema(
+    [
+        pa.field("id", pa.int64()),
+        pa.field("label", pa.string()),  # different column name
+    ]
+)
 
 
 def _write_lance(path: Path, rows: list[dict], schema: pa.Schema) -> str:
@@ -170,8 +174,8 @@ class TestUnionLanceIntegration:
             ]
         )
         output_size = await _run_source_stage(config, workqueue_backend)
-        # 30 rows / 10 = 3 splits from A, 20 rows / 10 = 2 splits from B → 5 messages
-        assert output_size >= 1, "Source stage should have produced output messages"
+        # A: 30 rows / 10 = 3 splits; B: 20 rows / 10 = 2 splits → 5 messages
+        assert output_size == 5
 
     @pytest.mark.asyncio
     async def test_union_three_sources(
@@ -191,7 +195,8 @@ class TestUnionLanceIntegration:
             ]
         )
         output_size = await _run_source_stage(config, workqueue_backend)
-        assert output_size >= 1
+        # A: 30/15=2; B: 20/10=2; C: 15/15=1 → 5 messages
+        assert output_size == 5
 
     @pytest.mark.asyncio
     async def test_union_schema_mismatch_fails_fast(
@@ -254,8 +259,10 @@ class TestAntiJoinLanceIntegration:
             on=["id"],
         )
         output_size = await _run_source_stage(config, workqueue_backend)
-        # full=50, processed=20 → 30 unprocessed rows → at least 1 output message
-        assert output_size >= 1
+        # full=50 → 5 splits of 10; processed ids=0-19 → splits [0-9],[10-19] empty,
+        # [20-29],[30-39],[40-49] have rows.  All 5 splits produce output messages
+        # (workers push even empty payloads via ack_and_forward).
+        assert output_size == 5
 
     @pytest.mark.asyncio
     async def test_empty_exclude_returns_full_source(
@@ -271,7 +278,8 @@ class TestAntiJoinLanceIntegration:
             on=["id"],
         )
         output_size = await _run_source_stage(config, workqueue_backend)
-        assert output_size >= 1
+        # 50 rows / 10 = 5 splits, none filtered → 5 output messages
+        assert output_size == 5
 
     @pytest.mark.asyncio
     async def test_union_then_anti_join(
@@ -294,4 +302,7 @@ class TestAntiJoinLanceIntegration:
             on=["id"],
         )
         output_size = await _run_source_stage(config, workqueue_backend)
-        assert output_size >= 1
+        # A: ids 0-29 (3 splits); B: ids 100-119 (2 splits) → 5 splits total.
+        # Processed: ids 0-19 → A splits [0-9],[10-19] become empty; rest have rows.
+        # All 5 splits produce output messages.
+        assert output_size == 5

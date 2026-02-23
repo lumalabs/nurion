@@ -64,6 +64,7 @@ if TYPE_CHECKING:
     from _internal.core.models import QueueEndpoint
     from _internal.core.source import SourceStrategy
     from _internal.core.sink import SinkCommitter
+    from _internal.core.split_payload_store import SplitPayloadStore
 
 
 T = TypeVar("T", bound="Operator")
@@ -95,6 +96,7 @@ class OperatorRuntime:
     stage_id: str
     worker_id: str
     broker_endpoint: Optional["QueueEndpoint"] = None
+    payload_store: Optional["SplitPayloadStore"] = None
 
 
 # =============================================================================
@@ -259,6 +261,16 @@ class OperatorConfig(ABC):
         Returns None for operators that don't need commit coordination.
         """
         return None
+
+    def prepare(self, payload_store: "SplitPayloadStore") -> None:
+        """Pre-flight hook called by StageMaster before workers spawn.
+
+        Override for one-time setup that needs payload store access
+        (e.g., anti-join builds exclude key table and stores it).
+
+        Default: no-op.
+        """
+        pass
 
     def setup(self, runtime: OperatorRuntime) -> "Operator":
         """Create and return an operator instance with this configuration.

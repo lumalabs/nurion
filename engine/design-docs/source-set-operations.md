@@ -182,107 +182,86 @@ class AntiJoinSourceConfig(OperatorConfig):
     exclude: OperatorConfig
     on: list[str]  # join key columns
 
-    def create_source(self) -> "AntiJoinSplitPlanner":
-        inner_source = self.source.create_source()
-        if not isinstance(inner_source, SplitPlanner):
-            raise TypeError("AntiJoin source must be a SplitPlanner")
-        return AntiJoinSplitPlanner(
-            inner_planner=inner_source,
-            exclude_config=self.exclude,
-            join_keys=self.on,
-        )
+    def prepare(self, payload_store: SplitPayloadStore) -> None:
+        # Called by StageMaster before workers spawn — scans exclude once.
+        self.source.prepare(payload_store)
+        self.exclude.prepare(payload_store)
+        exclude_table = self._scan_exclude_keys()      # key columns only, deduplicated
+        payload_key = f"__anti_join_exclude_keys_{self._instance_id}"
+        payload_store.store(payload_key, SplitPayload.from_arrow(exclude_table))
+        self._exclude_payload_key = payload_key
 
-    def setup(self, runtime: OperatorRuntime) -> "Operator":
-        # Worker side: wrap inner operator, filter after read()
+    def create_source(self) -> "AntiJoinSplitPlanner":
+        # Planner does no I/O; injects payload_key into each split's data_range.
+        inner_source = self.source.create_source()
+        return AntiJoinSplitPlanner(inner_planner=inner_source, config=self)
+
+    def setup(self, runtime: OperatorRuntime) -> "AntiJoinSourceOperator":
         inner_op = self.source.setup(runtime)
-        return AntiJoinSourceOperator(
-            config=self,
-            runtime=runtime,
-            inner_operator=inner_op,
-        )
+        return AntiJoinSourceOperator(config=self, runtime=runtime, inner_operator=inner_op)
 ```
 
-**AntiJoinSplitPlanner**:
+**AntiJoinSplitPlanner** — no I/O, just injects payload key:
 
 ```python
 class AntiJoinSplitPlanner:
-    """Plans splits from the main source; builds exclude key set before yielding."""
-
-    def __init__(self, inner_planner, exclude_config, join_keys):
-        self._inner = inner_planner
-        self._exclude_config = exclude_config
-        self._join_keys = join_keys
-        self._exclude_keys: Optional[set[tuple]] = None
-
     def plan_splits(self, stage_id: str) -> Iterator[Split]:
-        # Phase 1: Build exclude key set (full scan of exclude source)
-        self._exclude_keys = self._build_exclude_set()
-
-        # Phase 2: Delegate to inner planner; splits are unchanged
-        yield from self._inner.plan_splits(stage_id)
-
-    def _build_exclude_set(self) -> set[tuple]:
-        """Read all key-column values from the exclude source into a set."""
-        ...
-
-    def cleanup(self) -> None:
-        self._inner.cleanup()
+        payload_key = self._config._exclude_payload_key
+        if payload_key is None:
+            raise RuntimeError("prepare() must be called before plan_splits()")
+        for split in self._inner.plan_splits(stage_id):
+            augmented = dict(split.data_range)
+            augmented[_ANTI_JOIN_PAYLOAD_KEY] = payload_key
+            yield Split(split_id=split.split_id, ..., data_range=augmented)
 ```
 
-**AntiJoinSourceOperator**:
+**AntiJoinSourceOperator** — lazy fetch from payload store + DuckDB ANTI JOIN:
 
 ```python
 class AntiJoinSourceOperator(SourceOperator):
-    """Wraps a source operator, filtering out rows whose keys are in the exclude set."""
-
-    def __init__(self, config, runtime, inner_operator):
-        super().__init__(config, runtime)
-        self._inner = inner_operator
-        self._join_keys = config.on
-        self._exclude_keys: Optional[set[tuple]] = None
-
     def read(self, split: Split) -> Optional[SplitPayload]:
-        payload = self._inner.read(split)
+        # Strip our synthetic key so inner operators don't receive it.
+        inner_split = _strip_payload_key(split)
+        payload = self._inner.read(inner_split)
         if payload is None or payload.is_empty():
             return payload
-
-        if self._exclude_keys is None:
+        exclude_table = self._get_exclude_table(split)  # cached after first call
+        if exclude_table.num_rows == 0:
             return payload
+        return payload.with_new_data(self._apply_anti_join(payload.data, exclude_table))
 
-        table = payload.data
-        mask = self._compute_anti_join_mask(table)
-        filtered = table.filter(mask)
-
-        if filtered.num_rows == 0:
-            return SplitPayload.empty(split_id=payload.split_id)
-        return payload.with_new_data(filtered)
-
-    def _compute_anti_join_mask(self, table: pa.Table) -> pa.Array:
-        """Return a boolean mask: True for rows NOT in the exclude set."""
-        key_arrays = [table.column(k).to_pylist() for k in self._join_keys]
-        mask_list = [
-            tuple(row_keys) not in self._exclude_keys
-            for row_keys in zip(*key_arrays)
-        ]
-        return pa.array(mask_list, type=pa.bool_())
+    def _apply_anti_join(self, table, exclude_table):
+        # DuckDB ANTI JOIN — identical semantics for 1 and N key columns,
+        # including null handling (null key rows are always retained).
+        conn = self._duckdb_conn   # reused across splits
+        conn.register("source_tbl", table)
+        conn.register("exclude_tbl", exclude_table)
+        join_cond = " AND ".join(
+            f'source_tbl."{k}" = exclude_tbl."{k}"' for k in self._join_keys
+        )
+        result = conn.execute(
+            f"SELECT source_tbl.* FROM source_tbl ANTI JOIN exclude_tbl ON {join_cond}"
+        ).fetch_arrow_table()
+        conn.unregister("source_tbl")
+        conn.unregister("exclude_tbl")
+        return result
 ```
 
-### Exclude Key Set Distribution
+### Exclude Key Table Distribution
 
-The exclude key set is built in the planner (master process) and must be available in each worker process. Two options:
+The exclude key table is built in `prepare()` (StageMaster process) and must be available in each worker process. The chosen approach:
 
-**Option A: Ray Object Store**
-- Planner calls `ray.put(exclude_keys)` after building the set.
-- Workers call `ray.get(ref)` at init time.
-- Pro: zero-copy sharing, suitable for large sets.
-- Con: requires passing an ObjectRef through the config.
+**`prepare()` hook + `SplitPayloadStore`**
+- `StageMaster.start()` calls `config.prepare(payload_store)` once, before workers spawn.
+- `AntiJoinSourceConfig.prepare()` scans the exclude source (key columns only via column projection where possible), deduplicates with `group_by`, and calls `payload_store.store(unique_key, payload)`.
+- A unique key per instance (`_instance_id = uuid4().hex[:16]`) prevents collisions when multiple `AntiJoinSourceConfig` objects share the same store.
+- The key is injected into each split's `data_range` by `AntiJoinSplitPlanner`.
+- Each worker lazily fetches the table once via `payload_store.get(key)` and caches it.
 
-**Option B: Per-worker rebuild**
-- Each worker independently reads the exclude source and builds the key set.
-- Pro: simple, no cross-process coordination.
-- Con: N workers × 1 full scan = N redundant reads.
-
-**Chosen: Option A** (Ray Object Store). The `AntiJoinSourceConfig` stores the ObjectRef after the planner builds the set; workers retrieve it at initialization. `ray.ObjectRef` is serializable by Ray, so it can be stored in the config dataclass.
+**Why not `ray.put()` directly?**  The previous design used `ray.put()` + base64-encoded `ObjectRef` in split metadata.  This was replaced because:
+1. It bypassed the `SplitPayloadStore` abstraction (no `FsspecSplitPayloadStore` support).
+2. Planner had to do I/O, violating the principle that planners only produce metadata.
+3. `ray.ObjectRef` serialised as base64 is fragile and undocumented.
 
 ### 3. Schema Validation Strategy
 
@@ -361,20 +340,31 @@ Workers claim splits; each split's data_range points to its specific source
 
 ```
 AntiJoinSourceConfig.create_source()
-  → AntiJoinSplitPlanner(inner=LanceSplitPlanner, exclude_config=..., keys=["file_id"])
+  → AntiJoinSplitPlanner(inner=LanceSplitPlanner, config=self)
+     (no I/O — planner only holds a reference to config)
 
 StageMaster.start()
-  → SourceManager._produce_splits()
-    → AntiJoinSplitPlanner.plan_splits()
-      → scan exclude source, build key set
-      → ray.put(exclude_keys) → store ObjectRef in config
-      → yield from inner_planner.plan_splits()  (splits unchanged)
+  1. payload_store.wait_ready()                     ← ensure Ray actor is ready
+  2. config.prepare(payload_store)
+     ├── source.prepare(payload_store)              ← propagate to nested configs
+     ├── exclude.prepare(payload_store)
+     ├── scan exclude (key cols only via projection)
+     ├── group_by → deduplicated Arrow table
+     └── payload_store.store(unique_key, table)     ← unique_key contains _instance_id
+  3. SourceManager._produce_splits()
+     → AntiJoinSplitPlanner.plan_splits()
+       → raise RuntimeError if prepare() not called
+       → for each inner split: inject _ANTI_JOIN_PAYLOAD_KEY into data_range
+       → push augmented splits to planner queue
 
 Workers claim splits
   → AntiJoinSourceOperator.read(split)
-    → inner_operator.read(split) → full payload
-    → filter rows where key NOT IN exclude_keys
-    → return filtered payload
+    → strip _ANTI_JOIN_PAYLOAD_KEY from split before forwarding to inner
+    → inner_operator.read(inner_split) → full payload
+    → _get_exclude_table(split):
+        → payload_store.get(key)  [cached after first call]
+        → raises RuntimeError if key missing / store None / payload not found
+    → DuckDB ANTI JOIN → filtered payload
 ```
 
 ## Edge Cases

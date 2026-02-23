@@ -20,8 +20,9 @@ All sources use in-memory stubs.
 
 from __future__ import annotations
 
+import unittest.mock as mock
 from dataclasses import dataclass, field
-from typing import Iterator, List, Optional
+from typing import Dict, Iterator, List, Optional
 
 import pyarrow as pa
 import pytest
@@ -33,8 +34,14 @@ from _internal.operators.sources.anti_join import (
     AntiJoinSourceConfig,
     AntiJoinSourceOperator,
     AntiJoinSplitPlanner,
+    _ANTI_JOIN_PAYLOAD_KEY,
 )
-from _internal.operators.sources.union import UnionSourceConfig, UnionSplitPlanner
+from _internal.operators.sources.union import (
+    UnionSourceConfig,
+    UnionSourceOperator,
+    UnionSplitPlanner,
+    _parse_union_source_idx,
+)
 
 
 # =============================================================================
@@ -42,8 +49,10 @@ from _internal.operators.sources.union import UnionSourceConfig, UnionSplitPlann
 # =============================================================================
 
 
-def _make_runtime() -> OperatorRuntime:
-    return OperatorRuntime(job_id="test", stage_id="source", worker_id="w0")
+def _make_runtime(payload_store=None) -> OperatorRuntime:
+    return OperatorRuntime(
+        job_id="test", stage_id="source", worker_id="w0", payload_store=payload_store
+    )
 
 
 @dataclass
@@ -118,6 +127,28 @@ def _collect_splits(planner: UnionSplitPlanner | AntiJoinSplitPlanner) -> List[S
     return list(planner.plan_splits("test_stage"))
 
 
+class _FakePayloadStore:
+    """Minimal in-memory payload store for testing."""
+
+    def __init__(self) -> None:
+        self._data: Dict[str, SplitPayload] = {}
+
+    def store(self, key: str, payload: SplitPayload) -> str:
+        self._data[key] = payload
+        return key
+
+    def get(self, key: str) -> Optional[SplitPayload]:
+        return self._data.get(key)
+
+    def delete(self, key: str) -> bool:
+        return self._data.pop(key, None) is not None
+
+    def clear(self) -> int:
+        count = len(self._data)
+        self._data.clear()
+        return count
+
+
 # =============================================================================
 # get_source_schema
 # =============================================================================
@@ -166,9 +197,7 @@ class TestUnionSplitPlanner:
         assert len(splits) == 2 + 2  # 20/10 + 15/10 = 2+2
 
     def test_three_sources(self):
-        cfg = UnionSourceConfig(
-            sources=[_stub_source(10), _stub_source(20), _stub_source(30)]
-        )
+        cfg = UnionSourceConfig(sources=[_stub_source(10), _stub_source(20), _stub_source(30)])
         splits = _collect_splits(cfg.create_source())
         assert len(splits) == 1 + 2 + 3
 
@@ -229,12 +258,8 @@ class TestUnionSplitPlanner:
 
     def test_schema_validation_skipped_when_none(self):
         """If no sub-source exposes a schema, validation is skipped."""
-        cfg_a = _StubSourceConfig(
-            rows=[{"id": i} for i in range(5)], schema=None, batch_size=10
-        )
-        cfg_b = _StubSourceConfig(
-            rows=[{"id": i} for i in range(3)], schema=None, batch_size=10
-        )
+        cfg_a = _StubSourceConfig(rows=[{"id": i} for i in range(5)], schema=None, batch_size=10)
+        cfg_b = _StubSourceConfig(rows=[{"id": i} for i in range(3)], schema=None, batch_size=10)
         cfg = UnionSourceConfig(sources=[cfg_a, cfg_b])
         splits = _collect_splits(cfg.create_source())
         assert len(splits) == 1 + 1
@@ -278,7 +303,9 @@ class TestUnionSplitPlanner:
 # =============================================================================
 
 
-def _keys_to_table(exclude_keys: set, join_keys: List[str], key_type: pa.DataType = pa.int64()) -> pa.Table:
+def _keys_to_table(
+    exclude_keys: set, join_keys: List[str], key_type: pa.DataType = pa.int64()
+) -> pa.Table:
     """Convert a set of key tuples to an Arrow table for injection into tests."""
     if not exclude_keys:
         return pa.table({k: pa.array([], type=key_type) for k in join_keys})
@@ -304,7 +331,7 @@ def _make_anti_join_operator(
     runtime = _make_runtime()
     inner_op = source_cfg.setup(runtime)
     op = AntiJoinSourceOperator(config=cfg, runtime=runtime, inner_operator=inner_op)
-    op._exclude_table = _keys_to_table(exclude_keys, join_keys)  # inject directly, bypassing Ray
+    op._exclude_table = _keys_to_table(exclude_keys, join_keys)  # inject directly
     return op
 
 
@@ -376,11 +403,13 @@ class TestAntiJoinSourceOperator:
         rows = [{"col_a": i % 5, "col_b": i % 3, "val": i} for i in range(30)]
         exclude_keys = {(0, 0), (1, 1), (2, 2)}
 
-        schema = pa.schema([
-            pa.field("col_a", pa.int64()),
-            pa.field("col_b", pa.int64()),
-            pa.field("val", pa.int64()),
-        ])
+        schema = pa.schema(
+            [
+                pa.field("col_a", pa.int64()),
+                pa.field("col_b", pa.int64()),
+                pa.field("val", pa.int64()),
+            ]
+        )
         source_cfg = _StubSourceConfig(rows=rows, schema=schema)
         exclude_cfg = _StubSourceConfig(rows=[], schema=schema)
         cfg = AntiJoinSourceConfig(source=source_cfg, exclude=exclude_cfg, on=["col_a", "col_b"])
@@ -398,11 +427,13 @@ class TestAntiJoinSourceOperator:
     def test_preserves_non_key_columns(self):
         """Non-key column values are unchanged after filtering."""
         rows = [{"id": i, "value": f"v{i}", "extra": i * 10} for i in range(20)]
-        schema = pa.schema([
-            pa.field("id", pa.int64()),
-            pa.field("value", pa.string()),
-            pa.field("extra", pa.int64()),
-        ])
+        schema = pa.schema(
+            [
+                pa.field("id", pa.int64()),
+                pa.field("value", pa.string()),
+                pa.field("extra", pa.int64()),
+            ]
+        )
         source_cfg = _StubSourceConfig(rows=rows, schema=schema)
         exclude_cfg = _StubSourceConfig(rows=[], schema=schema)
         cfg = AntiJoinSourceConfig(source=source_cfg, exclude=exclude_cfg, on=["id"])
@@ -450,6 +481,36 @@ class TestAntiJoinSourceOperator:
         assert len(result) == 1
         assert result.data.column("value").to_pylist() == ["null_row"]
 
+    def test_loads_exclude_from_payload_store(self):
+        """_get_exclude_table fetches from payload_store when key is in split."""
+        schema = pa.schema([pa.field("id", pa.int64()), pa.field("value", pa.string())])
+        # Exclude has ids 1, 2, 3.
+        exclude_rows = [{"id": i, "value": f"excl_{i}"} for i in range(1, 4)]
+        source_cfg = _stub_source(5, schema)
+        exclude_cfg = _StubSourceConfig(rows=exclude_rows, schema=schema, batch_size=10)
+        cfg = AntiJoinSourceConfig(source=source_cfg, exclude=exclude_cfg, on=["id"])
+
+        # Use prepare() so the payload key is set correctly (includes _instance_id).
+        store = _FakePayloadStore()
+        cfg.prepare(store)
+        payload_key = cfg._exclude_payload_key
+
+        runtime = _make_runtime(payload_store=store)
+        rows = [{"id": i, "value": f"v{i}"} for i in range(5)]
+        inner_op = _DirectReadOperator(rows, runtime)
+        op = AntiJoinSourceOperator(config=cfg, runtime=runtime, inner_operator=inner_op)
+
+        split = Split(
+            split_id="t",
+            stage_id="s",
+            data_range={"start": 0, "end": 5, _ANTI_JOIN_PAYLOAD_KEY: payload_key},
+        )
+        result = op.read(split)
+        assert result is not None
+        # ids 1,2,3 excluded → ids 0,4 remain
+        assert len(result) == 2
+        assert set(result.data.column("id").to_pylist()) == {0, 4}
+
 
 class TestAntiJoinSplitPlanner:
     def test_plan_splits_delegates_to_inner(self):
@@ -460,16 +521,19 @@ class TestAntiJoinSplitPlanner:
 
         cfg = AntiJoinSourceConfig(source=source_cfg, exclude=exclude_cfg, on=["id"])
 
-        # Patch ray.put to avoid needing a Ray cluster in unit tests.
-        import unittest.mock as mock
+        store = _FakePayloadStore()
+        cfg.prepare(store)
 
-        with mock.patch("ray.put", return_value=object()) as mock_put:
-            planner = cfg.create_source()
-            splits = list(planner.plan_splits("test_stage"))
+        planner = cfg.create_source()
+        splits = list(planner.plan_splits("test_stage"))
 
         # Inner planner (25 rows, batch 10) → 3 splits
         assert len(splits) == 3
-        mock_put.assert_called_once()
+        # Each split must carry the payload key so workers can fetch it.
+        # The key is unique per instance, so use cfg._exclude_payload_key.
+        for split in splits:
+            assert _ANTI_JOIN_PAYLOAD_KEY in split.data_range
+            assert split.data_range[_ANTI_JOIN_PAYLOAD_KEY] == cfg._exclude_payload_key
 
     def test_key_column_missing_in_source_raises(self):
         """Missing join key in source schema raises ValueError."""
@@ -479,12 +543,9 @@ class TestAntiJoinSplitPlanner:
         exclude_cfg = _StubSourceConfig(rows=[], schema=schema_exc)
         cfg = AntiJoinSourceConfig(source=source_cfg, exclude=exclude_cfg, on=["key2"])
 
-        import unittest.mock as mock
-
-        with mock.patch("ray.put", return_value=object()):
-            planner = cfg.create_source()
-            with pytest.raises(ValueError, match="not found in source schema"):
-                list(planner.plan_splits("test_stage"))
+        planner = cfg.create_source()
+        with pytest.raises(ValueError, match="not found in source schema"):
+            list(planner.plan_splits("test_stage"))
 
     def test_key_type_mismatch_raises(self):
         """Type mismatch on join key raises ValueError."""
@@ -494,12 +555,9 @@ class TestAntiJoinSplitPlanner:
         exclude_cfg = _StubSourceConfig(rows=[], schema=schema_exc)
         cfg = AntiJoinSourceConfig(source=source_cfg, exclude=exclude_cfg, on=["id"])
 
-        import unittest.mock as mock
-
-        with mock.patch("ray.put", return_value=object()):
-            planner = cfg.create_source()
-            with pytest.raises(ValueError, match="type mismatch"):
-                list(planner.plan_splits("test_stage"))
+        planner = cfg.create_source()
+        with pytest.raises(ValueError, match="type mismatch"):
+            list(planner.plan_splits("test_stage"))
 
     def test_requires_at_least_one_key(self):
         schema = pa.schema([pa.field("id", pa.int64())])
@@ -509,3 +567,263 @@ class TestAntiJoinSplitPlanner:
                 exclude=_stub_source(2, schema),
                 on=[],
             )
+
+    def test_plan_splits_without_prepare_raises(self):
+        """plan_splits() raises RuntimeError if prepare() was not called first."""
+        schema = pa.schema([pa.field("id", pa.int64()), pa.field("value", pa.string())])
+        source_cfg = _stub_source(10, schema)
+        exclude_cfg = _stub_source(0, schema)
+        cfg = AntiJoinSourceConfig(source=source_cfg, exclude=exclude_cfg, on=["id"])
+
+        planner = cfg.create_source()
+        with pytest.raises(RuntimeError, match="prepare"):
+            list(planner.plan_splits("test_stage"))
+
+
+class TestAntiJoinPrepare:
+    def test_prepare_stores_exclude_keys(self):
+        """prepare() scans exclude, deduplicates, and stores in payload store."""
+        schema = pa.schema([pa.field("id", pa.int64()), pa.field("value", pa.string())])
+        # Exclude has rows with ids 0-4, some duplicated.
+        exclude_rows = [{"id": i % 3, "value": f"v{i}"} for i in range(9)]
+        source_cfg = _stub_source(20, schema)
+        exclude_cfg = _StubSourceConfig(rows=exclude_rows, schema=schema, batch_size=5)
+
+        cfg = AntiJoinSourceConfig(source=source_cfg, exclude=exclude_cfg, on=["id"])
+        store = _FakePayloadStore()
+        cfg.prepare(store)
+
+        # Key is unique per instance (contains _instance_id suffix).
+        assert cfg._exclude_payload_key is not None
+        assert cfg._exclude_payload_key.startswith("__anti_join_exclude_keys_")
+        payload = store.get(cfg._exclude_payload_key)
+        assert payload is not None
+        # 9 rows with id % 3 → 3 distinct keys: 0, 1, 2
+        assert payload.data.num_rows == 3
+        assert set(payload.data.column("id").to_pylist()) == {0, 1, 2}
+        # Only key columns stored, not 'value'.
+        assert payload.data.column_names == ["id"]
+
+    def test_prepare_unique_keys_per_instance(self):
+        """Two distinct configs store under different payload keys."""
+        schema = pa.schema([pa.field("id", pa.int64()), pa.field("value", pa.string())])
+        cfg_a = AntiJoinSourceConfig(
+            source=_stub_source(5, schema), exclude=_stub_source(0, schema), on=["id"]
+        )
+        cfg_b = AntiJoinSourceConfig(
+            source=_stub_source(5, schema), exclude=_stub_source(0, schema), on=["id"]
+        )
+        store = _FakePayloadStore()
+        cfg_a.prepare(store)
+        cfg_b.prepare(store)
+
+        assert cfg_a._exclude_payload_key != cfg_b._exclude_payload_key
+        # Both payloads are independently accessible.
+        assert store.get(cfg_a._exclude_payload_key) is not None
+        assert store.get(cfg_b._exclude_payload_key) is not None
+
+    def test_prepare_empty_exclude(self):
+        """prepare() with empty exclude stores an empty table."""
+        schema = pa.schema([pa.field("id", pa.int64()), pa.field("value", pa.string())])
+        source_cfg = _stub_source(10, schema)
+        exclude_cfg = _stub_source(0, schema)
+        cfg = AntiJoinSourceConfig(source=source_cfg, exclude=exclude_cfg, on=["id"])
+
+        store = _FakePayloadStore()
+        cfg.prepare(store)
+
+        payload = store.get(cfg._exclude_payload_key)
+        assert payload is not None
+        assert payload.data.num_rows == 0
+
+    def test_prepare_propagates_to_source_and_exclude(self):
+        """prepare() calls prepare() on both source and exclude configs."""
+        schema = pa.schema([pa.field("id", pa.int64()), pa.field("value", pa.string())])
+        source_cfg = _stub_source(10, schema)
+        exclude_cfg = _stub_source(0, schema)
+        cfg = AntiJoinSourceConfig(source=source_cfg, exclude=exclude_cfg, on=["id"])
+
+        store = _FakePayloadStore()
+        with (
+            mock.patch.object(source_cfg, "prepare") as mock_source,
+            mock.patch.object(exclude_cfg, "prepare") as mock_exclude,
+        ):
+            cfg.prepare(store)
+            mock_source.assert_called_once_with(store)
+            mock_exclude.assert_called_once_with(store)
+
+
+# =============================================================================
+# UnionSourceOperator
+# =============================================================================
+
+
+class TestUnionSourceOperator:
+    def test_setup_returns_union_source_operator(self):
+        """UnionSourceConfig.setup() returns a UnionSourceOperator instance."""
+        cfg = UnionSourceConfig(sources=[_stub_source(10), _stub_source(5)])
+        op = cfg.setup(_make_runtime())
+        assert isinstance(op, UnionSourceOperator)
+
+    def test_dispatches_to_correct_inner_operator(self):
+        """split for source 0 is read by source 0's operator; same for source 1."""
+        src_a = _stub_source(10, start_id=0)  # ids 0-9
+        src_b = _stub_source(10, start_id=100)  # ids 100-109
+        cfg = UnionSourceConfig(sources=[src_a, src_b])
+        op = cfg.setup(_make_runtime())
+
+        # A split from source 0 should return ids in [0, 10).
+        split_0 = Split(
+            split_id="union_0_split_0",
+            stage_id="source",
+            data_range={"start": 0, "end": 10},
+        )
+        result_0 = op.read(split_0)
+        assert result_0 is not None
+        assert set(result_0.data.column("id").to_pylist()).issubset(set(range(10)))
+
+        # A split from source 1 should return ids in [100, 110).
+        split_1 = Split(
+            split_id="union_1_split_1",
+            stage_id="source",
+            data_range={"start": 0, "end": 10},
+        )
+        result_1 = op.read(split_1)
+        assert result_1 is not None
+        assert set(result_1.data.column("id").to_pylist()).issubset(set(range(100, 110)))
+
+    def test_parse_union_source_idx(self):
+        """_parse_union_source_idx parses single and multi-digit indices."""
+        assert _parse_union_source_idx("union_0_split_0") == 0
+        assert _parse_union_source_idx("union_3_split_99") == 3
+        assert _parse_union_source_idx("union_12_split_5") == 12
+
+    def test_parse_invalid_split_id_raises(self):
+        """Malformed split_id raises ValueError."""
+        with pytest.raises(ValueError):
+            _parse_union_source_idx("not_a_union_split")
+
+    def test_out_of_range_source_idx_raises(self):
+        """source_idx beyond the number of sources raises ValueError."""
+        cfg = UnionSourceConfig(sources=[_stub_source(5)])
+        op = cfg.setup(_make_runtime())
+        bad_split = Split(
+            split_id="union_5_split_0",
+            stage_id="source",
+            data_range={"start": 0, "end": 5},
+        )
+        with pytest.raises(ValueError, match="out of range"):
+            op.read(bad_split)
+
+    def test_close_propagates_to_inner_operators(self):
+        """close() is forwarded to all inner operators."""
+        cfg = UnionSourceConfig(sources=[_stub_source(5), _stub_source(5)])
+        op = cfg.setup(_make_runtime())
+        for inner in op._inner_operators:
+            inner.close = mock.MagicMock()
+        op.close()
+        for inner in op._inner_operators:
+            inner.close.assert_called_once()
+
+
+# =============================================================================
+# Anti-join payload key in split data_range
+# =============================================================================
+
+
+class TestAntiJoinRefInSplit:
+    def test_payload_key_stripped_before_inner_read(self):
+        """_ANTI_JOIN_PAYLOAD_KEY is removed from split.data_range before inner.read()."""
+        schema = pa.schema([pa.field("id", pa.int64()), pa.field("value", pa.string())])
+        source_cfg = _stub_source(5, schema)
+        exclude_cfg = _stub_source(0, schema)
+        cfg = AntiJoinSourceConfig(source=source_cfg, exclude=exclude_cfg, on=["id"])
+        runtime = _make_runtime()
+
+        received_splits = []
+
+        class _RecordingSplitOp(_DirectReadOperator):
+            def read(self, split):
+                received_splits.append(split)
+                return super().read(split)
+
+        op = AntiJoinSourceOperator(
+            config=cfg,
+            runtime=runtime,
+            inner_operator=_RecordingSplitOp(
+                [{"id": i, "value": f"v{i}"} for i in range(5)], runtime
+            ),
+        )
+        op._exclude_table = pa.table({"id": pa.array([], type=pa.int64())})
+
+        split = Split(
+            split_id="test",
+            stage_id="source",
+            data_range={"start": 0, "end": 5, _ANTI_JOIN_PAYLOAD_KEY: "some_key"},
+        )
+        op.read(split)
+
+        assert len(received_splits) == 1
+        assert _ANTI_JOIN_PAYLOAD_KEY not in received_splits[0].data_range
+
+    def test_missing_payload_key_raises(self):
+        """If _ANTI_JOIN_PAYLOAD_KEY is absent from split.data_range, RuntimeError is raised."""
+        schema = pa.schema([pa.field("id", pa.int64()), pa.field("value", pa.string())])
+        rows = [{"id": i, "value": f"v{i}"} for i in range(5)]
+        source_cfg = _stub_source(5, schema)
+        exclude_cfg = _stub_source(0, schema)
+        cfg = AntiJoinSourceConfig(source=source_cfg, exclude=exclude_cfg, on=["id"])
+        runtime = _make_runtime()
+        op = AntiJoinSourceOperator(
+            config=cfg,
+            runtime=runtime,
+            inner_operator=_DirectReadOperator(rows, runtime),
+        )
+        # Missing payload key is a programming error (prepare() not called).
+        split = Split(split_id="t", stage_id="s", data_range={"start": 0, "end": 5})
+        with pytest.raises(RuntimeError, match="payload_key"):
+            op.read(split)
+
+    def test_missing_payload_store_raises(self):
+        """If runtime.payload_store is None, RuntimeError is raised."""
+        schema = pa.schema([pa.field("id", pa.int64()), pa.field("value", pa.string())])
+        rows = [{"id": i, "value": f"v{i}"} for i in range(5)]
+        source_cfg = _stub_source(5, schema)
+        exclude_cfg = _stub_source(0, schema)
+        cfg = AntiJoinSourceConfig(source=source_cfg, exclude=exclude_cfg, on=["id"])
+        runtime = _make_runtime()  # payload_store=None
+        op = AntiJoinSourceOperator(
+            config=cfg,
+            runtime=runtime,
+            inner_operator=_DirectReadOperator(rows, runtime),
+        )
+        split = Split(
+            split_id="t",
+            stage_id="s",
+            data_range={"start": 0, "end": 5, _ANTI_JOIN_PAYLOAD_KEY: "some_key"},
+        )
+        with pytest.raises(RuntimeError, match="payload_store"):
+            op.read(split)
+
+
+# =============================================================================
+# Union prepare propagation
+# =============================================================================
+
+
+class TestUnionPrepare:
+    def test_prepare_propagates_to_all_sources(self):
+        """UnionSourceConfig.prepare() calls prepare() on each sub-source."""
+        schema = pa.schema([pa.field("id", pa.int64()), pa.field("value", pa.string())])
+        src_a = _stub_source(5, schema)
+        src_b = _stub_source(5, schema)
+        cfg = UnionSourceConfig(sources=[src_a, src_b])
+
+        store = _FakePayloadStore()
+        with (
+            mock.patch.object(src_a, "prepare") as mock_a,
+            mock.patch.object(src_b, "prepare") as mock_b,
+        ):
+            cfg.prepare(store)
+            mock_a.assert_called_once_with(store)
+            mock_b.assert_called_once_with(store)

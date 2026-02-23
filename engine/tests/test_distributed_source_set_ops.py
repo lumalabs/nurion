@@ -35,6 +35,7 @@ import ray
 from _internal.core.job import Job, JobConfig
 from _internal.core.models import Split, SplitPayload
 from _internal.core.operator import OperatorConfig, OperatorRuntime
+from _internal.core.source_operator import SourceOperator
 from _internal.core.stage import Stage
 from _internal.operators.sources.anti_join import AntiJoinSourceConfig
 from _internal.operators.sources.union import UnionSourceConfig
@@ -74,27 +75,24 @@ class _MemSourceConfig(OperatorConfig):
 _MemSourceConfig.operator_class = None  # set below
 
 
-class _MemSourceOperator:
+class _MemSourceOperator(SourceOperator):
     """Operator that generates rows from data_range metadata."""
 
     def __init__(self, config: _MemSourceConfig, runtime: OperatorRuntime):
-        self._config = config
-        self._runtime = runtime
+        super().__init__(config, runtime)
 
-    def process_split(self, split: Split, payload=None) -> Optional[SplitPayload]:
+    def read(self, split: Split) -> Optional[SplitPayload]:
+        cfg: _MemSourceConfig = self._config  # type: ignore[assignment]
         start = split.data_range["start"]
         end = split.data_range["end"]
         rows = [
-            {"id": self._config.id_start + i, "value": f"v{self._config.id_start + i}"}
+            {"id": cfg.id_start + i, "value": f"v{cfg.id_start + i}"}
             for i in range(start, end)
         ]
         if not rows:
             return SplitPayload.empty(split_id=split.split_id)
         table = pa.Table.from_pylist(rows)
         return SplitPayload.from_arrow(table, split_id=split.split_id)
-
-    def close(self) -> None:
-        pass
 
 
 _MemSourceConfig.operator_class = _MemSourceOperator
@@ -133,24 +131,32 @@ def _make_job(source_config: OperatorConfig, collector_name: str) -> Job:
             recovery_interval_secs=0.5,
         ),
     )
-    job.add_stage(Stage(
-        stage_id="source",
-        operator_config=source_config,
-        parallelism=(1, 2),
-        worker_resources=_TEST_RESOURCES,
-    ))
-    job.add_stage(Stage(
-        stage_id="transform",
-        operator_config=PassthroughConfig(),
-        parallelism=(2, 4),
-        worker_resources=_TEST_RESOURCES,
-    ), upstream_stages=["source"])
-    job.add_stage(Stage(
-        stage_id="sink",
-        operator_config=CollectingSinkConfig(collector_name=collector_name),
-        parallelism=(1, 2),
-        worker_resources=_TEST_RESOURCES,
-    ), upstream_stages=["transform"])
+    job.add_stage(
+        Stage(
+            stage_id="source",
+            operator_config=source_config,
+            parallelism=(1, 2),
+            worker_resources=_TEST_RESOURCES,
+        )
+    )
+    job.add_stage(
+        Stage(
+            stage_id="transform",
+            operator_config=PassthroughConfig(),
+            parallelism=(2, 4),
+            worker_resources=_TEST_RESOURCES,
+        ),
+        upstream_stages=["source"],
+    )
+    job.add_stage(
+        Stage(
+            stage_id="sink",
+            operator_config=CollectingSinkConfig(collector_name=collector_name),
+            parallelism=(1, 2),
+            worker_resources=_TEST_RESOURCES,
+        ),
+        upstream_stages=["transform"],
+    )
     return job
 
 
@@ -191,10 +197,12 @@ class TestUnionDistributed:
     async def test_union_two_sources_no_data_loss(self, ray_cluster):
         """Union of two in-memory sources: no data loss, no duplicates."""
         NUM_A, NUM_B = 500, 700
-        config = UnionSourceConfig(sources=[
-            _MemSourceConfig(num_records=NUM_A, batch_size=100, id_start=0),
-            _MemSourceConfig(num_records=NUM_B, batch_size=100, id_start=10000),
-        ])
+        config = UnionSourceConfig(
+            sources=[
+                _MemSourceConfig(num_records=NUM_A, batch_size=100, id_start=0),
+                _MemSourceConfig(num_records=NUM_B, batch_size=100, id_start=10000),
+            ]
+        )
         await _run(_make_job(config, self.collector_name))
 
         records = get_sink_records(self.collector_name)
@@ -209,11 +217,13 @@ class TestUnionDistributed:
     async def test_union_three_sources(self, ray_cluster):
         """Union of three in-memory sources: correct total count."""
         NUM_A, NUM_B, NUM_C = 300, 400, 200
-        config = UnionSourceConfig(sources=[
-            _MemSourceConfig(num_records=NUM_A, batch_size=100, id_start=0),
-            _MemSourceConfig(num_records=NUM_B, batch_size=100, id_start=10000),
-            _MemSourceConfig(num_records=NUM_C, batch_size=100, id_start=20000),
-        ])
+        config = UnionSourceConfig(
+            sources=[
+                _MemSourceConfig(num_records=NUM_A, batch_size=100, id_start=0),
+                _MemSourceConfig(num_records=NUM_B, batch_size=100, id_start=10000),
+                _MemSourceConfig(num_records=NUM_C, batch_size=100, id_start=20000),
+            ]
+        )
         await _run(_make_job(config, self.collector_name))
 
         records = get_sink_records(self.collector_name)
@@ -224,10 +234,12 @@ class TestUnionDistributed:
     async def test_union_large_volume(self, ray_cluster):
         """Union of two large sources: no data loss at scale."""
         NUM_A, NUM_B = 5000, 6000
-        config = UnionSourceConfig(sources=[
-            _MemSourceConfig(num_records=NUM_A, batch_size=500, id_start=0),
-            _MemSourceConfig(num_records=NUM_B, batch_size=500, id_start=100000),
-        ])
+        config = UnionSourceConfig(
+            sources=[
+                _MemSourceConfig(num_records=NUM_A, batch_size=500, id_start=0),
+                _MemSourceConfig(num_records=NUM_B, batch_size=500, id_start=100000),
+            ]
+        )
         await _run(_make_job(config, self.collector_name), timeout=120.0)
 
         records = get_sink_records(self.collector_name)
@@ -238,9 +250,11 @@ class TestUnionDistributed:
     async def test_union_single_source_passthrough(self, ray_cluster):
         """Union of a single source behaves identically to that source alone."""
         NUM = 400
-        config = UnionSourceConfig(sources=[
-            _MemSourceConfig(num_records=NUM, batch_size=100, id_start=0),
-        ])
+        config = UnionSourceConfig(
+            sources=[
+                _MemSourceConfig(num_records=NUM, batch_size=100, id_start=0),
+            ]
+        )
         await _run(_make_job(config, self.collector_name))
 
         records = get_sink_records(self.collector_name)
@@ -269,22 +283,20 @@ class _ExcludeSourceConfig(OperatorConfig):
 _ExcludeSourceConfig.operator_class = None  # set below
 
 
-class _ExcludeOperator:
+class _ExcludeOperator(SourceOperator):
     def __init__(self, config: _ExcludeSourceConfig, runtime: OperatorRuntime):
-        self._config = config
+        super().__init__(config, runtime)
 
-    def process_split(self, split: Split, payload=None) -> Optional[SplitPayload]:
+    def read(self, split: Split) -> Optional[SplitPayload]:
+        cfg: _ExcludeSourceConfig = self._config  # type: ignore[assignment]
         start = split.data_range["start"]
         end = split.data_range["end"]
-        ids = self._config.exclude_ids[start:end]
+        ids = cfg.exclude_ids[start:end]
         if not ids:
             return SplitPayload.empty(split_id=split.split_id)
         rows = [{"id": i, "value": f"exc_{i}"} for i in ids]
         table = pa.Table.from_pylist(rows)
         return SplitPayload.from_arrow(table, split_id=split.split_id)
-
-    def close(self) -> None:
-        pass
 
 
 _ExcludeSourceConfig.operator_class = _ExcludeOperator
@@ -328,9 +340,7 @@ class TestAntiJoinDistributed:
             f"Expected {expected} records, got {len(records)}"
         )
         result_ids = {r["id"] for r in records}
-        assert not result_ids.intersection(set(EXCLUDE_IDS)), (
-            "Excluded ids found in output"
-        )
+        assert not result_ids.intersection(set(EXCLUDE_IDS)), "Excluded ids found in output"
 
     @pytest.mark.asyncio
     async def test_anti_join_empty_exclude_returns_all(self, ray_cluster):
@@ -350,9 +360,7 @@ class TestAntiJoinDistributed:
         """All source ids excluded → sink receives zero rows."""
         NUM_SOURCE = 100
         source_cfg = _MemSourceConfig(num_records=NUM_SOURCE, batch_size=50, id_start=0)
-        exclude_cfg = _ExcludeSourceConfig(
-            exclude_ids=list(range(NUM_SOURCE)), batch_size=50
-        )
+        exclude_cfg = _ExcludeSourceConfig(exclude_ids=list(range(NUM_SOURCE)), batch_size=50)
 
         config = AntiJoinSourceConfig(source=source_cfg, exclude=exclude_cfg, on=["id"])
         await _run(_make_job(config, self.collector_name))
@@ -391,10 +399,12 @@ class TestUnionAntiJoinComposed:
         NUM_A, NUM_B = 300, 400
         EXCLUDE_IDS = list(range(0, 100))  # first 100 from source A
 
-        union_cfg = UnionSourceConfig(sources=[
-            _MemSourceConfig(num_records=NUM_A, batch_size=100, id_start=0),
-            _MemSourceConfig(num_records=NUM_B, batch_size=100, id_start=10000),
-        ])
+        union_cfg = UnionSourceConfig(
+            sources=[
+                _MemSourceConfig(num_records=NUM_A, batch_size=100, id_start=0),
+                _MemSourceConfig(num_records=NUM_B, batch_size=100, id_start=10000),
+            ]
+        )
         exclude_cfg = _ExcludeSourceConfig(exclude_ids=EXCLUDE_IDS, batch_size=100)
 
         config = AntiJoinSourceConfig(source=union_cfg, exclude=exclude_cfg, on=["id"])
