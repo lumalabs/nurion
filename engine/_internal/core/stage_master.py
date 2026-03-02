@@ -273,18 +273,17 @@ class StageMaster:
         if self._sink_manager:
             self._sink_manager.create_queue_and_start_loop(queue_client)
 
-        # --- Determine effective upstream queue name ---
+        # --- SplitPlanner: determine effective upstream before creating workers ---
         # SplitPlanner interposes its own queue between source and workers.
-        has_planner = self._source_manager and not self._source_manager.is_direct_producer
-        if has_planner:
+        if self._source_manager is not None and not self._source_manager.is_direct_producer:
             self.upstream_queue_name = self._source_manager.planner_queue_name
 
-        # --- Init workers ---
+        # --- Init workers (uses self.upstream_queue_name, already resolved) ---
         self._init_managers()
         assert self._worker_manager is not None
 
         # --- SplitPlanner: launch async production ---
-        if has_planner:
+        if self._source_manager is not None and not self._source_manager.is_direct_producer:
             self._source_manager.start_split_production(
                 queue_client,
                 self._worker_manager,
