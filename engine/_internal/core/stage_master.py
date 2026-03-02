@@ -291,7 +291,15 @@ class StageMaster:
                 running_fn=lambda: self._running,
             )
 
-        for _ in range(self.stage.min_parallelism):
+        # When downstream of a shuffle, ensure enough initial workers to cover
+        # all partition queues (partition assignment uses max_parallelism as
+        # modulus, so min_parallelism workers alone may leave gaps).
+        min_workers = self.stage.min_parallelism
+        if self.runtime.upstream_partition_queue_names:
+            n_partitions = len(self.runtime.upstream_partition_queue_names)
+            min_workers = max(min_workers, min(n_partitions, self.stage.max_parallelism))
+
+        for _ in range(min_workers):
             worker_id = await self._worker_manager.spawn_worker(is_min_worker=True)
             if worker_id is None:
                 raise RuntimeError(
@@ -379,14 +387,13 @@ class StageMaster:
             if self._sink_manager and not self._failed:
                 await self._sink_manager.finalize(queue_client)
 
-            # Mark output queue(s) as finished
-            try:
-                queue_client.mark_queue_finished(self._output_queue_name)
-                if self._partition_queue_names:
-                    for pq_name in self._partition_queue_names:
-                        queue_client.mark_queue_finished(pq_name)
-            except Exception as e:
-                self.logger.warning(f"Failed to mark output queue as finished: {e}")
+            # Mark output queue(s) as finished (each individually so one
+            # failure doesn't block the rest)
+            for q in [self._output_queue_name, *(self._partition_queue_names or ())]:
+                try:
+                    queue_client.mark_queue_finished(q)
+                except Exception as e:
+                    self.logger.warning(f"Failed to mark queue {q} as finished: {e}")
 
             self._write_stage_state(status="FAILED" if self._failed else "COMPLETED")
 
