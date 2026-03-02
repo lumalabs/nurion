@@ -464,7 +464,7 @@ class TestStageWorkerPayloadCleanup:
                 storage_url="memory://",
             ),
             upstream_queue_name="cleanup_upstream",
-            output_queue_name=None,  # no downstream — ack-only path
+            # no downstream — ack-only path (default OutputRouting has queue_name=None)
         )
 
         worker = WorkerClass(runtime, MockStage(), mock_payload_store)

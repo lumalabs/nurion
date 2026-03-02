@@ -36,8 +36,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import ray
 
-from _internal.core.models import QueueEndpoint
-from _internal.core.stage_worker import StageWorker, WorkerRuntime
+from _internal.core.stage_worker import OutputRouting, StageWorker, WorkerRuntime
 from _internal.utils.logging import create_ray_logger
 
 if TYPE_CHECKING:
@@ -60,24 +59,22 @@ class WorkerManager:
         stage: "Stage",
         runtime: "StageRuntime",
         payload_store: "SplitPayloadStore",
-        broker_endpoint: Optional[QueueEndpoint],
-        output_queue_name: str,
+        output: OutputRouting,
+        upstream_queue_name: Optional[str] = None,
     ):
         self._job_id = job_id
         self._stage = stage
         self._stage_id = stage.stage_id
         self._runtime = runtime
         self._payload_store = payload_store
-        self._broker_endpoint = broker_endpoint
-        self._output_queue_name = output_queue_name
+        self._output = output
+        self._upstream_queue_name = upstream_queue_name
         self._logger = create_ray_logger(f"WorkerMgr-{stage.stage_id}")
 
         # Worker state
         self._workers: Dict[str, ray.actor.ActorHandle] = {}
         self._worker_tasks: Dict[str, ray.ObjectRef] = {}
-
-        # Upstream queue name (from runtime)
-        self._upstream_queue_name = runtime.upstream_queue_name
+        self._worker_index = 0
 
         # Exit tracking
         self._safe_to_exit = False
@@ -96,13 +93,6 @@ class WorkerManager:
     def worker_ids(self) -> List[str]:
         """Get list of current worker IDs."""
         return list(self._workers.keys())
-
-    def set_upstream_queue_name(self, queue_name: Optional[str]) -> None:
-        """Set upstream queue name.
-
-        Used by StageMaster (with SplitPlanner) to point workers at the planner queue.
-        """
-        self._upstream_queue_name = queue_name
 
     async def spawn_worker(self, is_min_worker: bool = False) -> Optional[str]:
         """Spawn a new worker.
@@ -138,13 +128,36 @@ class WorkerManager:
 
         return worker_id
 
+    def _assign_partition_queues(self, worker_index: int) -> Optional[tuple[str, ...]]:
+        """Assign upstream partition queues to a worker (round-robin distribution).
+
+        Each partition queue is assigned to exactly one worker. If there are
+        more workers than partitions, some workers get no partitions and should
+        not be spawned.
+
+        Returns:
+            Tuple of partition queue names assigned to this worker, or None
+            if the stage is not downstream of a shuffle.
+        """
+        if not self._runtime.upstream_partition_queue_names:
+            return None
+
+        n_partitions = len(self._runtime.upstream_partition_queue_names)
+        assigned = [
+            self._runtime.upstream_partition_queue_names[i]
+            for i in range(n_partitions)
+            if i % self._stage.max_parallelism == worker_index % self._stage.max_parallelism
+        ]
+        return tuple(assigned) if assigned else None
+
     async def _create_worker(self) -> str:
         """Create a new worker actor and start its run loop.
 
         Returns:
             The worker_id of the spawned worker
         """
-        worker_index = len(self._workers)
+        worker_index = self._worker_index
+        self._worker_index += 1
         worker_id = f"{self._stage_id}_w{worker_index}_{uuid.uuid4().hex[:6]}"
 
         # Build resource requirements
@@ -156,16 +169,20 @@ class WorkerManager:
         if self._stage.memory_mb > 0:
             resources["memory"] = self._stage.memory_mb * 1024 * 1024
 
+        # Assign partition queues for shuffle support
+        assigned_partitions = self._assign_partition_queues(worker_index)
+
         # Build immutable WorkerRuntime
         runtime = WorkerRuntime(
             worker_id=worker_id,
             job_id=self._job_id,
             stage_id=self._stage_id,
-            broker_endpoint=self._broker_endpoint,
+            broker_endpoint=self._runtime.broker_endpoint,
             upstream_queue_name=self._upstream_queue_name,
-            output_queue_name=self._output_queue_name,
+            output=self._output,
             batch_size=self._stage.batch_size,
             claim_timeout_secs=self._runtime.claim_timeout_secs,
+            assigned_partition_queue_names=assigned_partitions,
         )
 
         # Create worker actor
@@ -184,7 +201,12 @@ class WorkerManager:
         task = worker.run.remote()
         self._worker_tasks[worker_id] = task
 
-        self._logger.info(f"Spawned worker {worker_id}")
+        if assigned_partitions:
+            self._logger.info(
+                f"Spawned worker {worker_id} with {len(assigned_partitions)} partition queues"
+            )
+        else:
+            self._logger.info(f"Spawned worker {worker_id}")
         return worker_id
 
     async def _check_worker_ready(self, worker_id: str, timeout: float) -> bool:
