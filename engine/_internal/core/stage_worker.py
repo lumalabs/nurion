@@ -346,7 +346,12 @@ class StageWorker:
         result = self._operator.process_split(split, merged_payload)
         check_fault(FAULT_AFTER_PROCESS)
 
-        # For async operators, include await time in processing latency.
+        # Resolve async results now so processing_ms includes actual work
+        # (e.g., LLM API calls in async operators).
+        collected: Any = (
+            result if isinstance(result, RawOutputBytes) else await self._collect_outputs(result)
+        )
+
         processing_ms = max(0.0, (time.time() - process_start) * 1000.0)
 
         input_rows = merged_payload.data.num_rows if merged_payload else 0
@@ -361,9 +366,9 @@ class StageWorker:
         )
 
         # Shuffle output: split by partition and push to partition queues
-        if self._output.partition_queue_names and not isinstance(result, RawOutputBytes):
+        if self._output.partition_queue_names and not isinstance(collected, RawOutputBytes):
             await self._shuffle_output_and_ack(
-                result,
+                collected,
                 split_id,
                 batch,
                 upstream_queue,
@@ -371,7 +376,7 @@ class StageWorker:
             )
         else:
             # Standard path: atomic ack_and_forward to single output queue
-            output_bytes_list = await self._serialize_outputs(result, split_id)
+            output_bytes_list = await self._serialize_outputs(collected, split_id)
             if output_bytes_list and self._output.queue_name:
                 self.queue_client.ack_and_forward(
                     upstream_queue=upstream_queue,
@@ -532,14 +537,21 @@ class StageWorker:
         return split_id, split, merged_payload
 
     async def _serialize_outputs(self, result: Any, split_id: str) -> list[bytes]:
-        """Collect process_split results and serialize to output messages."""
+        """Serialize process_split results into output messages.
+
+        Args:
+            result: Either RawOutputBytes or a pre-collected list[SplitPayload].
+        """
         output_bytes_list: list[bytes] = []
 
         if isinstance(result, RawOutputBytes):
             if self._output.queue_name:
                 output_bytes_list = result.payloads
         else:
-            output_payloads = await self._collect_outputs(result)
+            # result is already collected (list[SplitPayload]) by _process_and_ack.
+            output_payloads = (
+                result if isinstance(result, list) else await self._collect_outputs(result)
+            )
             if output_payloads and self._output.queue_name:
                 for idx, out_payload in enumerate(output_payloads):
                     out_id = split_id if len(output_payloads) == 1 else f"{split_id}_{idx}"
@@ -579,7 +591,10 @@ class StageWorker:
         assert self._output.partition_queue_names is not None
         assert self._output.partition_column is not None
 
-        output_payloads = await self._collect_outputs(result)
+        # result is already collected (list[SplitPayload]) by _process_and_ack.
+        output_payloads = (
+            result if isinstance(result, list) else await self._collect_outputs(result)
+        )
         if not output_payloads:
             # No output: just ack upstream
             self.queue_client.ack(

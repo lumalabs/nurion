@@ -76,6 +76,11 @@ class WorkerManager:
         self._worker_tasks: Dict[str, ray.ObjectRef] = {}
         self._worker_index = 0
 
+        # Slot tracking for partition assignment: when a worker dies, its slot
+        # is returned to _free_slots so the replacement gets the same partitions.
+        self._worker_slots: Dict[str, int] = {}
+        self._free_slots: List[int] = []
+
         # Exit tracking
         self._safe_to_exit = False
 
@@ -156,9 +161,14 @@ class WorkerManager:
         Returns:
             The worker_id of the spawned worker
         """
-        worker_index = self._worker_index
-        self._worker_index += 1
-        worker_id = f"{self._stage_id}_w{worker_index}_{uuid.uuid4().hex[:6]}"
+        # Reuse slot from a dead worker so partition assignment stays stable,
+        # otherwise allocate a new slot.
+        if self._free_slots:
+            slot_index = self._free_slots.pop(0)
+        else:
+            slot_index = self._worker_index
+            self._worker_index += 1
+        worker_id = f"{self._stage_id}_w{slot_index}_{uuid.uuid4().hex[:6]}"
 
         # Build resource requirements
         resources = {}
@@ -170,7 +180,8 @@ class WorkerManager:
             resources["memory"] = self._stage.memory_mb * 1024 * 1024
 
         # Assign partition queues for shuffle support
-        assigned_partitions = self._assign_partition_queues(worker_index)
+        assigned_partitions = self._assign_partition_queues(slot_index)
+        self._worker_slots[worker_id] = slot_index
 
         # Build immutable WorkerRuntime
         runtime = WorkerRuntime(
@@ -245,6 +256,9 @@ class WorkerManager:
         """Cancel a pending worker that couldn't start due to resource constraints."""
         worker = self._workers.pop(worker_id, None)
         task = self._worker_tasks.pop(worker_id, None)
+        slot = self._worker_slots.pop(worker_id, None)
+        if slot is not None:
+            self._free_slots.append(slot)
 
         if worker is not None:
             try:
@@ -277,6 +291,9 @@ class WorkerManager:
             ray.get(worker.stop.remote(), timeout=timeout)
             self._workers.pop(worker_id, None)
             self._worker_tasks.pop(worker_id, None)
+            slot = self._worker_slots.pop(worker_id, None)
+            if slot is not None:
+                self._free_slots.append(slot)
             self._logger.debug(f"Stopped worker {worker_id}")
             return True
         except Exception as e:
@@ -344,10 +361,14 @@ class WorkerManager:
         """Remove workers from tracking (after completion or failure).
 
         Does not actually stop workers - just removes from internal tracking.
+        Returns slots to free pool so replacement workers get the same partitions.
         """
         for worker_id in worker_ids:
             self._workers.pop(worker_id, None)
             self._worker_tasks.pop(worker_id, None)
+            slot = self._worker_slots.pop(worker_id, None)
+            if slot is not None:
+                self._free_slots.append(slot)
 
     async def notify_worker_safe_to_exit(self, worker_id: str) -> None:
         """Notify a specific worker that it's safe to exit.
