@@ -259,5 +259,3 @@ def split_by_partition(table: pa.Table) -> dict[int, pa.Table]:
         result[partition_id] = partition_table
 
     return result
-
-
