@@ -240,9 +240,7 @@ class TestPartitionHooks:
 
     def test_non_shuffle_config_partition_count(self):
         """Test that non-shuffle configs report 0 partitions."""
-        from _internal.core.operator import OperatorConfig
-
-        # OperatorConfig is abstract, but we can check default via a concrete subclass
+        # Check default via a concrete subclass (OperatorConfig itself is abstract)
         config = RepartitionConfig(partition_keys=["user_id"], num_partitions=1)
         # Even with 1 partition, ShuffleOperatorConfig reports it
         assert config.get_output_partition_count() == 1
