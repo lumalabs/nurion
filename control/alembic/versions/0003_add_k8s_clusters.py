@@ -39,7 +39,7 @@ def upgrade() -> None:
         sa.Column("default_queue", sa.String(length=255), nullable=False),
         sa.Column("default_ray_image", sa.String(length=512), nullable=False),
         sa.Column("image_pull_secret", sa.String(length=255), nullable=True),
-        sa.Column("is_default", sa.Boolean(), nullable=False, default=False),
+        sa.Column("is_default", sa.Boolean(), nullable=False, server_default=sa.text("false")),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -66,14 +66,19 @@ def upgrade() -> None:
         # Job configuration
         sa.Column("entrypoint", sa.Text(), nullable=False),
         sa.Column("ray_image", sa.String(length=512), nullable=True),
-        sa.Column("num_cpus", sa.Integer(), nullable=False, default=16),
-        sa.Column("num_gpus", sa.Integer(), nullable=False, default=0),
-        sa.Column("memory_gb", sa.Integer(), nullable=False, default=128),
-        sa.Column("worker_replicas", sa.Integer(), nullable=False, default=3),
+        sa.Column("num_cpus", sa.Integer(), nullable=False, server_default=sa.text("16")),
+        sa.Column("num_gpus", sa.Integer(), nullable=False, server_default=sa.text("0")),
+        sa.Column("memory_gb", sa.Integer(), nullable=False, server_default=sa.text("128")),
+        sa.Column("worker_replicas", sa.Integer(), nullable=False, server_default=sa.text("3")),
         sa.Column("runtime_env", sa.JSON(), nullable=True),
         sa.Column("env_vars", sa.JSON(), nullable=True),
         # Job status
-        sa.Column("status", sa.String(length=50), nullable=False, default="PENDING"),
+        sa.Column(
+            "status",
+            sa.String(length=50),
+            nullable=False,
+            server_default=sa.text("'PENDING'"),
+        ),
         sa.Column("message", sa.Text(), nullable=True),
         sa.Column("dashboard_url", sa.String(length=512), nullable=True),
         # User info
