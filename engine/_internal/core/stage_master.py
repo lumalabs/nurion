@@ -146,9 +146,7 @@ class StageMaster:
         self.logger.info(f"Connected to broker at {broker_url}")
 
         # All inter-stage output uses QueueGroup
-        self._queue_client.create_queue_group(
-            self._output_group_name, self._num_partitions
-        )
+        self._queue_client.create_queue_group(self._output_group_name, self._num_partitions)
         self.logger.info(
             f"Created output group '{self._output_group_name}' with "
             f"{self._num_partitions} partition(s) for stage {self.stage_id}"
@@ -159,9 +157,7 @@ class StageMaster:
         from _internal.core.stage_worker import OutputRouting
 
         partition_column = (
-            self.stage.operator_config.get_partition_column()
-            if self._num_partitions > 1
-            else None
+            self.stage.operator_config.get_partition_column() if self._num_partitions > 1 else None
         )
         output = OutputRouting(
             group_name=self._output_group_name,
@@ -277,7 +273,9 @@ class StageMaster:
         # modulus, so min_parallelism workers alone may leave gaps).
         min_workers = self.stage.min_parallelism
         if self.runtime.upstream_num_partitions > 0:
-            min_workers = max(min_workers, min(self.runtime.upstream_num_partitions, self.stage.max_parallelism))
+            min_workers = max(
+                min_workers, min(self.runtime.upstream_num_partitions, self.stage.max_parallelism)
+            )
 
         for _ in range(min_workers):
             worker_id = await self._worker_manager.spawn_worker(is_min_worker=True)
@@ -443,9 +441,13 @@ class StageMaster:
                 break
             except Exception as e:
                 if attempt == max_retries - 1:
-                    self.logger.error(f"Failed to mark group {self._output_group_name} as finished after {max_retries} attempts: {e}")
+                    self.logger.error(
+                        f"Failed to mark group {self._output_group_name} as finished after {max_retries} attempts: {e}"
+                    )
                     raise
-                self.logger.warning(f"Retry {attempt + 1}/{max_retries} marking group finished: {e}")
+                self.logger.warning(
+                    f"Retry {attempt + 1}/{max_retries} marking group finished: {e}"
+                )
                 _time.sleep(0.5 * (attempt + 1))
 
     def _write_stage_state(self, status: str) -> None:
@@ -511,6 +513,7 @@ class StageMaster:
                 if group_name:
                     result = self._queue_client.is_group_finished(group_name)
                 else:
+                    assert queue_name is not None
                     result = self._queue_client.is_queue_finished(queue_name)
 
                 consecutive_errors = 0

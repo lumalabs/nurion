@@ -183,9 +183,13 @@ class StageWorker:
         self._running = True
         self.logger.info(f"Worker {self.worker_id} starting")
 
-        if not self._runtime.broker_endpoint or not self._runtime.upstream_queue_name:
+        has_upstream = (
+            self._runtime.upstream_queue_name or self._runtime.upstream_partition_group_name
+        )
+        if not self._runtime.broker_endpoint or not has_upstream:
             raise RuntimeError(
-                f"Worker {self.worker_id} requires broker_endpoint and upstream_queue_name."
+                f"Worker {self.worker_id} requires broker_endpoint and "
+                f"upstream_queue_name or upstream_partition_group_name."
             )
 
         try:
@@ -320,9 +324,7 @@ class StageWorker:
                 while len(pending) >= merge:
                     group = pending[:merge]
                     pending = pending[merge:]
-                    await self._process_and_ack(
-                        group, upstream_queue_override=current_source_queue
-                    )
+                    await self._process_and_ack(group, upstream_queue_override=current_source_queue)
 
             except asyncio.CancelledError:
                 self.logger.info(f"Worker {self.worker_id} cancelled")

@@ -110,7 +110,9 @@ class TestSparkSourceV2Integration:
             print(f"V2 wrote {total_pushed} messages to output_queue")
 
             # Verify we can consume and get data via payload_store
-            messages = output_queue.claim(f"{master._output_group_name}_p0", batch_size=10, timeout_ms=5000)
+            messages = output_queue.claim(
+                f"{master._output_group_name}_p0", batch_size=10, timeout_ms=5000
+            )
             assert len(messages) > 0
 
             # Check message format (messages have .value attribute)

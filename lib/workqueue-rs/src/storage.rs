@@ -1073,7 +1073,10 @@ impl WorkQueueStorage {
         );
         for queue_name in &meta.partition_queues {
             let queue_meta = QueueMeta::default();
-            batch.put(Self::meta_key(queue_name), &serde_json::to_vec(&queue_meta)?);
+            batch.put(
+                Self::meta_key(queue_name),
+                &serde_json::to_vec(&queue_meta)?,
+            );
         }
         self.db.write(batch).await?;
 
@@ -1135,10 +1138,7 @@ impl WorkQueueStorage {
         };
 
         for attempt in 0..MAX_TXN_RETRIES {
-            let txn = self
-                .db
-                .begin(IsolationLevel::SerializableSnapshot)
-                .await?;
+            let txn = self.db.begin(IsolationLevel::SerializableSnapshot).await?;
 
             let now_ns = now_nanos();
             let ack_count = upstream_msg_ids.len() as u64;
@@ -1179,8 +1179,7 @@ impl WorkQueueStorage {
                     }
                 }
 
-                let upstream_meta =
-                    Self::get_meta_from_reader(&txn, upstream_queue).await?;
+                let upstream_meta = Self::get_meta_from_reader(&txn, upstream_queue).await?;
                 for msg_id in upstream_msg_ids {
                     txn.delete(Self::claimed_key(upstream_queue, msg_id))?;
                     txn.put(Self::acked_key(upstream_queue, now_ns, msg_id), [])?;
@@ -1202,8 +1201,7 @@ impl WorkQueueStorage {
                     continue;
                 }
                 let partition_queue = &group.partition_queues[*pid as usize];
-                let partition_meta =
-                    Self::get_meta_from_reader(&txn, partition_queue).await?;
+                let partition_meta = Self::get_meta_from_reader(&txn, partition_queue).await?;
                 let msg_count = messages.len() as u64;
 
                 for (i, msg) in messages.iter().enumerate() {
@@ -2259,8 +2257,7 @@ mod tests {
             group.partition_queues[2].clone(),
             b"y1".to_vec(),
         )];
-        let partition_payloads: Vec<(u32, Vec<Message>)> =
-            vec![(0, out_p0), (2, out_p2)];
+        let partition_payloads: Vec<(u32, Vec<Message>)> = vec![(0, out_p0), (2, out_p2)];
 
         let new_ids = storage
             .ack_and_scatter(
@@ -2506,10 +2503,8 @@ mod tests {
         let group = storage.create_queue_group("grp1", 2).await.unwrap();
 
         // Not finished yet — empty queues without total_pushed > 0 are NOT drained
-        let (all_finished, all_drained, statuses) = storage
-            .check_group_completion("grp1")
-            .await
-            .unwrap();
+        let (all_finished, all_drained, statuses) =
+            storage.check_group_completion("grp1").await.unwrap();
         assert!(!all_finished);
         assert!(!all_drained); // empty unused queues are not considered drained
         assert_eq!(statuses.len(), 2);
@@ -2519,10 +2514,7 @@ mod tests {
         assert_eq!(marked, 2);
 
         // Now should be finished AND drained (no messages)
-        let (all_finished, all_drained, _) = storage
-            .check_group_completion("grp1")
-            .await
-            .unwrap();
+        let (all_finished, all_drained, _) = storage.check_group_completion("grp1").await.unwrap();
         assert!(all_finished);
         assert!(all_drained);
 
@@ -2533,10 +2525,8 @@ mod tests {
             .await
             .unwrap();
 
-        let (all_finished, all_drained, statuses) = storage
-            .check_group_completion("grp1")
-            .await
-            .unwrap();
+        let (all_finished, all_drained, statuses) =
+            storage.check_group_completion("grp1").await.unwrap();
         assert!(all_finished);
         assert!(!all_drained);
         // p0 has 1 pending, p1 has 0
