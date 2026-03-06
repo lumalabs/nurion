@@ -104,13 +104,13 @@ class TestSparkSourceV2Integration:
             assert output_queue.health_check()
 
             # Check that messages were written via stats
-            stats = output_queue.get_stats(master._output_queue_name)
+            stats = output_queue.get_stats(f"{master._output_group_name}_p0")
             total_pushed = stats.get("total_pushed", 0)
             assert total_pushed > 0
             print(f"V2 wrote {total_pushed} messages to output_queue")
 
             # Verify we can consume and get data via payload_store
-            messages = output_queue.claim(master._output_queue_name, batch_size=10, timeout_ms=5000)
+            messages = output_queue.claim(f"{master._output_group_name}_p0", batch_size=10, timeout_ms=5000)
             assert len(messages) > 0
 
             # Check message format (messages have .value attribute)
@@ -171,7 +171,7 @@ class TestSparkSourceV2Integration:
             # Should have messages based on parallelism setting
             # Note: The exact count depends on data distribution, but should be > 0
             output_queue = master.get_queue_client()
-            stats = output_queue.get_stats(master._output_queue_name)
+            stats = output_queue.get_stats(f"{master._output_group_name}_p0")
             total_pushed = stats.get("total_pushed", 0)
             assert total_pushed > 0
             print(f"V2 with parallelism=4 wrote {total_pushed} messages")

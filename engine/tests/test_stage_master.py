@@ -220,7 +220,7 @@ class TestStageMaster:
         await master.start()
 
         assert master._queue_client is not None
-        assert master._output_queue_name == "test_job_test_stage_output"
+        assert master._output_group_name == "test_job_test_stage_output"
 
         await master.stop()
 
@@ -469,7 +469,7 @@ class TestStageWorkerPayloadCleanup:
                 storage_url="memory://",
             ),
             upstream_queue_name="cleanup_upstream",
-            # no downstream — ack-only path (default OutputRouting has queue_name=None)
+            # no downstream — ack-only path (default OutputRouting has group_name=None)
         )
 
         worker = WorkerClass(runtime, MockStage(), mock_payload_store)

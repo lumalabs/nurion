@@ -45,14 +45,15 @@ class StageRuntime:
     Attributes:
         broker_endpoint: WorkQueue broker endpoint
         upstream_queue_name: Upstream queue name (None for source stages)
-        upstream_partition_queue_names: If upstream is a shuffle stage, the
-            partition queue names to claim from (None for normal stages)
+        upstream_num_partitions: Number of upstream partition queues (0 if not shuffle)
+        upstream_partition_group_name: QueueGroup name if upstream uses partitioned output
     """
 
     broker_endpoint: Optional["QueueEndpoint"] = None
     upstream_queue_name: Optional[str] = None
     claim_timeout_secs: float = 60.0
-    upstream_partition_queue_names: Optional[Tuple[str, ...]] = None
+    upstream_num_partitions: int = 0
+    upstream_partition_group_name: Optional[str] = None
 
 
 # =============================================================================

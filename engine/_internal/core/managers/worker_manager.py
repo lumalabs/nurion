@@ -133,27 +133,22 @@ class WorkerManager:
 
         return worker_id
 
-    def _assign_partition_queues(self, worker_index: int) -> Optional[tuple[str, ...]]:
-        """Assign upstream partition queues to a worker (round-robin distribution).
-
-        Each partition queue is assigned to exactly one worker. If there are
-        more workers than partitions, some workers get no partitions and should
-        not be spawned.
+    def _assign_partition_ids(self, worker_index: int) -> Optional[tuple[int, ...]]:
+        """Assign partition IDs to a worker (round-robin distribution).
 
         Returns:
-            Tuple of partition queue names assigned to this worker, or None
-            if the stage is not downstream of a shuffle.
+            Tuple of partition IDs, or None if not downstream of a shuffle.
         """
-        if not self._runtime.upstream_partition_queue_names:
+        if self._runtime.upstream_num_partitions <= 0:
             return None
 
-        n_partitions = len(self._runtime.upstream_partition_queue_names)
-        assigned = [
-            self._runtime.upstream_partition_queue_names[i]
+        n_partitions = self._runtime.upstream_num_partitions
+        indices = [
+            i
             for i in range(n_partitions)
             if i % self._stage.max_parallelism == worker_index % self._stage.max_parallelism
         ]
-        return tuple(assigned) if assigned else None
+        return tuple(indices) if indices else None
 
     async def _create_worker(self) -> str:
         """Create a new worker actor and start its run loop.
@@ -179,8 +174,8 @@ class WorkerManager:
         if self._stage.memory_mb > 0:
             resources["memory"] = self._stage.memory_mb * 1024 * 1024
 
-        # Assign partition queues for shuffle support
-        assigned_partitions = self._assign_partition_queues(slot_index)
+        # Assign partition IDs for shuffle support
+        assigned_partition_ids = self._assign_partition_ids(slot_index)
         self._worker_slots[worker_id] = slot_index
 
         # Build immutable WorkerRuntime
@@ -193,7 +188,8 @@ class WorkerManager:
             output=self._output,
             batch_size=self._stage.batch_size,
             claim_timeout_secs=self._runtime.claim_timeout_secs,
-            assigned_partition_queue_names=assigned_partitions,
+            assigned_partition_ids=assigned_partition_ids,
+            upstream_partition_group_name=self._runtime.upstream_partition_group_name,
         )
 
         # Create worker actor
@@ -212,9 +208,9 @@ class WorkerManager:
         task = worker.run.remote()
         self._worker_tasks[worker_id] = task
 
-        if assigned_partitions:
+        if assigned_partition_ids:
             self._logger.info(
-                f"Spawned worker {worker_id} with {len(assigned_partitions)} partition queues"
+                f"Spawned worker {worker_id} with partitions {assigned_partition_ids}"
             )
         else:
             self._logger.info(f"Spawned worker {worker_id}")
