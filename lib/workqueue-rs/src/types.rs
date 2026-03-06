@@ -16,12 +16,17 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+#[cfg(test)]
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Simulated time override (nanoseconds since epoch).
-/// When non-zero, `now_secs()` and `now_nanos()` return values derived from this
-/// instead of real wall-clock time. Zero means "use real time".
+// === Simulated time (test-only) ===
+//
+// In test builds, `now_secs()` and `now_nanos()` check a global override so that
+// DST and time-sensitive tests can control the clock deterministically.
+// In release/production builds, they are direct wall-clock reads with zero overhead.
+
+#[cfg(test)]
 static SIM_TIME_NANOS: AtomicU64 = AtomicU64::new(0);
 
 /// Mutex to serialize tests that use simulated time.
@@ -45,6 +50,16 @@ pub fn advance_sim_time_secs(secs: f64) {
 }
 
 /// Get current time as Unix timestamp (seconds with fractional part)
+#[cfg(not(test))]
+pub fn now_secs() -> f64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs_f64()
+}
+
+/// Get current time as Unix timestamp (seconds with fractional part) — test version with sim clock
+#[cfg(test)]
 pub fn now_secs() -> f64 {
     let sim = SIM_TIME_NANOS.load(Ordering::Acquire);
     if sim > 0 {
@@ -57,6 +72,16 @@ pub fn now_secs() -> f64 {
 }
 
 /// Get current time as nanoseconds since epoch
+#[cfg(not(test))]
+pub fn now_nanos() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos() as u64
+}
+
+/// Get current time as nanoseconds since epoch — test version with sim clock
+#[cfg(test)]
 pub fn now_nanos() -> u64 {
     let sim = SIM_TIME_NANOS.load(Ordering::Acquire);
     if sim > 0 {

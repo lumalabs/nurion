@@ -299,8 +299,20 @@ mod tests {
                         .await
                         .unwrap();
                     if recovered > 0 {
+                        // Reconcile: only keep claims that are still in storage's claimed set.
+                        // Build a set of (queue, msg_id) pairs that are still claimed.
+                        let mut still_claimed: HashSet<(String, String)> = HashSet::new();
+                        for queue in &self.queues {
+                            for (_, msg_id, _) in
+                                self.storage.scan_claimed(Some(queue)).await.unwrap()
+                            {
+                                still_claimed.insert((queue.clone(), msg_id));
+                            }
+                        }
                         for worker in &mut self.workers {
-                            worker.claims.clear();
+                            worker.claims.retain(|(q, mid, _)| {
+                                still_claimed.contains(&(q.clone(), mid.clone()))
+                            });
                         }
                     }
                 }
