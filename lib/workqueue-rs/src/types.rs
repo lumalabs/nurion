@@ -16,10 +16,40 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+/// Simulated time override (nanoseconds since epoch).
+/// When non-zero, `now_secs()` and `now_nanos()` return values derived from this
+/// instead of real wall-clock time. Zero means "use real time".
+static SIM_TIME_NANOS: AtomicU64 = AtomicU64::new(0);
+
+/// Mutex to serialize tests that use simulated time.
+/// Acquire this lock before calling `set_sim_time_nanos` to prevent
+/// parallel tests from stomping on each other's sim time.
+#[cfg(test)]
+pub static SIM_TIME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Set simulated time (nanoseconds since epoch). Pass 0 to restore real time.
+/// IMPORTANT: Acquire `SIM_TIME_LOCK` before calling this in tests.
+#[cfg(test)]
+pub fn set_sim_time_nanos(nanos: u64) {
+    SIM_TIME_NANOS.store(nanos, Ordering::Release);
+}
+
+/// Advance simulated time by the given number of seconds.
+#[cfg(test)]
+pub fn advance_sim_time_secs(secs: f64) {
+    let delta = (secs * 1_000_000_000.0) as u64;
+    SIM_TIME_NANOS.fetch_add(delta, Ordering::Release);
+}
 
 /// Get current time as Unix timestamp (seconds with fractional part)
 pub fn now_secs() -> f64 {
+    let sim = SIM_TIME_NANOS.load(Ordering::Acquire);
+    if sim > 0 {
+        return sim as f64 / 1_000_000_000.0;
+    }
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -28,6 +58,10 @@ pub fn now_secs() -> f64 {
 
 /// Get current time as nanoseconds since epoch
 pub fn now_nanos() -> u64 {
+    let sim = SIM_TIME_NANOS.load(Ordering::Acquire);
+    if sim > 0 {
+        return sim;
+    }
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -58,7 +92,11 @@ impl Message {
     }
 
     /// Create a message with metadata
-    pub fn with_metadata(queue: String, payload: Vec<u8>, metadata: HashMap<String, String>) -> Self {
+    pub fn with_metadata(
+        queue: String,
+        payload: Vec<u8>,
+        metadata: HashMap<String, String>,
+    ) -> Self {
         Self {
             msg_id: uuid::Uuid::now_v7().to_string(),
             queue,
@@ -112,6 +150,7 @@ pub struct WorkQueueConfig {
     /// Recovery task interval in seconds
     pub recovery_interval_secs: f64,
     /// Maximum queue depth (0 = unlimited) - reserved for future use
+    #[allow(dead_code)]
     pub max_queue_depth: usize,
     /// Acked message retention in seconds (messages deleted after this time)
     pub acked_retention_secs: f64,
