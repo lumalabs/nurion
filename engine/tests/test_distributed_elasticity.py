@@ -186,8 +186,10 @@ class TestElasticScaling:
                 runner, min_processed=200, timeout=30, collector_name=self.collector_name
             )
 
-            # Scale down: kill workers sequentially
-            for _ in range(2):
+            # Scale down: kill workers sequentially (retry to handle timing)
+            for _ in range(5):
+                if kills >= 2:
+                    break
                 try:
                     if await kill_random_worker(runner, stage_id="transform"):
                         kills += 1

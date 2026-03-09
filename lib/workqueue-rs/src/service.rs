@@ -606,9 +606,7 @@ impl WorkQueue for WorkQueueService {
             return Err(Status::invalid_argument("group_name is required"));
         }
         if req.num_partitions <= 0 {
-            return Err(Status::invalid_argument(
-                "num_partitions must be positive",
-            ));
+            return Err(Status::invalid_argument("num_partitions must be positive"));
         }
 
         // Check if already exists to set `created` flag
@@ -851,8 +849,7 @@ impl WorkQueue for WorkQueueService {
                 let partitions: Vec<PartitionStats> = stats
                     .iter()
                     .map(|(pid, meta)| {
-                        let pending =
-                            meta.push_seq.saturating_sub(meta.claim_seq) as i64;
+                        let pending = meta.push_seq.saturating_sub(meta.claim_seq) as i64;
                         let claimed = meta.claimed_count as i64;
                         total_pending += pending;
                         total_claimed += claimed;
@@ -890,8 +887,7 @@ impl WorkQueue for WorkQueueService {
                     stats
                         .iter()
                         .filter_map(|(pid, meta)| {
-                            let pending =
-                                meta.push_seq.saturating_sub(meta.claim_seq) as i64;
+                            let pending = meta.push_seq.saturating_sub(meta.claim_seq) as i64;
                             if pending > median * 5 {
                                 Some(*pid as i32)
                             } else {

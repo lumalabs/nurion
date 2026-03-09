@@ -334,6 +334,9 @@ class StageWorker:
                     self.logger.error(f"Worker {self.worker_id} broker error: {e}")
                     raise RuntimeError("broker_unavailable") from e
                 self.logger.error(f"Error in worker {self.worker_id}: {e}")
+                # Clear stale pending records to avoid mixing with next iteration
+                pending.clear()
+                current_source_queue = None
                 await asyncio.sleep(0.1)
 
     # =========================================================================

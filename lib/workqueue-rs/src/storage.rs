@@ -1334,7 +1334,7 @@ impl WorkQueueStorage {
                         let meta = self.get_meta(queue_name).await?;
                         let pending = meta.push_seq.saturating_sub(meta.claim_seq);
                         if pending <= steal_pending_threshold {
-                            break;
+                            continue;
                         }
                     }
                     let claimed = self
@@ -1342,9 +1342,6 @@ impl WorkQueueStorage {
                         .await?;
                     if !claimed.is_empty() {
                         return Ok((claimed, queue_name.to_string(), pid));
-                    }
-                    if steal_pending_threshold > 0 {
-                        break;
                     }
                 }
             }

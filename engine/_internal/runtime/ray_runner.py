@@ -262,6 +262,8 @@ class RayJobRunner:
                 # All inter-stage data uses QueueGroup
                 upstream_num_partitions = upstream_master.get_num_partitions()
                 upstream_partition_group_name = upstream_master.get_output_group_name()
+                # Set upstream_queue_name to partition 0 as fallback for defensive coding
+                upstream_queue_name = f"{upstream_partition_group_name}_p0"
 
             # Build immutable StageRuntime with all info
             runtime = self._build_stage_runtime(
