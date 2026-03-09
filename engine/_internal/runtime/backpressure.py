@@ -21,7 +21,11 @@ from _internal.runtime.queue_stats import QueueStatsClient, StageQueueConfig
 
 
 class JobBackpressureController:
-    """Job-level backpressure controller using WorkQueue stats."""
+    """Job-level backpressure controller using WorkQueue stats.
+
+    Uses QueueGroup aggregate stats for inter-stage data queues,
+    and single-queue stats for internal queues (planner, commit).
+    """
 
     def __init__(
         self,
@@ -38,8 +42,8 @@ class JobBackpressureController:
         if not cfg:
             return False
 
-        input_stats = self._queue_stats.get_stats(cfg.input_queue_name)
-        output_stats = self._queue_stats.get_stats(cfg.output_queue_name)
+        input_stats = self._queue_stats.get_input_stats(cfg)
+        output_stats = self._queue_stats.get_output_stats(cfg)
 
         return (
             input_stats.pending_count > cfg.backpressure_threshold_lag
@@ -61,7 +65,7 @@ class JobBackpressureController:
             if not cfg:
                 continue
 
-            output_stats = self._queue_stats.get_stats(cfg.output_queue_name)
+            output_stats = self._queue_stats.get_output_stats(cfg)
             if output_stats.pending_count > cfg.backpressure_threshold_queue_size * 0.8:
                 return True
 
@@ -71,13 +75,13 @@ class JobBackpressureController:
         cfg = self._stage_configs.get(stage_id)
         if not cfg:
             return QueueStats()
-        return self._queue_stats.get_stats(cfg.input_queue_name)
+        return self._queue_stats.get_input_stats(cfg)
 
     def get_output_queue_stats(self, stage_id: str) -> QueueStats:
         cfg = self._stage_configs.get(stage_id)
         if not cfg:
             return QueueStats()
-        return self._queue_stats.get_stats(cfg.output_queue_name)
+        return self._queue_stats.get_output_stats(cfg)
 
     def _downstream_stages(self, stage_id: str) -> Iterable[str]:
         return self._dag_edges.get(stage_id, [])

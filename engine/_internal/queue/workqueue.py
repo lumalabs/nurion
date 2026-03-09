@@ -373,6 +373,11 @@ class WorkQueueQueueClient:
         return self.get_stats(queue).get("pending_count", 0)
 
     # QueueGroup API
+    def get_group_stats(self, group_name: str) -> Dict:
+        """Get aggregate stats for all partitions in a group."""
+        client = self._check()
+        return client.get_group_stats(group_name)
+
     def create_queue_group(self, group_name: str, num_partitions: int) -> Dict:
         """Create a group of partition queues atomically."""
         client = self._check()

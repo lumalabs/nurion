@@ -15,14 +15,16 @@
 """StageWorker - Claim-based streaming worker.
 
 Claim-process-ack loop with optional merge:
-1. Claim messages from upstream queue
+1. Claim messages from upstream QueueGroup via claim_from_group()
 2. Merge payloads if merge_upstream > 1 (Arrow table concatenation)
 3. Call operator.process_split() once per group
-4. Atomic ack_and_forward (ack all upstream + push output downstream)
+4. Atomic ack_and_scatter (ack upstream + scatter output to downstream QueueGroup)
 
 merge_upstream=1: each message processed individually (default).
 merge_upstream=N: N messages merged before processing (e.g., Lance sink).
 Both use the same code path -- single record is just a group of size 1.
+
+Source workers claim from planner queue (single queue, not QueueGroup).
 """
 
 from __future__ import annotations
@@ -96,15 +98,15 @@ class WorkerRuntime:
     stage_id: str
 
     broker_endpoint: Optional[QueueEndpoint] = None
+    # Source workers: planner queue name. Non-source: partition 0 fallback.
     upstream_queue_name: Optional[str] = None
     output: OutputRouting = field(default_factory=OutputRouting)
 
     batch_size: int = 100
     claim_timeout_secs: float = 60.0
 
-    # QueueGroup: assigned partition IDs (integers) for claim_from_group
+    # Non-source workers: upstream QueueGroup for claim_from_group()
     assigned_partition_ids: Optional[tuple[int, ...]] = None
-    # QueueGroup: upstream group name for claim_from_group
     upstream_partition_group_name: Optional[str] = None
 
 
@@ -206,9 +208,9 @@ class StageWorker:
     async def _run_claim_loop(self) -> None:
         """Claim-process-ack loop.
 
-        Two modes:
-        1. QueueGroup: claim_from_group (broker picks best partition)
-        2. Single queue: standard claim
+        Non-source workers: claim_from_group() — broker picks the best
+        partition from the worker's assigned set (QueueGroup path).
+        Source workers: standard claim() from planner queue (single queue).
         """
         assert self.queue_client is not None
 
@@ -218,7 +220,7 @@ class StageWorker:
             await self._run_single_queue_claim_loop()
 
     async def _run_single_queue_claim_loop(self) -> None:
-        """Standard claim loop from a single upstream queue."""
+        """Claim loop for source workers (planner queue only)."""
         assert self.queue_client is not None
         assert self._runtime.upstream_queue_name is not None
 
@@ -352,7 +354,7 @@ class StageWorker:
 
         When len(records) == 1: equivalent to the old single-record path.
         When len(records) > 1: merges payloads via Arrow concat, processes once.
-        All upstream messages are acked atomically via ack_and_forward.
+        All upstream messages are acked atomically via ack_and_scatter.
 
         Args:
             records: Claimed records to process.

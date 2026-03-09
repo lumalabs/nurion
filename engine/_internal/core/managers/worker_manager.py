@@ -21,10 +21,10 @@ Responsibilities:
 - Wait for worker completion (event-driven)
 - Track worker tasks and handles
 
-WorkQueue Model:
-- No partition assignment needed
-- Workers compete for messages via claim()
-- Simpler worker management
+QueueGroup Model:
+- Workers are assigned partition IDs (round-robin) for claim_from_group()
+- Broker picks the best partition from the worker's assigned set
+- Slot tracking ensures stable partition assignment across worker recovery
 """
 
 from __future__ import annotations

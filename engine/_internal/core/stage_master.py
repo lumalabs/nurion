@@ -20,9 +20,10 @@ StageMaster delegates concerns to component managers:
 - SourceManager: SplitPlanner / DirectProducer lifecycle
 - SinkManager: SinkCommitter background commit lifecycle
 
-WorkQueue Model:
-- No partitions - single queue per stage
-- Workers compete for messages via claim()
+QueueGroup Model:
+- All inter-stage data flows through QueueGroup (1 partition for non-shuffle, N for shuffle)
+- Workers claim from group via claim_from_group() (broker picks best partition)
+- Source planner queues remain as single queues (internal coordination only)
 """
 
 from __future__ import annotations
@@ -548,34 +549,46 @@ class StageMaster:
         return self._num_partitions
 
     def get_backpressure_input_queue_name(self) -> Optional[str]:
-        """Get the queue used as input lag signal for backpressure.
+        """Get single-queue name for input backpressure (planner queue only).
 
-        Source stages: planner queue.
-        Non-source stages: partition 0 of upstream group (proxy for aggregate).
+        Returns queue name for source stages (planner queue), None otherwise.
+        Non-source stages use get_backpressure_input_group_name() instead.
         """
         if self._source_manager and not self._source_manager.is_direct_producer:
             return self._source_manager.planner_queue_name
-        if self.runtime.upstream_partition_group_name:
-            return f"{self.runtime.upstream_partition_group_name}_p0"
-        return self.runtime.upstream_queue_name
+        return None
 
-    def get_backpressure_output_queue_name(self) -> str:
-        """Get the queue used as output lag signal for backpressure.
+    def get_backpressure_input_group_name(self) -> Optional[str]:
+        """Get QueueGroup name for input backpressure (upstream group).
 
-        Sink stages: commit queue.
-        Others: partition 0 of output group (proxy for aggregate).
+        Returns upstream group name for non-source stages, None otherwise.
+        """
+        return self.runtime.upstream_partition_group_name
+
+    def get_backpressure_output_queue_name(self) -> Optional[str]:
+        """Get single-queue name for output backpressure (commit queue only).
+
+        Returns commit queue name for sink stages, None otherwise.
+        Non-sink stages use get_backpressure_output_group_name() instead.
         """
         if self._sink_manager:
             return self._sink_manager.commit_queue_name
-        return f"{self._output_group_name}_p0"
+        return None
+
+    def get_backpressure_output_group_name(self) -> str:
+        """Get QueueGroup name for output backpressure."""
+        return self._output_group_name
 
     def get_status(self) -> StageStatus:
         output_size = 0
         if self._queue_client:
             try:
-                output_queue_name = self.get_backpressure_output_queue_name()
-                stats = self._queue_client.get_stats(output_queue_name)
-                output_size = stats.get("pending_count", 0)
+                if self._sink_manager:
+                    stats = self._queue_client.get_stats(self._sink_manager.commit_queue_name)
+                    output_size = stats.get("pending_count", 0)
+                else:
+                    stats = self._queue_client.get_group_stats(self._output_group_name)
+                    output_size = stats.get("total_pending", 0)
             except Exception:
                 pass
 

@@ -42,11 +42,11 @@ class StageRuntime:
     These are determined when the job starts and remain constant throughout
     the stage's lifecycle. Immutable (frozen) for distributed safety.
 
-    Attributes:
-        broker_endpoint: WorkQueue broker endpoint
-        upstream_queue_name: Upstream queue name (None for source stages)
-        upstream_num_partitions: Number of upstream partition queues (0 if not shuffle)
-        upstream_partition_group_name: QueueGroup name if upstream uses partitioned output
+    Upstream data sources:
+    - Source stages: upstream_queue_name is set to planner queue (internal)
+    - Non-source stages: upstream_partition_group_name is the upstream
+      QueueGroup; upstream_queue_name is set to partition 0 as fallback.
+      Workers claim via claim_from_group() using the group name.
     """
 
     broker_endpoint: Optional["QueueEndpoint"] = None
