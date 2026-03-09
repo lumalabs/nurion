@@ -59,6 +59,7 @@ if TYPE_CHECKING:
     import pyarrow as pa
 
     from _internal.core.stage import Stage
+    from _internal.runtime.queue_stats import QueueRef
 
 
 class _ParsedBatch(NamedTuple):
@@ -91,23 +92,26 @@ class OutputRouting:
 
 @dataclass(frozen=True)
 class WorkerRuntime:
-    """Runtime parameters for StageWorker initialization."""
+    """Runtime parameters for StageWorker initialization.
+
+    upstream: QueueRef identifying where to claim messages from.
+      Single queue (is_group=False): source workers claim from planner queue.
+      QueueGroup (is_group=True): non-source workers claim via claim_from_group().
+    """
 
     worker_id: str
     job_id: str
     stage_id: str
 
     broker_endpoint: Optional[QueueEndpoint] = None
-    # Source workers: planner queue name. Non-source: partition 0 fallback.
-    upstream_queue_name: Optional[str] = None
+    upstream: Optional["QueueRef"] = None
     output: OutputRouting = field(default_factory=OutputRouting)
 
     batch_size: int = 100
     claim_timeout_secs: float = 60.0
 
-    # Non-source workers: upstream QueueGroup for claim_from_group()
+    # Non-source workers: partition IDs this worker is assigned to
     assigned_partition_ids: Optional[tuple[int, ...]] = None
-    upstream_partition_group_name: Optional[str] = None
 
 
 class PayloadMissingError(RuntimeError):
@@ -185,13 +189,9 @@ class StageWorker:
         self._running = True
         self.logger.info(f"Worker {self.worker_id} starting")
 
-        has_upstream = (
-            self._runtime.upstream_queue_name or self._runtime.upstream_partition_group_name
-        )
-        if not self._runtime.broker_endpoint or not has_upstream:
+        if not self._runtime.broker_endpoint or not self._runtime.upstream:
             raise RuntimeError(
-                f"Worker {self.worker_id} requires broker_endpoint and "
-                f"upstream_queue_name or upstream_partition_group_name."
+                f"Worker {self.worker_id} requires broker_endpoint and upstream QueueRef."
             )
 
         try:
@@ -206,15 +206,16 @@ class StageWorker:
             await self._cleanup()
 
     async def _run_claim_loop(self) -> None:
-        """Claim-process-ack loop.
+        """Claim-process-ack loop, dispatched by upstream QueueRef type.
 
-        Non-source workers: claim_from_group() — broker picks the best
-        partition from the worker's assigned set (QueueGroup path).
-        Source workers: standard claim() from planner queue (single queue).
+        QueueGroup (is_group=True): claim_from_group() — broker picks the best
+        partition from the worker's assigned set.
+        Single queue (is_group=False): standard claim() from planner queue.
         """
         assert self.queue_client is not None
+        assert self._runtime.upstream is not None
 
-        if self._runtime.upstream_partition_group_name:
+        if self._runtime.upstream.is_group:
             await self._run_group_claim_loop()
         else:
             await self._run_single_queue_claim_loop()
@@ -222,9 +223,9 @@ class StageWorker:
     async def _run_single_queue_claim_loop(self) -> None:
         """Claim loop for source workers (planner queue only)."""
         assert self.queue_client is not None
-        assert self._runtime.upstream_queue_name is not None
+        assert self._runtime.upstream is not None and not self._runtime.upstream.is_group
 
-        upstream_queue = self._runtime.upstream_queue_name
+        upstream_queue = self._runtime.upstream.name
         merge = self._merge_upstream
         pending: list[WorkQueueRecord] = []
 
@@ -275,9 +276,9 @@ class StageWorker:
         the broker steals from unassigned partitions above the threshold.
         """
         assert self.queue_client is not None
-        assert self._runtime.upstream_partition_group_name is not None
+        assert self._runtime.upstream is not None and self._runtime.upstream.is_group
 
-        group_name = self._runtime.upstream_partition_group_name
+        group_name = self._runtime.upstream.name
         assigned = list(self._runtime.assigned_partition_ids or [])
         merge = self._merge_upstream
         pending: list[WorkQueueRecord] = []
@@ -359,13 +360,15 @@ class StageWorker:
         Args:
             records: Claimed records to process.
             upstream_queue_override: If set, use this queue name for ack
-                instead of self.upstream_queue_name. Used by partition claim
-                loop where records come from different partition queues.
+                instead of the default upstream. Used by group claim loop
+                where records come from different partition queues.
         """
         assert self.queue_client is not None
         assert self._operator is not None
 
-        upstream_queue = upstream_queue_override or self._runtime.upstream_queue_name
+        upstream_queue = upstream_queue_override or (
+            self._runtime.upstream.name if self._runtime.upstream else None
+        )
         assert upstream_queue is not None
 
         batch = self._parse_records(records, upstream_queue=upstream_queue)
@@ -454,7 +457,9 @@ class StageWorker:
         upstream_queue: Optional[str] = None,
     ) -> Optional[_ParsedBatch]:
         """Parse claimed records, fetch payloads. Returns None if nacked."""
-        nack_queue = upstream_queue or self._runtime.upstream_queue_name
+        nack_queue = upstream_queue or (
+            self._runtime.upstream.name if self._runtime.upstream else None
+        )
 
         msg_ids: list[str] = []
         claim_tokens: list[str] = []
@@ -513,7 +518,9 @@ class StageWorker:
     ) -> None:
         """Nack all messages with WebUI nack events."""
         assert self.queue_client is not None
-        queue = upstream_queue_override or self._runtime.upstream_queue_name
+        queue = upstream_queue_override or (
+            self._runtime.upstream.name if self._runtime.upstream else None
+        )
         assert queue is not None
 
         ts_ns = time.time_ns()

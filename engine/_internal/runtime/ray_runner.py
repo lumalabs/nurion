@@ -49,7 +49,7 @@ from _internal.core.split_payload_store import (
 from _internal.queue import WorkQueueBrokerManager
 from _internal.runtime.autoscaler import SimpleAutoscaler
 from _internal.runtime.backpressure import JobBackpressureController
-from _internal.runtime.queue_stats import QueueStatsClient, StageQueueConfig
+from _internal.runtime.queue_stats import QueueRef, QueueStatsClient, StageQueueConfig
 from _internal.utils.logging import create_ray_logger
 from _internal.webui.state.writer import WorkQueueStateWriter
 
@@ -238,14 +238,11 @@ class RayJobRunner:
             upstream_ids = self._reverse_dag.get(stage_id, [])
             is_source = not upstream_ids
 
-            # Determine upstream queue name (None for source stages)
-            upstream_queue_name: Optional[str] = None
-
+            # Determine upstream (None for source stages, QueueGroup for non-source)
+            upstream: Optional[QueueRef] = None
             upstream_num_partitions: int = 0
-            upstream_partition_group_name: Optional[str] = None
 
             if not is_source:
-                # Non-source stage: get upstream group info
                 # TODO: Implement multi-upstream support (currently only uses first upstream)
                 if len(upstream_ids) > 1:
                     self.logger.warning(
@@ -255,23 +252,13 @@ class RayJobRunner:
                 upstream_id = upstream_ids[0]
                 upstream_master = self._masters[upstream_id]
 
-                # Start upstream if needed to get its group name
                 if not upstream_master._running:
                     await upstream_master.start()
 
-                # All inter-stage data uses QueueGroup
+                upstream = QueueRef.group(upstream_master.get_output_group_name())
                 upstream_num_partitions = upstream_master.get_num_partitions()
-                upstream_partition_group_name = upstream_master.get_output_group_name()
-                # Set upstream_queue_name to partition 0 as fallback for defensive coding
-                upstream_queue_name = f"{upstream_partition_group_name}_p0"
 
-            # Build immutable StageRuntime with all info
-            runtime = self._build_stage_runtime(
-                stage,
-                upstream_queue_name,
-                upstream_num_partitions=upstream_num_partitions,
-                upstream_partition_group_name=upstream_partition_group_name,
-            )
+            runtime = self._build_stage_runtime(stage, upstream, upstream_num_partitions)
 
             # Create master using operator_config.master_class (or default StageMaster)
             master = self._create_master(stage, runtime)
@@ -321,17 +308,15 @@ class RayJobRunner:
     def _build_stage_runtime(
         self,
         stage: "Stage",
-        upstream_queue_name: Optional[str] = None,
+        upstream: Optional["QueueRef"] = None,
         upstream_num_partitions: int = 0,
-        upstream_partition_group_name: Optional[str] = None,
     ) -> StageRuntime:
         """Build StageRuntime from job and runner configuration."""
         return StageRuntime(
             broker_endpoint=self._broker_endpoint,
-            upstream_queue_name=upstream_queue_name,
+            upstream=upstream,
             claim_timeout_secs=self.job.config.claim_timeout_secs,
             upstream_num_partitions=upstream_num_partitions,
-            upstream_partition_group_name=upstream_partition_group_name,
         )
 
     def _stage_info(self, stage: "Stage") -> Dict[str, Any]:

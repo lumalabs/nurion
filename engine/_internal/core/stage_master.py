@@ -88,8 +88,8 @@ class StageMaster:
         self.runtime = runtime
         self.logger = create_ray_logger(f"Master-{self.stage_id}")
 
-        # Queue configuration (from runtime; upstream_queue_name is mutable for SplitPlanner)
-        self.upstream_queue_name = runtime.upstream_queue_name
+        # Upstream reference (mutable: SplitPlanner overrides with its planner queue)
+        self.upstream: Optional[QueueRef] = runtime.upstream
 
         # SplitPayloadStore - shared across all stages
         self.payload_store = payload_store
@@ -173,7 +173,7 @@ class StageMaster:
             runtime=self.runtime,
             payload_store=self.payload_store,
             output=output,
-            upstream_queue_name=self.upstream_queue_name,
+            upstream=self.upstream,
         )
 
         self._recovery_manager = RecoveryManager(
@@ -183,25 +183,16 @@ class StageMaster:
         )
 
     def _has_unprocessed_messages(self) -> bool:
-        """Check if upstream queue(s) still have unprocessed messages.
-
-        Uses QueueGroup API (single RPC) for non-source stages,
-        single queue check for source stages (planner queue).
-        """
-        if not self._queue_client:
+        """Check if upstream queue(s) still have unprocessed messages."""
+        if not self._queue_client or not self.upstream:
             return False
 
         try:
-            if self.runtime.upstream_partition_group_name:
-                result = self._queue_client.is_group_finished(
-                    self.runtime.upstream_partition_group_name
-                )
+            if self.upstream.is_group:
+                result = self._queue_client.is_group_finished(self.upstream.name)
                 return not result.get("all_drained", False)
 
-            if not self.upstream_queue_name:
-                return False
-
-            stats = self._queue_client.get_stats(self.upstream_queue_name)
+            stats = self._queue_client.get_stats(self.upstream.name)
             pending = stats.get("pending_count", 0)
             claimed = stats.get("claimed_count", 0)
             return pending > 0 or claimed > 0
@@ -252,12 +243,14 @@ class StageMaster:
         if self._sink_manager:
             self._sink_manager.create_queue_and_start_loop(queue_client)
 
-        # --- SplitPlanner: determine effective upstream before creating workers ---
+        # --- SplitPlanner: override upstream to planner queue ---
         # SplitPlanner interposes its own queue between source and workers.
         if self._source_manager is not None and not self._source_manager.is_direct_producer:
-            self.upstream_queue_name = self._source_manager.planner_queue_name
+            from _internal.runtime.queue_stats import QueueRef
 
-        # --- Init workers (uses self.upstream_queue_name, already resolved) ---
+            self.upstream = QueueRef.queue(self._source_manager.planner_queue_name)
+
+        # --- Init workers (uses self.upstream, already resolved) ---
         self._init_managers()
         assert self._worker_manager is not None
 
@@ -489,25 +482,15 @@ class StageMaster:
         self._upstream_finished = True
         self.logger.info(f"Stage {self.stage_id} notified: upstream finished")
 
-        has_upstream = self.upstream_queue_name or self.runtime.upstream_partition_group_name
-        if has_upstream and self._queue_client:
+        if self.upstream and self._queue_client:
             asyncio.create_task(
                 self._poll_queue_completion(),
                 name=f"poll_completion_{self.stage_id}",
             )
 
     async def _poll_queue_completion(self) -> None:
-        """Poll upstream queue(s) until it's safe for workers to exit.
-
-        Uses QueueGroup API (single RPC) when upstream is a partition group,
-        or single queue check otherwise.
-        """
-        if not self._queue_client:
-            return
-
-        group_name = self.runtime.upstream_partition_group_name
-        queue_name = self.upstream_queue_name if not group_name else None
-        if not group_name and not queue_name:
+        """Poll upstream queue until it's safe for workers to exit."""
+        if not self._queue_client or not self.upstream:
             return
 
         poll_interval = 0.1
@@ -516,11 +499,10 @@ class StageMaster:
 
         while self._running:
             try:
-                if group_name:
-                    result = self._queue_client.is_group_finished(group_name)
+                if self.upstream.is_group:
+                    result = self._queue_client.is_group_finished(self.upstream.name)
                 else:
-                    assert queue_name is not None
-                    result = self._queue_client.is_queue_finished(queue_name)
+                    result = self._queue_client.is_queue_finished(self.upstream.name)
 
                 consecutive_errors = 0
                 if result.get("safe_to_exit", False):
@@ -550,25 +532,11 @@ class StageMaster:
         return self._num_partitions
 
     def get_backpressure_input(self) -> Optional["QueueRef"]:
-        """Get input queue reference for backpressure monitoring.
-
-        Source stages: planner queue (single queue).
-        Non-source stages: upstream QueueGroup.
-        """
-        from _internal.runtime.queue_stats import QueueRef
-
-        if self._source_manager and not self._source_manager.is_direct_producer:
-            return QueueRef.queue(self._source_manager.planner_queue_name)
-        if self.runtime.upstream_partition_group_name:
-            return QueueRef.group(self.runtime.upstream_partition_group_name)
-        return None
+        """Get input queue reference for backpressure monitoring."""
+        return self.upstream
 
     def get_backpressure_output(self) -> "QueueRef":
-        """Get output queue reference for backpressure monitoring.
-
-        Sink stages: commit queue (single queue).
-        Others: output QueueGroup.
-        """
+        """Get output queue reference for backpressure monitoring."""
         from _internal.runtime.queue_stats import QueueRef
 
         if self._sink_manager:

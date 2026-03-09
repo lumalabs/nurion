@@ -37,6 +37,7 @@ from _internal.core.models import (
 from _internal.core.stage_master import StageMaster
 from _internal.core.operator import OperatorConfig, Operator, OperatorRuntime
 from _internal.core.stage import StageRuntime
+from _internal.runtime.queue_stats import QueueRef
 
 # Note: Only async test classes/functions should use @pytest.mark.asyncio decorator
 
@@ -138,7 +139,6 @@ def stage_runtime():
             port=int(port_str),
             storage_url="memory://",
         ),
-        upstream_queue_name=None,
     )
 
     yield runtime
@@ -468,7 +468,7 @@ class TestStageWorkerPayloadCleanup:
                 port=workqueue_backend.port,
                 storage_url="memory://",
             ),
-            upstream_queue_name="cleanup_upstream",
+            upstream=QueueRef.queue("cleanup_upstream"),
             # no downstream — ack-only path (default OutputRouting has group_name=None)
         )
 

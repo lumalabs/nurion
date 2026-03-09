@@ -42,6 +42,7 @@ from _internal.utils.logging import create_ray_logger
 if TYPE_CHECKING:
     from _internal.core.stage import Stage, StageRuntime
     from _internal.core.split_payload_store import SplitPayloadStore
+    from _internal.runtime.queue_stats import QueueRef
 
 
 class WorkerManager:
@@ -60,7 +61,7 @@ class WorkerManager:
         runtime: "StageRuntime",
         payload_store: "SplitPayloadStore",
         output: OutputRouting,
-        upstream_queue_name: Optional[str] = None,
+        upstream: Optional["QueueRef"] = None,
     ):
         self._job_id = job_id
         self._stage = stage
@@ -68,7 +69,7 @@ class WorkerManager:
         self._runtime = runtime
         self._payload_store = payload_store
         self._output = output
-        self._upstream_queue_name = upstream_queue_name
+        self._upstream = upstream
         self._logger = create_ray_logger(f"WorkerMgr-{stage.stage_id}")
 
         # Worker state
@@ -184,12 +185,11 @@ class WorkerManager:
             job_id=self._job_id,
             stage_id=self._stage_id,
             broker_endpoint=self._runtime.broker_endpoint,
-            upstream_queue_name=self._upstream_queue_name,
+            upstream=self._upstream,
             output=self._output,
             batch_size=self._stage.batch_size,
             claim_timeout_secs=self._runtime.claim_timeout_secs,
             assigned_partition_ids=assigned_partition_ids,
-            upstream_partition_group_name=self._runtime.upstream_partition_group_name,
         )
 
         # Create worker actor

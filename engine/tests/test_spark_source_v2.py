@@ -85,7 +85,6 @@ class TestSparkSourceV2Integration:
                 port=workqueue_backend.port,
                 storage_url="memory://",
             ),
-            upstream_queue_name=None,
         )
         master = StageMaster(
             job_id="test-v2-output",
@@ -158,7 +157,6 @@ class TestSparkSourceV2Integration:
                 port=workqueue_backend.port,
                 storage_url="memory://",
             ),
-            upstream_queue_name=None,
         )
         master = StageMaster(
             job_id="test-v2-parallel",
@@ -206,7 +204,6 @@ class TestSparkSourceV2Integration:
                 port=workqueue_backend.port,
                 storage_url="memory://",
             ),
-            upstream_queue_name=None,
         )
         master = StageMaster(
             job_id="test-v2-large",
