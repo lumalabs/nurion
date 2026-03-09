@@ -367,7 +367,11 @@ class StageMaster:
 
             # Mark output queue(s) as finished (retry up to 3 times — failure
             # would leave downstream waiting forever)
-            self._mark_finished_with_retry(queue_client)
+            try:
+                self._mark_finished_with_retry(queue_client)
+            except Exception as mark_err:
+                self.logger.error(f"Failed to mark finished: {mark_err}")
+                # Fall through to write state and raise original failure if any
 
             self._write_stage_state(status="FAILED" if self._failed else "COMPLETED")
 

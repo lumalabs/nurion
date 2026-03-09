@@ -813,6 +813,8 @@ class WorkQueueClient:
             "total_claimed": response.total_claimed,
             "skew_ratio": response.skew_ratio,
             "hot_partitions": list(response.hot_partitions),
+            "max_partition_pending": response.max_partition_pending,
+            "median_partition_pending": response.median_partition_pending,
             "version": response.version,
         }
 

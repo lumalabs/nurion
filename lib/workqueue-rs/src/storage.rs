@@ -1414,9 +1414,12 @@ impl WorkQueueStorage {
         self.db.write(batch).await?;
 
         // Clean up in-memory round-robin counters for this group
+        // Use delimiter-aware prefix to avoid matching groups whose name
+        // starts with the same prefix (e.g., "job_s1_output" vs "job_s1_output_extra")
+        let prefix = format!("{}_", group_name);
         {
             let mut map = self.steal_rr.lock().unwrap();
-            map.retain(|k, _| !k.starts_with(group_name));
+            map.retain(|k, _| !k.starts_with(&prefix) && k != group_name);
         }
 
         tracing::info!(
