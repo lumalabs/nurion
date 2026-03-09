@@ -22,22 +22,37 @@ from _internal.queue import WorkQueueQueueClient
 
 
 @dataclass(frozen=True)
+class QueueRef:
+    """Reference to either a single queue or a QueueGroup.
+
+    Single queues: source planner queue, sink commit queue (internal).
+    QueueGroups: all inter-stage data (1 partition for non-shuffle, N for shuffle).
+    """
+
+    name: str
+    is_group: bool = False
+
+    @staticmethod
+    def queue(name: str) -> QueueRef:
+        return QueueRef(name=name, is_group=False)
+
+    @staticmethod
+    def group(name: str) -> QueueRef:
+        return QueueRef(name=name, is_group=True)
+
+
+@dataclass(frozen=True)
 class StageQueueConfig:
     """Backpressure configuration for a stage.
 
-    Each field pair (queue_name vs group_name) supports two kinds of queues:
-    - Single queues: source planner queue, sink commit queue
-    - QueueGroups: all inter-stage data (1 partition for non-shuffle, N for shuffle)
-
-    When a group_name is set, aggregate stats from get_group_stats are used.
-    When only a queue_name is set, single-queue get_stats is used.
+    input/output are QueueRef — either a single queue (planner/commit)
+    or a QueueGroup (inter-stage data). QueueStatsClient dispatches
+    to the correct API based on is_group.
     """
 
     stage_id: str
-    input_queue_name: Optional[str] = None
-    input_group_name: Optional[str] = None
-    output_queue_name: Optional[str] = None
-    output_group_name: Optional[str] = None
+    input: Optional[QueueRef] = None
+    output: Optional[QueueRef] = None
     backpressure_threshold_lag: int = 5000
     backpressure_threshold_queue_size: int = 1000
 
@@ -45,7 +60,8 @@ class StageQueueConfig:
 class QueueStatsClient:
     """Thin wrapper for WorkQueue stats queries.
 
-    Supports both single-queue stats and QueueGroup aggregate stats.
+    Supports both single-queue stats and QueueGroup aggregate stats,
+    dispatched automatically via QueueRef.is_group.
     """
 
     def __init__(self, endpoint: QueueEndpoint, claim_timeout_secs: float) -> None:
@@ -59,10 +75,15 @@ class QueueStatsClient:
         )
         self._client.start()
 
-    def get_stats(self, queue_name: Optional[str]) -> QueueStats:
-        if not queue_name:
+    def get_ref_stats(self, ref: Optional[QueueRef]) -> QueueStats:
+        """Get stats for a QueueRef (auto-dispatches to queue or group API)."""
+        if not ref:
             return QueueStats()
+        if ref.is_group:
+            return self._get_group_stats(ref.name)
+        return self._get_queue_stats(ref.name)
 
+    def _get_queue_stats(self, queue_name: str) -> QueueStats:
         try:
             stats = self._client.get_stats(queue_name)
             return QueueStats(
@@ -74,11 +95,7 @@ class QueueStatsClient:
         except Exception:
             return QueueStats()
 
-    def get_group_stats(self, group_name: Optional[str]) -> QueueStats:
-        """Get aggregate stats for a QueueGroup (all partitions combined)."""
-        if not group_name:
-            return QueueStats()
-
+    def _get_group_stats(self, group_name: str) -> QueueStats:
         try:
             stats = self._client.get_group_stats(group_name)
             return QueueStats(
@@ -87,18 +104,6 @@ class QueueStatsClient:
             )
         except Exception:
             return QueueStats()
-
-    def get_input_stats(self, config: StageQueueConfig) -> QueueStats:
-        """Get input stats for a stage, using group or queue as appropriate."""
-        if config.input_group_name:
-            return self.get_group_stats(config.input_group_name)
-        return self.get_stats(config.input_queue_name)
-
-    def get_output_stats(self, config: StageQueueConfig) -> QueueStats:
-        """Get output stats for a stage, using group or queue as appropriate."""
-        if config.output_group_name:
-            return self.get_group_stats(config.output_group_name)
-        return self.get_stats(config.output_queue_name)
 
     def stop(self) -> None:
         try:

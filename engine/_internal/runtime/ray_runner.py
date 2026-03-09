@@ -302,10 +302,8 @@ class RayJobRunner:
         for stage_id, master in self._masters.items():
             cfg = StageQueueConfig(
                 stage_id=stage_id,
-                input_queue_name=master.get_backpressure_input_queue_name(),
-                input_group_name=master.get_backpressure_input_group_name(),
-                output_queue_name=master.get_backpressure_output_queue_name(),
-                output_group_name=master.get_backpressure_output_group_name(),
+                input=master.get_backpressure_input(),
+                output=master.get_backpressure_output(),
                 backpressure_threshold_lag=master.stage.backpressure_threshold_lag,
                 backpressure_threshold_queue_size=master.stage.backpressure_threshold_queue_size,
             )

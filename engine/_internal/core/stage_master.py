@@ -47,6 +47,7 @@ from _internal.webui.state.schema import encode_json, job_namespace, stage_key, 
 
 if TYPE_CHECKING:
     from _internal.core.stage import Stage, StageRuntime
+    from _internal.runtime.queue_stats import QueueRef
 
 
 class BackpressureProvider(Protocol):
@@ -548,36 +549,31 @@ class StageMaster:
         """Get number of output partitions (>= 1; 1 for non-shuffle)."""
         return self._num_partitions
 
-    def get_backpressure_input_queue_name(self) -> Optional[str]:
-        """Get single-queue name for input backpressure (planner queue only).
+    def get_backpressure_input(self) -> Optional["QueueRef"]:
+        """Get input queue reference for backpressure monitoring.
 
-        Returns queue name for source stages (planner queue), None otherwise.
-        Non-source stages use get_backpressure_input_group_name() instead.
+        Source stages: planner queue (single queue).
+        Non-source stages: upstream QueueGroup.
         """
+        from _internal.runtime.queue_stats import QueueRef
+
         if self._source_manager and not self._source_manager.is_direct_producer:
-            return self._source_manager.planner_queue_name
+            return QueueRef.queue(self._source_manager.planner_queue_name)
+        if self.runtime.upstream_partition_group_name:
+            return QueueRef.group(self.runtime.upstream_partition_group_name)
         return None
 
-    def get_backpressure_input_group_name(self) -> Optional[str]:
-        """Get QueueGroup name for input backpressure (upstream group).
+    def get_backpressure_output(self) -> "QueueRef":
+        """Get output queue reference for backpressure monitoring.
 
-        Returns upstream group name for non-source stages, None otherwise.
+        Sink stages: commit queue (single queue).
+        Others: output QueueGroup.
         """
-        return self.runtime.upstream_partition_group_name
+        from _internal.runtime.queue_stats import QueueRef
 
-    def get_backpressure_output_queue_name(self) -> Optional[str]:
-        """Get single-queue name for output backpressure (commit queue only).
-
-        Returns commit queue name for sink stages, None otherwise.
-        Non-sink stages use get_backpressure_output_group_name() instead.
-        """
         if self._sink_manager:
-            return self._sink_manager.commit_queue_name
-        return None
-
-    def get_backpressure_output_group_name(self) -> str:
-        """Get QueueGroup name for output backpressure."""
-        return self._output_group_name
+            return QueueRef.queue(self._sink_manager.commit_queue_name)
+        return QueueRef.group(self._output_group_name)
 
     def get_status(self) -> StageStatus:
         output_size = 0
