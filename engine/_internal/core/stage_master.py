@@ -247,7 +247,9 @@ class StageMaster:
         if self._source_manager is not None and not self._source_manager.is_direct_producer:
             from _internal.runtime.queue_stats import QueueRef
 
-            self.upstream = QueueRef.queue(self._source_manager.planner_queue_name)
+            planner_queue = self._source_manager.planner_queue_name
+            assert planner_queue is not None
+            self.upstream = QueueRef.queue(planner_queue)
 
         # --- Init workers (uses self.upstream, already resolved) ---
         self._init_managers()
