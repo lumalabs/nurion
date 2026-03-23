@@ -184,13 +184,20 @@ class NvmeDisk:
         """
         final_path = self._key_to_path(key)
         self._ensure_prefix_dir(final_path)
+        
+        # Subtract old file size if key is being overwritten
+        old_size = 0
+        if os.path.exists(final_path):
+            old_size = os.path.getsize(final_path)
+        
         tmp_path = final_path + f".tmp.{os.getpid()}"
         with open(tmp_path, "wb") as f:
             writer = ipc.new_file(f, payload.data.schema)
             writer.write_table(payload.data)
             writer.close()
         os.rename(tmp_path, final_path)
-        self._used_bytes += os.path.getsize(final_path)
+        new_size = os.path.getsize(final_path)
+        self._used_bytes += new_size - old_size
         return final_path
 
     def read(self, key: str) -> Optional[SplitPayload]:
@@ -390,7 +397,8 @@ class FlightPayloadServer(flight.FlightServerBase):
             # Read actual port after server starts (if port=0, OS assigns)
             actual_port = server.port
             cls._instances[actual_port] = server
-            if port != 0 and port != actual_port:
+            # Also store under requested port for singleton lookup
+            if port != actual_port:
                 cls._instances[port] = server
             logger.info(f"Flight server started on port {actual_port}")
             return server
@@ -582,7 +590,13 @@ class NvmeSplitPayloadStore(SplitPayloadStore):
             return result
 
         if not location_hint:
-            return self.get(key)
+            # No hint and not in local NVMe - try S3 fallback directly
+            if self._s3_fs:
+                result = self._read_s3(key)
+                if result is not None:
+                    self._metrics["s3_hits"] += 1
+                    return result
+            return None
 
         # Tier 2: Remote NVMe via Arrow Flight
         endpoint = location_hint.get("flight")
