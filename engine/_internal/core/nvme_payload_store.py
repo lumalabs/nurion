@@ -740,8 +740,8 @@ class NvmeSplitPayloadStore(SplitPayloadStore):
         try:
             reader = client.do_get(flight.Ticket(key.encode()))
             return reader.read_all()
-        except flight.FlightUnavailableError:
-            # Remote node down — drop cached connection
+        except Exception:
+            # Any failure → close bad connection, return None for S3 fallback
             self._flight_clients.pop(endpoint, None)
             return None
 
