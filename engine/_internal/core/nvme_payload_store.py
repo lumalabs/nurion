@@ -639,7 +639,7 @@ class NvmeSplitPayloadStore(SplitPayloadStore):
         self._pending_s3_futures.clear()
 
         if errors:
-            self._consecutive_s3_failures += len(errors)
+            self._consecutive_s3_failures += 1
             if self._consecutive_s3_failures >= self.S3_FAILURE_THRESHOLD:
                 logger.warning(
                     f"S3 failed {self._consecutive_s3_failures} times consecutively, "

@@ -202,6 +202,7 @@ class RayJobRunner:
             root_dirs, params = parse_nvme_uri(uri)
             write_policy = WritePolicy(params.get("write_policy", "write_back"))
             quota_bytes = int(params["quota_gb"]) * (1024**3) if "quota_gb" in params else None
+            flight_port = int(params.get("flight_port", "0"))
             return NvmeSplitPayloadStore(
                 root_dirs=root_dirs,
                 job_id=self.job.job_id,
@@ -209,6 +210,7 @@ class RayJobRunner:
                 s3_uri=params.get("s3_fallback"),
                 s3_options=self.job.config.payload_store_options or None,
                 quota_bytes=quota_bytes,
+                flight_port=flight_port,
             )
         else:
             return FsspecSplitPayloadStore(
