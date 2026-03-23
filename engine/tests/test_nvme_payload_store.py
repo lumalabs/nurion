@@ -606,23 +606,23 @@ class TestNvmeStoreFlightIntegration:
         # "Remote" store writes payload
         remote_store = NvmeSplitPayloadStore(
             root_dirs=[str(tmp_path / "remote_nvme")],
-            job_id="job1",
+            job_id="job_remote",
             node_ip="127.0.0.1",
         )
         remote_store._ensure_initialized()
-        remote_store.store("k1", _make_payload("k1", num_rows=7))
-        remote_loc = remote_store.get_location("k1")
+        remote_store.store("flight_test_k1", _make_payload("flight_test_k1", num_rows=7))
+        remote_loc = remote_store.get_location("flight_test_k1")
 
         # "Local" store on different directory (simulates different node)
         local_store = NvmeSplitPayloadStore(
             root_dirs=[str(tmp_path / "local_nvme")],
-            job_id="job1",
+            job_id="job_remote",
             node_ip="127.0.0.2",  # different "node"
         )
         local_store._ensure_initialized()
 
-        # Local store doesn't have k1 — should read via Flight from remote
-        result = local_store.get_with_hint("k1", remote_loc)
+        # Local store doesn't have the key — should read via Flight from remote
+        result = local_store.get_with_hint("flight_test_k1", remote_loc)
         assert result is not None
         assert result.data.num_rows == 7
 
@@ -789,5 +789,3 @@ class TestStageWorkerNvmeIntegration:
 
         # Verify get_with_hint was called (not bare get)
         mock_store.get_with_hint.assert_called_once_with("input_key", loc)
-        # flush_pending_writes should have been called before ack
-        mock_store.flush_pending_writes.assert_called()

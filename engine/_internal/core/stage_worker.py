@@ -404,8 +404,6 @@ class StageWorker:
             input_bytes=input_bytes,
         )
 
-        self.payload_store.flush_pending_writes()
-
         if isinstance(collected, RawOutputBytes):
             # Sink commit: forward raw bytes to commit queue
             if self._output.commit_queue_name and collected.payloads:
@@ -693,6 +691,7 @@ class StageWorker:
                 )
                 scatter.setdefault(0, []).append(out_msg.to_bytes())
 
+        self.payload_store.flush_pending_writes()
         self.queue_client.ack_and_scatter(
             upstream_queue=upstream_queue,
             upstream_msg_ids=batch.msg_ids,
