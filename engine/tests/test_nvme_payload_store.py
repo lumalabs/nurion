@@ -80,9 +80,7 @@ class TestParseNvmeUri:
         assert params == {}
 
     def test_multi_path(self):
-        dirs, params = parse_nvme_uri(
-            "nvme:///mnt/nvme0/nurion,/mnt/nvme1/nurion"
-        )
+        dirs, params = parse_nvme_uri("nvme:///mnt/nvme0/nurion,/mnt/nvme1/nurion")
         assert dirs == ["/mnt/nvme0/nurion", "/mnt/nvme1/nurion"]
 
     def test_with_params(self):
@@ -554,11 +552,13 @@ class TestLargePayload:
     def test_10mb_payload(self, tmp_path):
         """~10MB Arrow table round-trip."""
         n = 100_000
-        table = pa.table({
-            "id": list(range(n)),
-            "text": [f"row_{i}_" + "x" * 80 for i in range(n)],
-            "value": [float(i) for i in range(n)],
-        })
+        table = pa.table(
+            {
+                "id": list(range(n)),
+                "text": [f"row_{i}_" + "x" * 80 for i in range(n)],
+                "value": [float(i) for i in range(n)],
+            }
+        )
         payload = SplitPayload(data=table, split_id="big")
 
         store = NvmeSplitPayloadStore(
@@ -577,10 +577,12 @@ class TestLargePayload:
     def test_flight_large_payload(self, tmp_path):
         """~10MB payload through Flight server."""
         n = 100_000
-        table = pa.table({
-            "id": list(range(n)),
-            "data": [os.urandom(64) for _ in range(n)],
-        })
+        table = pa.table(
+            {
+                "id": list(range(n)),
+                "data": [os.urandom(64) for _ in range(n)],
+            }
+        )
         payload = SplitPayload(data=table, split_id="big")
 
         disk = NvmeDisk(str(tmp_path), "job1")
@@ -780,9 +782,7 @@ class TestStageWorkerNvmeIntegration:
         workqueue_backend.client.create_queue("hint_upstream")
         workqueue_backend.client.push("hint_upstream", msg.to_bytes())
 
-        records = workqueue_backend.client.claim(
-            "hint_upstream", batch_size=1, timeout_ms=1000
-        )
+        records = workqueue_backend.client.claim("hint_upstream", batch_size=1, timeout_ms=1000)
         assert len(records) == 1
 
         await worker._process_and_ack(records)

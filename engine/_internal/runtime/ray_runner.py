@@ -201,11 +201,7 @@ class RayJobRunner:
         elif uri.startswith("nvme://"):
             root_dirs, params = parse_nvme_uri(uri)
             write_policy = WritePolicy(params.get("write_policy", "write_back"))
-            quota_bytes = (
-                int(params["quota_gb"]) * (1024**3)
-                if "quota_gb" in params
-                else None
-            )
+            quota_bytes = int(params["quota_gb"]) * (1024**3) if "quota_gb" in params else None
             return NvmeSplitPayloadStore(
                 root_dirs=root_dirs,
                 job_id=self.job.job_id,

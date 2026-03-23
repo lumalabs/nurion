@@ -375,7 +375,11 @@ class FlightPayloadServer(flight.FlightServerBase):
         """Return the singleton server for *port*, starting it if needed."""
         with cls._lock:
             existing = cls._instances.get(port)
-            if existing is not None and existing._thread is not None and existing._thread.is_alive():
+            if (
+                existing is not None
+                and existing._thread is not None
+                and existing._thread.is_alive()
+            ):
                 # Add any new job dirs
                 for d in job_dirs:
                     if d not in existing._job_dirs:
@@ -480,7 +484,8 @@ class NvmeSplitPayloadStore(SplitPayloadStore):
 
     def __setstate__(self, state: dict) -> None:
         """Reconstruct from pickled state — lazy init on first use."""
-        self.__init__(
+        NvmeSplitPayloadStore.__init__(
+            self,
             root_dirs=state["root_dirs"],
             job_id=state["job_id"],
             write_policy=state["write_policy"],
@@ -507,22 +512,16 @@ class NvmeSplitPayloadStore(SplitPayloadStore):
             return
 
         # Disk pool
-        self._disk_pool = NvmeDiskPool(
-            self._root_dirs, self._job_id, self._quota_bytes
-        )
+        self._disk_pool = NvmeDiskPool(self._root_dirs, self._job_id, self._quota_bytes)
 
         # S3 tier
         if self._s3_uri:
             import fsspec.core
 
             full_path = f"{self._s3_uri.rstrip('/')}/{self._job_id}"
-            self._s3_fs, self._s3_root = fsspec.core.url_to_fs(
-                full_path, **self._s3_options
-            )
+            self._s3_fs, self._s3_root = fsspec.core.url_to_fs(full_path, **self._s3_options)
             self._s3_fs.mkdirs(self._s3_root, exist_ok=True)
-            self._s3_executor = ThreadPoolExecutor(
-                max_workers=4, thread_name_prefix="s3-upload"
-            )
+            self._s3_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="s3-upload")
 
         # Flight server
         server = FlightPayloadServer.get_or_start(
@@ -634,9 +633,7 @@ class NvmeSplitPayloadStore(SplitPayloadStore):
                     f"auto-degrading from WRITE_THROUGH to WRITE_BACK"
                 )
                 self._write_policy = WritePolicy.WRITE_BACK
-            raise IOError(
-                f"S3 write failed for {len(errors)} payloads: {errors[0][1]}"
-            )
+            raise IOError(f"S3 write failed for {len(errors)} payloads: {errors[0][1]}")
         else:
             self._consecutive_s3_failures = 0
 
@@ -708,6 +705,7 @@ class NvmeSplitPayloadStore(SplitPayloadStore):
 
     def _write_s3(self, key: str, payload: SplitPayload) -> None:
         """Write Arrow IPC to S3 (called from executor thread)."""
+        assert self._s3_fs is not None and self._s3_root is not None
         safe = _sanitize_key(key)
         s3_path = f"{self._s3_root}/{safe}.arrow"
         with self._s3_fs.open(s3_path, "wb") as f:
@@ -724,6 +722,8 @@ class NvmeSplitPayloadStore(SplitPayloadStore):
 
     def _read_s3_path(self, s3_path: str, key: str) -> Optional[SplitPayload]:
         """Read from S3 using explicit path."""
+        if self._s3_fs is None:
+            return None
         try:
             with self._s3_fs.open(s3_path, "rb") as f:
                 reader = ipc.open_file(f)
