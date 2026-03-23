@@ -479,6 +479,7 @@ def create_test_pipeline(
     workqueue_db_path: str = "memory://",
     claim_timeout_secs: float = 2.0,  # Fast recovery for tests (default 2s)
     recovery_interval_secs: float = 0.5,  # Fast recovery interval for tests (default 0.5s)
+    payload_store_uri: str = "ray://",
 ) -> Job:
     """Create a standard test pipeline for distributed correctness tests.
 
@@ -514,6 +515,7 @@ def create_test_pipeline(
             workqueue_db_path=workqueue_db_path,
             claim_timeout_secs=claim_timeout_secs,
             recovery_interval_secs=recovery_interval_secs,
+            payload_store_uri=payload_store_uri,
         ),
     )
 
