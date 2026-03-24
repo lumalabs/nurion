@@ -35,12 +35,9 @@ Requirements: Docker daemon running.  Excluded from fast CI via `distributed` ma
 import logging
 import os
 import time
-from dataclasses import dataclass
-from typing import Any
 
 import pyarrow as pa
 import pyarrow.flight as flight
-import pyarrow.ipc as ipc
 import pytest
 
 logger = logging.getLogger(__name__)
@@ -48,106 +45,14 @@ logger = logging.getLogger(__name__)
 # Skip entire module if Docker SDK is missing
 pytest.importorskip("docker", reason="docker SDK required for container tests")
 
-from tests.conftest import FLIGHT_INTERNAL_PORT  # noqa: E402
+from tests.utils.container_helpers import (  # noqa: E402
+    make_test_table,
+    minio_s3_options,
+    start_flight_container,
+    write_arrow_ipc,
+)
 
 pytestmark = pytest.mark.distributed
-
-
-# ===========================================================================
-# Helpers
-# ===========================================================================
-
-
-def _sanitize_key(key: str) -> str:
-    """Match split_payload_store._sanitize_key."""
-    return key.replace(":", "_").replace("/", "_")
-
-
-def write_arrow_ipc(data_dir: str, key: str, table: pa.Table) -> str:
-    """Write Arrow IPC file in NvmeDisk-compatible layout.
-
-    File goes to ``{data_dir}/{prefix}/{sanitized_key}.arrow`` where
-    *prefix* is the first two characters of the sanitized key.
-    """
-    safe = _sanitize_key(key)
-    prefix = safe[:2] if len(safe) >= 2 else "00"
-    dir_path = os.path.join(data_dir, prefix)
-    os.makedirs(dir_path, exist_ok=True)
-    file_path = os.path.join(dir_path, f"{safe}.arrow")
-    with pa.OSFile(file_path, "wb") as f:
-        writer = ipc.new_file(f, table.schema)
-        writer.write_table(table)
-        writer.close()
-    return file_path
-
-
-def make_test_table(num_rows: int = 100, prefix: str = "") -> pa.Table:
-    """Create a deterministic test Arrow table."""
-    return pa.table(
-        {
-            "id": list(range(num_rows)),
-            "value": [f"{prefix}row_{i}" for i in range(num_rows)],
-            "score": [float(i) / max(num_rows, 1) for i in range(num_rows)],
-        }
-    )
-
-
-def _minio_s3_options(minio_container) -> tuple[str, dict]:
-    """Build s3_uri and s3_options for a MinIO testcontainer.
-
-    Disables response checksum validation which is incompatible between
-    recent aiobotocore versions and MinIO's S3 implementation.
-    """
-    host = minio_container.get_container_host_ip()
-    port = minio_container.get_exposed_port(9000)
-    s3_options = {
-        "key": minio_container.access_key,
-        "secret": minio_container.secret_key,
-        "client_kwargs": {"endpoint_url": f"http://{host}:{port}"},
-        "config_kwargs": {
-            "request_checksum_calculation": "when_required",
-            "response_checksum_validation": "when_required",
-        },
-    }
-    return s3_options
-
-
-# ===========================================================================
-# Container wrapper
-# ===========================================================================
-
-
-@dataclass
-class FlightNode:
-    """Holds a running Flight-server container and its host-visible endpoint."""
-
-    container: Any
-    host: str
-    port: int
-    data_dir: str  # host-side path mounted at /data in the container
-
-    @property
-    def endpoint(self) -> str:
-        return f"grpc://{self.host}:{self.port}"
-
-
-def _start_flight_container(image_tag: str, data_dir: str) -> FlightNode:
-    """Start a Flight server container and block until it is ready."""
-    from testcontainers.core.container import DockerContainer  # type: ignore[import-untyped]
-    from testcontainers.core.waiting_utils import wait_for_logs  # type: ignore[import-untyped]
-
-    container = (
-        DockerContainer(image_tag)
-        .with_exposed_ports(FLIGHT_INTERNAL_PORT)
-        .with_volume_mapping(os.path.realpath(data_dir), "/data", "rw")
-    )
-    container.start()
-    wait_for_logs(container, "FLIGHT_READY", timeout=120)
-
-    host = container.get_container_host_ip()
-    port = int(container.get_exposed_port(FLIGHT_INTERNAL_PORT))
-    logger.info(f"Flight container ready at {host}:{port}  (data_dir={data_dir})")
-    return FlightNode(container=container, host=host, port=port, data_dir=data_dir)
 
 
 # ===========================================================================
@@ -160,7 +65,7 @@ def flight_node(flight_server_image, tmp_path):
     """A fresh Flight server container with an empty data directory."""
     data_dir = str(tmp_path / "nvme_data")
     os.makedirs(data_dir, exist_ok=True)
-    node = _start_flight_container(flight_server_image, data_dir)
+    node = start_flight_container(flight_server_image, data_dir)
     yield node
     try:
         node.container.stop()
@@ -310,12 +215,12 @@ class TestContainerFailover:
         from _internal.core.nvme_payload_store import NvmeSplitPayloadStore, WritePolicy
 
         s3_uri = "s3://warehouse/nvme-failover"
-        s3_options = _minio_s3_options(minio_container)
+        s3_options = minio_s3_options(minio_container)
 
         # --- Start Flight container ---
         data_dir = str(tmp_path / "flight_data")
         os.makedirs(data_dir, exist_ok=True)
-        node = _start_flight_container(flight_server_image, data_dir)
+        node = start_flight_container(flight_server_image, data_dir)
 
         try:
             key = "failover_001"
@@ -379,7 +284,7 @@ class TestContainerFailover:
         write_arrow_ipc(data_dir, key, table)
 
         # First container
-        node1 = _start_flight_container(flight_server_image, data_dir)
+        node1 = start_flight_container(flight_server_image, data_dir)
         client1 = flight.FlightClient(node1.endpoint)
         assert client1.do_get(flight.Ticket(key.encode())).read_all().equals(table)
 
@@ -387,7 +292,7 @@ class TestContainerFailover:
         time.sleep(1)
 
         # Second container (same volume, new mapped port)
-        node2 = _start_flight_container(flight_server_image, data_dir)
+        node2 = start_flight_container(flight_server_image, data_dir)
         try:
             client2 = flight.FlightClient(node2.endpoint)
             assert client2.do_get(flight.Ticket(key.encode())).read_all().equals(table)
@@ -419,8 +324,8 @@ class TestContainerMultiNode:
         write_arrow_ipc(dir_a, key_a, table_a)
         write_arrow_ipc(dir_b, key_b, table_b)
 
-        node_a = _start_flight_container(flight_server_image, dir_a)
-        node_b = _start_flight_container(flight_server_image, dir_b)
+        node_a = start_flight_container(flight_server_image, dir_a)
+        node_b = start_flight_container(flight_server_image, dir_b)
         try:
             store = NvmeSplitPayloadStore(
                 root_dirs=[str(tmp_path / "local_empty")],
@@ -450,7 +355,7 @@ class TestContainerMultiNode:
         from _internal.core.nvme_payload_store import NvmeSplitPayloadStore, WritePolicy
 
         s3_uri = "s3://warehouse/nvme-multinode"
-        s3_options = _minio_s3_options(minio_container)
+        s3_options = minio_s3_options(minio_container)
 
         dir_alive = str(tmp_path / "alive_node")
         dir_dead = str(tmp_path / "dead_node")
@@ -464,8 +369,8 @@ class TestContainerMultiNode:
         write_arrow_ipc(dir_alive, key_alive, table_alive)
         write_arrow_ipc(dir_dead, key_dead, table_dead)
 
-        node_alive = _start_flight_container(flight_server_image, dir_alive)
-        node_dead = _start_flight_container(flight_server_image, dir_dead)
+        node_alive = start_flight_container(flight_server_image, dir_alive)
+        node_dead = start_flight_container(flight_server_image, dir_dead)
 
         try:
             # Write dead-node payload to S3 so fallback works

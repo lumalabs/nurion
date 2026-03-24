@@ -32,6 +32,7 @@ import logging
 import os
 import shutil
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
 import lance
@@ -119,53 +120,47 @@ def create_test_lance_table(table_path: str, video_dir: str | None = None) -> No
     logger.info(f"Created test Lance table at {table_path} with {len(records)} videos")
 
 
-def _minio_s3_options(minio_container) -> dict:
-    """Build fsspec s3_options for a MinIO testcontainer."""
-    host = minio_container.get_container_host_ip()
-    port = minio_container.get_exposed_port(9000)
-    return {
-        "key": minio_container.access_key,
-        "secret": minio_container.secret_key,
-        "client_kwargs": {"endpoint_url": f"http://{host}:{port}"},
-        "config_kwargs": {
-            "request_checksum_calculation": "when_required",
-            "response_checksum_validation": "when_required",
-        },
-    }
+@dataclass
+class _StoreConfig:
+    """Payload store config + optional cleanup path (separated to avoid leaking
+    the private ``_nvme_cleanup_dir`` key into production config dicts)."""
+
+    config: dict  # payload_store_uri + payload_store_options
+    cleanup_dir: str | None = None
 
 
-def _build_store_config(store_type: str, request) -> dict:
-    """Return payload store config dict entries for *store_type*.
+def _build_store_config(store_type: str, request) -> _StoreConfig:
+    """Return payload store config for *store_type*."""
+    from tests.utils.container_helpers import minio_s3_options
 
-    Keys returned (if any): ``payload_store_uri``, ``payload_store_options``.
-    Also returns ``_nvme_cleanup_dir`` for the caller to clean up.
-    """
     unique = hashlib.md5(f"{store_type}_{os.getpid()}".encode()).hexdigest()[:8]
 
     if store_type == "ray":
-        return {}
+        return _StoreConfig(config={})
 
     nvme_dir = f"/tmp/nurion_video_nvme_{unique}"
     os.makedirs(nvme_dir, exist_ok=True)
 
     if store_type == "nvme":
-        return {
-            "payload_store_uri": f"nvme://{nvme_dir}",
-            "_nvme_cleanup_dir": nvme_dir,
-        }
+        return _StoreConfig(
+            config={"payload_store_uri": f"nvme://{nvme_dir}"},
+            cleanup_dir=nvme_dir,
+        )
 
     # nvme_s3: NVMe + real MinIO S3
     minio = request.getfixturevalue("minio_container")
-    s3_options = _minio_s3_options(minio)
-    return {
-        "payload_store_uri": (
-            f"nvme://{nvme_dir}"
-            f"?s3_fallback=s3://warehouse/video-wf-{unique}"
-            f"&write_policy=write_through"
-        ),
-        "payload_store_options": s3_options,
-        "_nvme_cleanup_dir": nvme_dir,
-    }
+    s3_options = minio_s3_options(minio)
+    return _StoreConfig(
+        config={
+            "payload_store_uri": (
+                f"nvme://{nvme_dir}"
+                f"?s3_fallback=s3://warehouse/video-wf-{unique}"
+                f"&write_policy=write_through"
+            ),
+            "payload_store_options": s3_options,
+        },
+        cleanup_dir=nvme_dir,
+    )
 
 
 @pytest.mark.workflow
@@ -185,8 +180,8 @@ def test_video_slice_workflow_with_ray(ray_cluster, store_type, request):
     # Pre-download videos (cached across parametrize variants)
     video_dir = _ensure_videos_cached()
 
-    store_cfg = _build_store_config(store_type, request)
-    nvme_cleanup = store_cfg.pop("_nvme_cleanup_dir", None)
+    sc = _build_store_config(store_type, request)
+    store_cfg, nvme_cleanup = sc.config, sc.cleanup_dir
 
     # In local debug mode, use cache directory for output (preserved after test)
     # Otherwise use temp directory (cleaned up after test)

@@ -28,17 +28,14 @@ import hashlib
 import logging
 import os
 import shutil
-from dataclasses import dataclass
-from typing import Any
 
 import pyarrow.flight as flight
 import pytest
 
 pytest.importorskip("docker", reason="docker SDK required for container workflow tests")
 
-from _internal.runtime.ray_runner import RayJobRunner
-from tests.conftest import FLIGHT_INTERNAL_PORT  # noqa: E402
-from tests.utils import (
+from _internal.runtime.ray_runner import RayJobRunner  # noqa: E402
+from tests.utils import (  # noqa: E402
     create_collector,
     create_test_pipeline,
     get_sink_records,
@@ -46,61 +43,14 @@ from tests.utils import (
     wait_for_progress,
     wait_for_stage_workers,
 )
+from tests.utils.container_helpers import (  # noqa: E402
+    minio_s3_options,
+    start_flight_container,
+)
 
 logger = logging.getLogger(__name__)
 
 pytestmark = pytest.mark.distributed
-
-
-# ===========================================================================
-# Helpers
-# ===========================================================================
-
-
-def _minio_s3_options(minio_container) -> dict:
-    """Build fsspec s3_options for a MinIO testcontainer."""
-    host = minio_container.get_container_host_ip()
-    port = minio_container.get_exposed_port(9000)
-    return {
-        "key": minio_container.access_key,
-        "secret": minio_container.secret_key,
-        "client_kwargs": {"endpoint_url": f"http://{host}:{port}"},
-        "config_kwargs": {
-            "request_checksum_calculation": "when_required",
-            "response_checksum_validation": "when_required",
-        },
-    }
-
-
-@dataclass
-class FlightNode:
-    container: Any
-    host: str
-    port: int
-    data_dir: str
-
-    @property
-    def endpoint(self) -> str:
-        return f"grpc://{self.host}:{self.port}"
-
-
-def _start_flight_container(image_tag: str, data_dir: str) -> FlightNode:
-    from testcontainers.core.container import DockerContainer  # type: ignore[import-untyped]
-    from testcontainers.core.waiting_utils import wait_for_logs  # type: ignore[import-untyped]
-
-    container = (
-        DockerContainer(image_tag)
-        .with_exposed_ports(FLIGHT_INTERNAL_PORT)
-        .with_volume_mapping(os.path.realpath(data_dir), "/data", "rw")
-    )
-    container.start()
-    wait_for_logs(container, "FLIGHT_READY", timeout=120)
-
-    host = container.get_container_host_ip()
-    port = int(container.get_exposed_port(FLIGHT_INTERNAL_PORT))
-    return FlightNode(container=container, host=host, port=port, data_dir=data_dir)
-
-
 # ===========================================================================
 # Fixtures
 # ===========================================================================
@@ -147,7 +97,7 @@ class TestNvmeWorkflowWithS3:
         from minio import Minio  # type: ignore[import-untyped]
 
         NUM_RECORDS = 300
-        s3_options = _minio_s3_options(minio_container)
+        s3_options = minio_s3_options(minio_container)
         s3_prefix = f"wf-wt-{self.job_id}"
 
         job = create_test_pipeline(
@@ -187,7 +137,7 @@ class TestNvmeWorkflowWithS3:
     async def test_write_back_pipeline(self, minio_container):
         """WRITE_BACK pipeline: all records arrive, S3 gets async uploads."""
         NUM_RECORDS = 300
-        s3_options = _minio_s3_options(minio_container)
+        s3_options = minio_s3_options(minio_container)
 
         job = create_test_pipeline(
             num_records=NUM_RECORDS,
@@ -213,7 +163,7 @@ class TestNvmeWorkflowWithS3:
     async def test_pipeline_data_integrity_large(self, minio_container):
         """Large pipeline (1000 records) with NVMe + S3, verify exact count."""
         NUM_RECORDS = 1000
-        s3_options = _minio_s3_options(minio_container)
+        s3_options = minio_s3_options(minio_container)
 
         job = create_test_pipeline(
             num_records=NUM_RECORDS,
@@ -250,7 +200,7 @@ class TestNvmeWorkflowFailure:
     async def test_worker_kill_write_through_recovery(self, minio_container):
         """Kill transform worker, verify pipeline recovers with S3 payloads."""
         NUM_RECORDS = 500
-        s3_options = _minio_s3_options(minio_container)
+        s3_options = minio_s3_options(minio_container)
 
         job = create_test_pipeline(
             num_records=NUM_RECORDS,
@@ -303,7 +253,7 @@ class TestNvmeWorkflowFlightVerification:
     async def test_post_pipeline_flight_read(self, flight_server_image, minio_container):
         """Pipeline writes to NVMe; Flight container serves the data afterwards."""
         NUM_RECORDS = 200
-        s3_options = _minio_s3_options(minio_container)
+        s3_options = minio_s3_options(minio_container)
 
         job = create_test_pipeline(
             num_records=NUM_RECORDS,
@@ -340,7 +290,7 @@ class TestNvmeWorkflowFlightVerification:
             pytest.skip("No Arrow files remain after pipeline cleanup")
 
         # Mount the job data dir into a Flight container and read
-        node = _start_flight_container(flight_server_image, job_data_dir)
+        node = start_flight_container(flight_server_image, job_data_dir)
         try:
             client = flight.FlightClient(node.endpoint)
 
@@ -359,7 +309,7 @@ class TestNvmeWorkflowFlightVerification:
     async def test_multi_container_read_after_pipeline(self, flight_server_image, minio_container):
         """Two Flight containers serve different stage outputs from the same pipeline."""
         NUM_RECORDS = 200
-        s3_options = _minio_s3_options(minio_container)
+        s3_options = minio_s3_options(minio_container)
         nvme_dir2 = f"{self.nvme_dir}_disk2"
         os.makedirs(nvme_dir2, exist_ok=True)
 
@@ -396,7 +346,7 @@ class TestNvmeWorkflowFlightVerification:
                 if not arrow_files:
                     continue
 
-                node = _start_flight_container(flight_server_image, job_dir)
+                node = start_flight_container(flight_server_image, job_dir)
                 containers.append((node, arrow_files))
 
             # Read from each container
