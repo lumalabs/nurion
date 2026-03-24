@@ -92,7 +92,7 @@ def make_test_table(num_rows: int = 100, prefix: str = "") -> pa.Table:
     )
 
 
-def _minio_s3_options(minio_container) -> tuple[str, dict]:
+def _minio_s3_options(minio_container) -> dict:
     """Build s3_uri and s3_options for a MinIO testcontainer.
 
     Disables response checksum validation which is incompatible between
