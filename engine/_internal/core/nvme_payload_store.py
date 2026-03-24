@@ -261,7 +261,7 @@ class NvmeDisk:
                 # Only delete if the process is no longer alive
                 try:
                     os.kill(pid, 0)  # signal 0 = check existence, no actual signal
-                except OSError:
+                except ProcessLookupError:
                     tmp.unlink(missing_ok=True)  # Process dead → safe to delete
             except (ValueError, OSError):
                 pass
