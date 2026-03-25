@@ -463,7 +463,7 @@ jobs:
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
       run: |
         cd control
-        uv run --no-sync pytest tests/ -v
+        uv run --no-sync pytest tests/ -v --cov=control --cov-report=xml
     
     - name: Upload coverage to Codecov
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
@@ -1038,7 +1038,7 @@ jobs:
       uses: actions/download-artifact@v4
       with:
         pattern: coverage-*
-        path: /tmp/coverage/
+        path: coverage/
         merge-multiple: false
 
     - name: Download pre-built wheels
@@ -1070,7 +1070,7 @@ jobs:
         cd engine
         # Collect all .coverage files from artifacts into numbered files for combine
         i=0
-        for f in $(find /tmp/coverage/ -name '.coverage' -type f); do
+        for f in $(find ../coverage/ -name '.coverage' -type f); do
           cp "$f" ".coverage.$i"
           i=$((i + 1))
         done
@@ -1101,7 +1101,7 @@ jobs:
     # ---- Rust (workqueue-rs) coverage ----
     - name: Rust coverage summary
       run: |
-        if [ -f /tmp/coverage/coverage-workqueue-rs/codecov.json ]; then
+        if [ -f coverage/coverage-workqueue-rs/codecov.json ]; then
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "## Rust (workqueue-rs) Coverage" >> $GITHUB_STEP_SUMMARY
           echo "Rust coverage data uploaded to Codecov." >> $GITHUB_STEP_SUMMARY
@@ -1121,9 +1121,9 @@ jobs:
         fail_ci_if_error: false
 
     - name: Upload Rust coverage to Codecov
-      if: hashFiles('/tmp/coverage/coverage-workqueue-rs/codecov.json') != ''
+      if: hashFiles('coverage/coverage-workqueue-rs/codecov.json') != ''
       uses: codecov/codecov-action@v4
       with:
-        file: /tmp/coverage/coverage-workqueue-rs/codecov.json
+        file: coverage/coverage-workqueue-rs/codecov.json
         flags: workqueue-rs
         fail_ci_if_error: false
