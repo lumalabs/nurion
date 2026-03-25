@@ -63,11 +63,6 @@ class FileSink(SinkOperator):
         self.file_handle: Optional[TextIO] = None
         self._initialized = False
         self.output_file_path: Optional[Path] = None
-        self._staging_file_path: Optional[Path] = None
-
-        # Track written records for exactly-once
-        self._records_written = 0
-        self._commit_offset = {"records_committed": 0}
 
     def process_split(
         self, split: Split, payload: Optional[SplitPayload] = None
@@ -123,8 +118,6 @@ class FileSink(SinkOperator):
 
         self._ensure_initialized()
 
-        records_to_write = len(self.buffer)
-
         if self.format == "json":
             self._flush_json()
         elif self.format == "parquet":
@@ -134,7 +127,6 @@ class FileSink(SinkOperator):
         else:
             raise ValueError(f"Unsupported format: {self.format}")
 
-        self._records_written += records_to_write
         self.buffer.clear()
 
     def _flush_json(self) -> None:
