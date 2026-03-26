@@ -70,6 +70,7 @@ class ModelPool:
         self._workers: dict[str, ray.actor.ActorHandle] = {}
         self._worker_ports: dict[str, int] = {}
         self._worker_nodes: dict[str, str] = {}  # worker_id -> node_id
+        self._worker_endpoints: dict[str, str] = {}  # worker_id -> endpoint URL
         self._spawning_workers = 0
         self._shutdown_event = asyncio.Event()
         self._last_scale_time = 0.0
@@ -113,16 +114,17 @@ class ModelPool:
         Consolidates cleanup shared by _stop_worker(), _check_worker_health(),
         and wait_ready(). Handles: local dicts, allocator, registry, state write.
         """
-        port = self._worker_ports.get(worker_id)
+        endpoint = self._worker_endpoints.get(worker_id)
         self._workers.pop(worker_id, None)
         self._worker_ports.pop(worker_id, None)
         self._worker_nodes.pop(worker_id, None)
+        self._worker_endpoints.pop(worker_id, None)
 
         if self._allocator is not None:
             self._allocator.record_removal(worker_id)
 
         # Unregister from registry (worker can't do it if it's dead)
-        if port is not None:
+        if endpoint is not None:
             try:
                 import httpx
 
@@ -133,7 +135,7 @@ class ModelPool:
                         f"{self._registry_url}/unregister",
                         json={
                             "model_id": self._config.model_id,
-                            "endpoint": f"http://localhost:{port}",
+                            "endpoint": endpoint,
                         },
                     )
             except Exception as e:
@@ -196,6 +198,8 @@ class ModelPool:
         # Report actual placement back to allocator (direct call, no RPC)
         actual_node = await worker.get_node_id.remote()
         self._worker_nodes[worker_id] = actual_node
+        endpoint = await worker.get_endpoint.remote()
+        self._worker_endpoints[worker_id] = endpoint
         if self._allocator is not None:
             gpus = resources.get("num_gpus", 0)
             self._allocator.record_placement(worker_id, actual_node, float(gpus))
