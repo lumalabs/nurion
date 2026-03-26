@@ -30,6 +30,7 @@ import time
 from typing import TYPE_CHECKING, Any, Optional
 
 import ray
+from ray.exceptions import RayActorError
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 
 from _internal.serve.config import AutoscaleConfig, ModelConfig
@@ -105,6 +106,40 @@ class ModelPool:
             logger.debug(f"Failed to write serve worker state: {e}")
 
     # --- Worker lifecycle ---
+
+    async def _remove_worker(self, worker_id: str, status: str) -> None:
+        """Remove a worker from pool tracking and write terminal status.
+
+        Consolidates cleanup shared by _stop_worker(), _check_worker_health(),
+        and wait_ready(). Handles: local dicts, allocator, registry, state write.
+        """
+        port = self._worker_ports.get(worker_id)
+        self._workers.pop(worker_id, None)
+        self._worker_ports.pop(worker_id, None)
+        self._worker_nodes.pop(worker_id, None)
+
+        if self._allocator is not None:
+            self._allocator.record_removal(worker_id)
+
+        # Unregister from registry (worker can't do it if it's dead)
+        if port is not None:
+            try:
+                import httpx
+
+                if self._registry_url is None:
+                    self._registry_url = ray.get(self._registry.get_http_url.remote())
+                async with httpx.AsyncClient(timeout=3.0) as client:
+                    await client.post(
+                        f"{self._registry_url}/unregister",
+                        json={
+                            "model_id": self._config.model_id,
+                            "endpoint": f"http://localhost:{port}",
+                        },
+                    )
+            except Exception as e:
+                logger.debug(f"Failed to unregister dead worker {worker_id}: {e}")
+
+        self._write_serve_worker_state(worker_id, status)
 
     async def _spawn_worker(self) -> tuple[str, ray.actor.ActorHandle]:
         port = find_free_port()
@@ -184,15 +219,7 @@ class ModelPool:
         except Exception as e:
             logger.warning(f"Error stopping worker {worker_id}: {e}")
 
-        self._workers.pop(worker_id, None)
-        self._worker_ports.pop(worker_id, None)
-        self._worker_nodes.pop(worker_id, None)
-
-        # Direct call to allocator, no RPC
-        if self._allocator is not None:
-            self._allocator.record_removal(worker_id)
-
-        self._write_serve_worker_state(worker_id, "STOPPED")
+        await self._remove_worker(worker_id, "STOPPED")
         logger.info(f"Stopped worker {worker_id}")
 
     # --- Public API ---
@@ -255,22 +282,34 @@ class ModelPool:
     async def wait_ready(self, timeout: float = 600.0) -> bool:
         """Wait for at least one worker to be ready.
 
-        Returns immediately with False if all workers have crashed.
+        Returns immediately with False if all workers have crashed or been cleaned up.
         """
         start = time.time()
         while time.time() - start < timeout:
+            if not self._workers:
+                logger.error(
+                    f"No workers remaining for {self._config.model_id}, aborting wait_ready"
+                )
+                return False
+
             all_failed = True
-            for wid, worker in self._workers.items():
+            dead_workers: list[str] = []
+            for wid, worker in list(self._workers.items()):
                 try:
                     if await worker.is_ready.remote():
                         self._write_serve_worker_state(wid, "READY")
                         return True
                     if not await worker.is_failed.remote():
                         all_failed = False
-                except Exception:
-                    pass  # Actor dead — counts as failed
+                except RayActorError:
+                    dead_workers.append(wid)
 
-            if all_failed and self._workers:
+            # Clean up dead workers after iteration (don't mutate during loop)
+            for wid in dead_workers:
+                logger.warning(f"Worker {wid} died during wait_ready")
+                await self._remove_worker(wid, "FAILED")
+
+            if all_failed and not dead_workers:
                 logger.error(
                     f"All workers for {self._config.model_id} have failed, aborting wait_ready"
                 )
@@ -314,6 +353,27 @@ class ModelPool:
             "autoscale_frozen": self._autoscale_frozen,
         }
 
+    # --- Health checking ---
+
+    async def _check_worker_health(self) -> list[str]:
+        """Detect dead worker actors and write FAILED status.
+
+        Returns list of dead worker_ids that were cleaned up.
+        Only catches RayActorError to avoid false positives from transient RPC issues.
+        """
+        dead_workers: list[str] = []
+        for worker_id, worker in list(self._workers.items()):
+            try:
+                await worker.is_ready.remote()
+            except RayActorError:
+                logger.warning(f"Worker {worker_id} is dead, marking as FAILED")
+                dead_workers.append(worker_id)
+
+        for worker_id in dead_workers:
+            await self._remove_worker(worker_id, "FAILED")
+
+        return dead_workers
+
     # --- Autoscaling ---
 
     def start_autoscaler(self, config: Optional[AutoscaleConfig] = None) -> None:
@@ -353,6 +413,14 @@ class ModelPool:
         while not self._shutdown_event.is_set():
             try:
                 await asyncio.sleep(cfg.check_interval_seconds)
+
+                # Health check runs even when autoscaling is frozen —
+                # crash detection is independent of scaling decisions.
+                dead = await self._check_worker_health()
+                if dead:
+                    logger.info(
+                        f"Cleaned up {len(dead)} dead workers for {self._config.model_id}: {dead}"
+                    )
 
                 if self._autoscale_frozen:
                     continue
