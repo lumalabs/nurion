@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional
 
 import ray
@@ -45,6 +46,16 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 _SPAWN_WAIT_TIMEOUT_SECONDS = 120.0
+
+
+@dataclass
+class _WorkerInfo:
+    """Per-worker tracking data, kept in a single dict instead of parallel dicts."""
+
+    actor: ray.actor.ActorHandle
+    port: int
+    endpoint: str  # http://{node_ip}:{port}
+    node_id: str
 
 
 class ModelPool:
@@ -67,10 +78,7 @@ class ModelPool:
         self._detached = detached
         self._allocator = allocator
         self._state_writer = state_writer
-        self._workers: dict[str, ray.actor.ActorHandle] = {}
-        self._worker_ports: dict[str, int] = {}
-        self._worker_endpoints: dict[str, str] = {}  # worker_id -> http://ip:port
-        self._worker_nodes: dict[str, str] = {}  # worker_id -> node_id
+        self._workers: dict[str, _WorkerInfo] = {}
         self._spawning_workers = 0
         self._shutdown_event = asyncio.Event()
         self._last_scale_time = 0.0
@@ -112,19 +120,15 @@ class ModelPool:
         """Remove a worker from pool tracking and write terminal status.
 
         Consolidates cleanup shared by _stop_worker(), _check_worker_health(),
-        and wait_ready(). Handles: local dicts, allocator, registry, state write.
+        and wait_ready(). Handles: local tracking, allocator, registry, state write.
         """
-        endpoint = self._worker_endpoints.get(worker_id)
-        self._workers.pop(worker_id, None)
-        self._worker_ports.pop(worker_id, None)
-        self._worker_endpoints.pop(worker_id, None)
-        self._worker_nodes.pop(worker_id, None)
+        info = self._workers.pop(worker_id, None)
 
         if self._allocator is not None:
             self._allocator.record_removal(worker_id)
 
         # Unregister from registry (worker can't do it if it's dead)
-        if endpoint is not None:
+        if info is not None:
             try:
                 import httpx
 
@@ -135,7 +139,7 @@ class ModelPool:
                         f"{self._registry_url}/unregister",
                         json={
                             "model_id": self._config.model_id,
-                            "endpoint": endpoint,
+                            "endpoint": info.endpoint,
                         },
                     )
             except Exception as e:
@@ -192,14 +196,14 @@ class ModelPool:
             self._spawning_workers = max(0, self._spawning_workers - 1)
 
         assert worker is not None
-        self._workers[worker_id] = worker
-        self._worker_ports[worker_id] = port
         endpoint = await worker.get_endpoint.remote()
-        self._worker_endpoints[worker_id] = endpoint
+        actual_node = await worker.get_node_id.remote()
+
+        self._workers[worker_id] = _WorkerInfo(
+            actor=worker, port=port, endpoint=endpoint, node_id=actual_node
+        )
 
         # Report actual placement back to allocator (direct call, no RPC)
-        actual_node = await worker.get_node_id.remote()
-        self._worker_nodes[worker_id] = actual_node
         if self._allocator is not None:
             gpus = resources.get("num_gpus", 0)
             self._allocator.record_placement(worker_id, actual_node, float(gpus))
@@ -212,14 +216,14 @@ class ModelPool:
         return worker_id, worker
 
     async def _stop_worker(self, worker_id: str, graceful: bool = True) -> None:
-        worker = self._workers.get(worker_id)
-        if worker is None:
+        info = self._workers.get(worker_id)
+        if info is None:
             return
         try:
             if graceful:
-                await worker.shutdown.remote()
+                await info.actor.shutdown.remote()
             else:
-                ray.kill(worker)
+                ray.kill(info.actor)
         except Exception as e:
             logger.warning(f"Error stopping worker {worker_id}: {e}")
 
@@ -298,12 +302,12 @@ class ModelPool:
 
             all_failed = True
             dead_workers: list[str] = []
-            for wid, worker in list(self._workers.items()):
+            for wid, info in list(self._workers.items()):
                 try:
-                    if await worker.is_ready.remote():
+                    if await info.actor.is_ready.remote():
                         self._write_serve_worker_state(wid, "READY")
                         return True
-                    if not await worker.is_failed.remote():
+                    if not await info.actor.is_failed.remote():
                         all_failed = False
                 except RayActorError:
                     dead_workers.append(wid)
@@ -366,9 +370,9 @@ class ModelPool:
         Only catches RayActorError to avoid false positives from transient RPC issues.
         """
         dead_workers: list[str] = []
-        for worker_id, worker in list(self._workers.items()):
+        for worker_id, info in list(self._workers.items()):
             try:
-                await worker.is_ready.remote()
+                await info.actor.is_ready.remote()
             except RayActorError:
                 logger.warning(f"Worker {worker_id} is dead, marking as FAILED")
                 dead_workers.append(worker_id)
