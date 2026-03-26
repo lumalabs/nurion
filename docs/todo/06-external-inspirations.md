@@ -15,6 +15,9 @@ Design patterns from external projects evaluated for Nurion's **offline batch in
 | Llumnix | v1 (2026-02) | LLM scheduling + live KV migration (Go + Python, OSDI 2024) | [llumnix-project/llumnix](https://github.com/llumnix-project/llumnix) |
 | Llumnix-Ray | v0 (2024-12) | Ray-based Llumnix prototype | [llumnix-project/llumnix-ray](https://github.com/llumnix-project/llumnix-ray) |
 | Cosmos-Xenna | v0.2.1 (2026-03-12) | NVIDIA distributed AI inference pipeline (Ray) | See `05-xenna-inspirations.md` |
+| Ray Data LLM | Ray 2.44+ (2025) | Ray's batch LLM inference pipeline | [Ray Data LLM Docs](https://docs.ray.io/en/latest/data/working-with-llms.html) |
+| Daft + vLLM | 2025 | DataFrame-native batch inference with prefix bucketing | [Daft Blog](https://www.daft.ai/blog/cutting-llm-batch-inference-time-in-half-dynamic-prefix-bucketing-at-scale) |
+| Data-Juicer 2.0 | 2025 | Alibaba/ModelScope LLM data processing pipeline | [GitHub](https://github.com/modelscope/data-juicer) |
 
 ---
 
@@ -29,6 +32,24 @@ Nurion's LLM workflows (image captioning, multi-OCR fusion) are offline batch jo
 ---
 
 ## Applicable Patterns
+
+### P0 — AsyncLLMEngine for EmbeddedLLMOperator (2x throughput)
+
+- [ ] Switch `EmbeddedLLMOperator` from synchronous `LLM.generate()` to `AsyncLLMEngine`
+- **Ray Data LLM approach**: 7-stage disaggregated pipeline with dual-layer async execution — batch-level concurrency (Ray Data) + token-level continuous batching (vLLM AsyncEngine). Achieves **2x throughput** vs synchronous `LLM` class.
+- **Nurion problem**: `EmbeddedLLMOperator` calls `LLM.generate(batch)` synchronously. If a batch has 10 requests where 9 generate 100 tokens and 1 generates 8000 tokens, the GPU sits mostly idle while the 9 short requests wait for the 1 long request. No new work can enter until the entire batch completes.
+- **Fix**: Use `AsyncLLMEngine` so requests complete independently. As each finishes, its KV cache is freed and new requests can be injected immediately. GPU stays fully utilized via vLLM's continuous batching.
+- **Scope**: `_internal/operators/llm/embedded.py` — change engine initialization and `process_split` to use async generate API
+- **Estimated impact**: 2x throughput for workloads with variable output lengths (Multi-OCR: 100~8000 tokens)
+- **Reference**: [Ray Data LLM 2x Throughput Blog](https://www.anyscale.com/blog/ray-data-llm-2x-throughput-vs-vllm)
+
+### P0 — GPU-Memory-Aware Load Balancing (Serve Module)
+
+- [ ] Replace round-robin `ModelClient` routing with GPU cache utilization-aware routing
+- **Llumnix approach**: Poll each instance's `gpu_cache_usage_perc` via metrics, route to instance with lowest GPU memory pressure.
+- **Nurion problem**: `ModelClient` uses round-robin. When output lengths vary significantly (Multi-OCR: 100~8000 tokens), some workers' GPU KV cache fills up while others are idle.
+- **Implementation path**: Periodically scrape vLLM's `/metrics` endpoint for `gpu_cache_usage_perc` and `num_requests_waiting`. Store per-worker metrics in `ModelRegistry`. `ModelClient` routes to worker with lowest cache usage.
+- **Scope**: `serve/registry.py` (add metrics field), `serve/client.py` (routing logic), `serve/pool.py` (metrics scraping loop)
 
 ### P0 — AIConfigurator: Micro-Benchmark-Driven Auto-Tuning
 
@@ -80,19 +101,21 @@ Nurion's LLM workflows (image captioning, multi-OCR fusion) are offline batch jo
 
 ## Applicable Patterns from Llumnix
 
-### P0 — GPU-Memory-Aware Load Balancing
+- GPU-Memory-Aware Load Balancing → consolidated into P0 above
+- [x] Instance Staleness Detection ✅ Already implemented — `ModelPool._check_worker_health()` (PR #70, 2026-03-25). Llumnix has `stalenessFilter` + configurable failure domains; Nurion's lightweight RPC ping is sufficient for offline.
 
-- [ ] Replace round-robin `ModelClient` routing with GPU cache utilization-aware routing
-- **Llumnix approach**: Poll each instance's `gpu_cache_usage_perc` via metrics, route to instance with lowest GPU memory pressure. 11 built-in metrics in their scheduling framework.
-- **Nurion problem**: `ModelClient` uses round-robin. When output lengths vary significantly (Multi-OCR: 100~8000 tokens), some workers' GPU KV cache fills up while others are idle. Overloaded workers queue new requests, underloaded workers waste GPU cycles.
-- **Implementation path**: Periodically scrape vLLM's `/metrics` endpoint for `gpu_cache_usage_perc` and `num_requests_waiting`. Store per-worker metrics in `ModelRegistry`. `ModelClient` routes to worker with lowest cache usage instead of round-robin.
-- **Scope**: `serve/registry.py` (add metrics field), `serve/client.py` (routing logic), `serve/pool.py` (metrics scraping loop)
-- **Reference**: Llumnix `scheduler/selector.go` — metrics-based instance selection; vLLM `/metrics` exposes Prometheus-format `vllm:gpu_cache_usage_perc`
+---
 
-### P1 — Instance Staleness Detection
+## Applicable Patterns from Ray Data LLM / Industry
 
-- [x] ✅ Already implemented — `ModelPool._check_worker_health()` (PR #70, 2026-03-25)
-- Llumnix has `stalenessFilter` + configurable failure domains (instance/node/unit). Nurion's current approach (lightweight RPC ping to detect dead actors) is sufficient for offline.
+### P1 — Job-Level Checkpoint/Resume
+
+- [ ] Enable batch job resume from last checkpoint after crash or spot instance preemption
+- **Ray Data LLM approach**: Pipeline resumes from last successful block stored in local or cloud storage. Critical for spot instance cost savings.
+- **Nurion status**: WorkQueue ack provides split-level durability (acked splits survive restart). But no job-level "resume from where we left off" — a restarted job re-processes all splits.
+- **Implementation path**: On job restart, scan WorkQueue for already-acked splits and skip them in source planner. Thin wrapper over existing ack state.
+- **Scope**: `runtime/ray_runner.py` (restart logic), `core/managers/source_manager.py` (skip acked splits)
+- **Estimated impact**: Enables spot instances (3-5x cheaper), tolerates transient failures in multi-hour jobs
 
 ---
 
@@ -116,3 +139,7 @@ Documented to prevent re-evaluation.
 | **CRIU checkpoint/restore** | Dynamo | Too invasive for current deployment model |
 | **Blade-KVT** (GPU direct transfer) | Llumnix | Only useful for live migration, which offline doesn't need |
 | **Batch API** (`/v1/batches`) | Llumnix v1 | Nurion has its own pipeline orchestration; no need for standalone batch API |
+| **Prefix bucketing** (sort inputs by prefix) | Daft | Nurion workflows use identical system prompts → no prefix diversity to bucket |
+| **LMCache** (distributed KV cache) | LMCache | Cross-worker KV sharing mainly benefits online; each offline worker auto-caches shared prefix locally |
+| **Speculative decoding** | vLLM/SGLang | Latency optimization; at batch sizes 32+, throughput benefit is minimal |
+| **CPU/GPU stage disaggregation** (7-stage) | Ray Data LLM | Nurion's multi-stage pipeline already supports separate CPU/GPU stages; users can compose them |
