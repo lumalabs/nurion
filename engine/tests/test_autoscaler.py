@@ -466,9 +466,7 @@ class TestResourceAwareScaling:
         masters = {"stage_a": master}
 
         # Cluster has only 1 CPU available — worker needs 2
-        monkeypatch.setattr(
-            "ray.available_resources", lambda: {"CPU": 1.0, "GPU": 0.0}
-        )
+        monkeypatch.setattr("ray.available_resources", lambda: {"CPU": 1.0, "GPU": 0.0})
 
         await autoscaler._execute_decisions(masters, {"stage_a": 4})
 
@@ -484,9 +482,7 @@ class TestResourceAwareScaling:
         masters = {"stage_a": master}
 
         # Cluster has CPUs but no GPUs
-        monkeypatch.setattr(
-            "ray.available_resources", lambda: {"CPU": 10.0}
-        )
+        monkeypatch.setattr("ray.available_resources", lambda: {"CPU": 10.0})
 
         await autoscaler._execute_decisions(masters, {"stage_a": 4})
 
@@ -500,9 +496,7 @@ class TestResourceAwareScaling:
         master = MockStageMaster(worker_count=2, num_cpus=1.0, num_gpus=1.0)
         masters = {"stage_a": master}
 
-        monkeypatch.setattr(
-            "ray.available_resources", lambda: {"CPU": 8.0, "GPU": 4.0}
-        )
+        monkeypatch.setattr("ray.available_resources", lambda: {"CPU": 8.0, "GPU": 4.0})
 
         await autoscaler._execute_decisions(masters, {"stage_a": 4})
 
@@ -517,9 +511,7 @@ class TestResourceAwareScaling:
         masters = {"stage_a": master}
 
         # Even with 0 available resources, 0-requirement workers should pass
-        monkeypatch.setattr(
-            "ray.available_resources", lambda: {"CPU": 0.0}
-        )
+        monkeypatch.setattr("ray.available_resources", lambda: {"CPU": 0.0})
 
         await autoscaler._execute_decisions(masters, {"stage_a": 4})
 
@@ -534,9 +526,7 @@ class TestResourceAwareScaling:
         masters = {"stage_a": master}
 
         # No resources available — but scale-down should still work
-        monkeypatch.setattr(
-            "ray.available_resources", lambda: {"CPU": 0.0}
-        )
+        monkeypatch.setattr("ray.available_resources", lambda: {"CPU": 0.0})
 
         await autoscaler._execute_decisions(masters, {"stage_a": 2})
 
