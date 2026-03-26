@@ -317,6 +317,12 @@ class ModelPool:
                 logger.warning(f"Worker {wid} died during wait_ready")
                 await self._remove_worker(wid, "FAILED")
 
+            if not self._workers:
+                logger.error(
+                    f"No workers remaining for {self._config.model_id}, aborting wait_ready"
+                )
+                return False
+
             if all_failed and not dead_workers:
                 logger.error(
                     f"All workers for {self._config.model_id} have failed, aborting wait_ready"
