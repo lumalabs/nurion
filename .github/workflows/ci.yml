@@ -469,8 +469,9 @@ jobs:
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
       uses: codecov/codecov-action@v5
       with:
-        file: ./control/coverage.xml
+        files: ./control/coverage.xml
         flags: unittests
+        token: ${{ secrets.CODECOV_TOKEN }}
         name: codecov-umbrella
         fail_ci_if_error: false
 
@@ -1116,14 +1117,16 @@ jobs:
       if: hashFiles('engine/coverage.xml') != ''
       uses: codecov/codecov-action@v5
       with:
-        file: ./engine/coverage.xml
+        files: ./engine/coverage.xml
         flags: engine
+        token: ${{ secrets.CODECOV_TOKEN }}
         fail_ci_if_error: false
 
     - name: Upload Rust coverage to Codecov
       if: hashFiles('/tmp/coverage/coverage-workqueue-rs/codecov.json') != ''
       uses: codecov/codecov-action@v5
       with:
-        file: /tmp/coverage/coverage-workqueue-rs/codecov.json
+        files: /tmp/coverage/coverage-workqueue-rs/codecov.json
         flags: workqueue-rs
+        token: ${{ secrets.CODECOV_TOKEN }}
         fail_ci_if_error: false
