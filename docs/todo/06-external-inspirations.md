@@ -17,7 +17,7 @@ Design patterns from external projects evaluated for Nurion's **offline batch in
 | Cosmos-Xenna | v0.2.1 (2026-03-12) | NVIDIA distributed AI inference pipeline (Ray) | See `05-xenna-inspirations.md` |
 | Ray Data LLM | Ray 2.44+ (2025) | Ray's batch LLM inference pipeline | [Ray Data LLM Docs](https://docs.ray.io/en/latest/data/working-with-llms.html) |
 | Daft + vLLM | 2025 | DataFrame-native batch inference with prefix bucketing | [Daft Blog](https://www.daft.ai/blog/cutting-llm-batch-inference-time-in-half-dynamic-prefix-bucketing-at-scale) |
-| Data-Juicer 2.0 | 2025 | Alibaba/ModelScope LLM data processing pipeline | [GitHub](https://github.com/modelscope/data-juicer) |
+| Data-Juicer | v1.5.1 (2026-03-17) | Alibaba LLM data processing (200+ OPs, SIGMOD 2024) | [GitHub](https://github.com/modelscope/data-juicer) |
 
 ---
 
@@ -119,6 +119,43 @@ Nurion's LLM workflows (image captioning, multi-OCR fusion) are offline batch jo
 
 ---
 
+## Applicable Patterns from Data-Juicer
+
+> DJ's execution model (dataset.map() chain) is inferior to Nurion's multi-stage pipeline.
+> DJ's code quality is poor — do not port code directly. Borrow design ideas only.
+> Nurion advantages: exactly-once semantics, Arrow zero-copy, Rust WorkQueue, pull-based backpressure.
+
+### P1 — Sample-Level Tracer
+
+- [ ] Track per-split row-level changes (kept/filtered/modified) at each stage for pipeline debugging
+- **DJ approach**: `RayTracer` actor records which samples were modified/filtered by each OP. Useful for debugging but implemented as Python dict diffing (slow, imprecise).
+- **Nurion advantage**: Arrow tables have typed schemas — column-level and row-level diffs can be computed efficiently via zero-copy.
+- **Design**:
+  - **Stats tier (zero cost)**: Every split records `SplitTrace{input_rows, output_rows, columns_added, columns_removed}` — always on
+  - **Row tier (sampled)**: At `lineage_sample_rate > 0`, sample N rows and record which were filtered/modified. Uses existing `WebUIConfig.lineage_sample_rate` infrastructure
+  - **Value tier (debug only)**: Record before/after values for sampled rows. Only in explicit debug mode
+- **Storage**: Write to WebUI state (`_write_worker_state` mechanism) or WorkQueue state namespace `lineage:{job_id}`
+- **Scope**: `core/stage_worker.py` (hook around `process_split`), `core/models.py` (`SplitTrace` dataclass)
+
+### P1 — Data Profiler CLI
+
+- [ ] Standalone tool for dataset statistics and before/after comparison
+- **DJ approach**: `Analyzer` module with overall/column-wise/correlation/diversity analysis. Generates stats tables and distribution plots. Implemented as Python dict iteration (slow on large datasets).
+- **Nurion advantage**: Datasets are Arrow/Lance — profiling uses columnar compute (PyArrow `pc.*` functions), orders of magnitude faster than row-by-row iteration.
+- **Design**:
+  - Core: `profile.py` module, accepts `pa.Table` → returns `ProfileResult` dataclass
+  - Per-column auto-detection:
+    - Numeric: count, null%, min/max, mean/std, p50/p95/p99, histogram
+    - String/text: length distribution, empty%, avg tokens, language breakdown
+    - Binary (image): count, size distribution
+    - Categorical: cardinality, top-K values, frequency table
+  - CLI: `nurion profile <path> [--columns col1,col2] [--output report.json]`
+  - Diff: `nurion profile diff before.json after.json` → shows row count change, column stat deltas
+- **Scope**: New `_internal/tools/profile.py` + CLI entry point
+- **Estimated effort**: Small — mostly PyArrow compute wrappers + JSON/HTML output
+
+---
+
 ## Not Applicable to Nurion
 
 Documented to prevent re-evaluation.
@@ -143,3 +180,9 @@ Documented to prevent re-evaluation.
 | **LMCache** (distributed KV cache) | LMCache | Cross-worker KV sharing mainly benefits online; each offline worker auto-caches shared prefix locally |
 | **Speculative decoding** | vLLM/SGLang | Latency optimization; at batch sizes 32+, throughput benefit is minimal |
 | **CPU/GPU stage disaggregation** (7-stage) | Ray Data LLM | Nurion's multi-stage pipeline already supports separate CPU/GPU stages; users can compose them |
+| **dataset.map() execution model** | Data-Juicer | Nurion's stage pipeline is more flexible: independent scaling, exactly-once, pull-based backpressure |
+| **OP Fusion** (merge consecutive filters) | Data-Juicer | Nurion's `get_merge_upstream()` is a better design — explicit, user-controlled batching vs implicit fusion |
+| **200+ operator ecosystem** | Data-Juicer | Quantity over quality; Nurion focuses on core operators + user-defined via `@operator` decorator |
+| **YAML recipe system** | Data-Juicer | Nice-to-have UX improvement but not a priority; Nurion's Python Job/Stage API is more powerful |
+| **OP-level runtime_env isolation** | Data-Juicer | Over-engineering for Nurion's use case; single venv with uv is sufficient |
+| **Embodied AI operators** (3D pose, hand mesh) | Data-Juicer | Niche scenario, not on Nurion roadmap |
