@@ -90,16 +90,6 @@ Nurion's LLM workflows (image captioning, multi-OCR fusion) are offline batch jo
 - **Prerequisite**: Requires NIXL or similar GPU transfer library; evaluate if vLLM/SGLang have native support
 - **Priority**: Low — startup time is amortized over long batch jobs
 
-### P1 — Lance 3.0 WAL for Streaming Sink Writes
-
-- [ ] Replace two-phase fragment-commit architecture with Lance WAL direct writes
-- **Lance 3.0 feature**: `mem_wal` module — MemTable (in-memory buffer) + WAL (durable to object storage) + async flush + multi-writer via Region partitioning with epoch fencing
-- **Current Nurion architecture**: Worker → `write_fragments()` → `ack_and_forward(fragment_metadata → commit_queue)` → SinkManager background loop → batch `LanceDataset.commit(Append, fragments)`. Two-phase, complex, 300+ lines in `lance_commit.py`.
-- **Target architecture**: Worker → `region_writer.put(arrow_batch)` → ack upstream. No commit queue, no SinkManager commit loop. Each worker owns a Region, Lance handles flush/compaction.
-- **Blocker**: pylance 3.0.1 does not expose `mem_wal` Python bindings yet. Track upstream pylance releases.
-- **When ready**: Implement as `LanceSinkConfig.use_wal=True` option alongside existing fragment-based mode
-- **Impact**: Simplify Lance sink code by ~50%, eliminate version conflict handling, enable concurrent multi-writer without coordination
-
 ### P2 — NIXL Unified Storage Abstraction
 
 - [ ] Unify PayloadStore backends behind a single transport-agnostic API
