@@ -467,7 +467,7 @@ jobs:
     
     - name: Upload coverage to Codecov
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
-      uses: codecov/codecov-action@v4
+      uses: codecov/codecov-action@v5
       with:
         file: ./control/coverage.xml
         flags: unittests
@@ -1114,7 +1114,7 @@ jobs:
     # ---- Upload to Codecov ----
     - name: Upload Python coverage to Codecov
       if: hashFiles('engine/coverage.xml') != ''
-      uses: codecov/codecov-action@v4
+      uses: codecov/codecov-action@v5
       with:
         file: ./engine/coverage.xml
         flags: engine
@@ -1122,7 +1122,7 @@ jobs:
 
     - name: Upload Rust coverage to Codecov
       if: hashFiles('/tmp/coverage/coverage-workqueue-rs/codecov.json') != ''
-      uses: codecov/codecov-action@v4
+      uses: codecov/codecov-action@v5
       with:
         file: /tmp/coverage/coverage-workqueue-rs/codecov.json
         flags: workqueue-rs
