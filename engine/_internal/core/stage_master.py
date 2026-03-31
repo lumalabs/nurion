@@ -383,7 +383,7 @@ class StageMaster:
                                 f"Stage {self.stage_id} giving up: {result.give_up_reason}"
                             )
                             break
-                elif completed:
+                if completed:
                     self._last_progress_time = time.monotonic()
                     self._recovery_manager.record_success()
 

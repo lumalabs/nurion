@@ -84,15 +84,15 @@ class TestAssignPartitionIds:
         assert wm._assign_partition_ids(worker_index=0) is None
         assert wm._assign_partition_ids(worker_index=3) is None
 
-    def test_one_partition_returns_none(self):
-        """upstream_num_partitions=1 (non-shuffle) → no partition assignment.
+    def test_one_partition_assigns_partition_zero(self):
+        """upstream_num_partitions=1 → all workers get (0,).
 
-        Regression: was `<= 0`, now `<= 1`. A single-partition QueueGroup
-        means all workers should claim from any partition (no affinity).
+        Single-partition QueueGroup: explicitly assign partition 0 so
+        claim_from_group gets a concrete partition list (not None).
         """
         wm = _make_worker_manager(upstream_num_partitions=1)
-        assert wm._assign_partition_ids(worker_index=0) is None
-        assert wm._assign_partition_ids(worker_index=1) is None
+        assert wm._assign_partition_ids(worker_index=0) == (0,)
+        assert wm._assign_partition_ids(worker_index=1) == (0,)
 
     def test_multiple_partitions_assigned_round_robin(self):
         """upstream_num_partitions=8, max_parallelism=4 → 2 partitions per worker."""

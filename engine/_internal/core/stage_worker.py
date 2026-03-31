@@ -260,7 +260,7 @@ class StageWorker:
                             pending.clear()
                         break
                     idle_s = time.time() - last_claimed_time
-                    if idle_s > _IDLE_TIMEOUT_S:
+                    if _IDLE_TIMEOUT_S > 0 and idle_s > _IDLE_TIMEOUT_S:
                         raise RuntimeError(
                             f"Worker {self.worker_id} idle for {idle_s:.0f}s "
                             f"— broker may be unresponsive. Failing fast."
@@ -348,7 +348,7 @@ class StageWorker:
                         break
                     # Idle timeout: broker may be deadlocked
                     idle_s = time.time() - last_claimed_time
-                    if idle_s > _IDLE_TIMEOUT_S:
+                    if _IDLE_TIMEOUT_S > 0 and idle_s > _IDLE_TIMEOUT_S:
                         raise RuntimeError(
                             f"Worker {self.worker_id} idle for {idle_s:.0f}s "
                             f"without claiming any messages — broker may be "
