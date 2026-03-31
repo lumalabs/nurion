@@ -148,8 +148,6 @@ jobs:
         uvx maturin build --release
         echo "Built wheel:"
         ls -la target/wheels/
-        # Generate gRPC stubs
-        uv run --with grpcio-tools python -m grpc_tools.protoc -I proto --python_out=python/anvil_py --grpc_python_out=python/anvil_py proto/anvil.proto
         # Copy to cache directory
         mkdir -p /tmp/anvil-rs-wheel/
         cp target/wheels/*.whl /tmp/anvil-rs-wheel/
