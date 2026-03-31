@@ -37,7 +37,7 @@ import lance
 import pyarrow as pa
 from lance import FragmentMetadata, LanceOperation
 
-from _internal.queue import WorkQueueQueueClient
+from _internal.queue import AnvilQueueClient
 
 
 @dataclass
@@ -100,7 +100,7 @@ class LanceSinkCommitter:
         self._first_commit = True
 
     async def run_commit_loop(
-        self, queue_client: WorkQueueQueueClient, commit_queue_name: str
+        self, queue_client: AnvilQueueClient, commit_queue_name: str
     ) -> None:
         """Background task: claim from commit queue, accumulate, commit on schedule."""
         self._logger.info(
@@ -120,7 +120,7 @@ class LanceSinkCommitter:
             self._logger.debug("Commit loop cancelled")
             raise
 
-    async def finalize(self, queue_client: WorkQueueQueueClient, commit_queue_name: str) -> None:
+    async def finalize(self, queue_client: AnvilQueueClient, commit_queue_name: str) -> None:
         """Drain commit queue and do final commit."""
         self._logger.info("Finalizing: draining commit queue for final commit")
 
@@ -150,7 +150,7 @@ class LanceSinkCommitter:
     # =========================================================================
 
     def _claim_and_accumulate(
-        self, queue_client: WorkQueueQueueClient, commit_queue_name: str
+        self, queue_client: AnvilQueueClient, commit_queue_name: str
     ) -> None:
         """Claim messages from commit queue and accumulate fragment metadata.
 
@@ -205,7 +205,7 @@ class LanceSinkCommitter:
             self._logger.error(f"Error parsing commit record: {e}")
             return None
 
-    def _ack_pending(self, queue_client: WorkQueueQueueClient, commit_queue_name: str) -> None:
+    def _ack_pending(self, queue_client: AnvilQueueClient, commit_queue_name: str) -> None:
         """Ack all pending messages after a successful commit."""
         if not self._pending_acks:
             return
@@ -236,7 +236,7 @@ class LanceSinkCommitter:
 
         return False
 
-    def _do_commit(self, queue_client: WorkQueueQueueClient, commit_queue_name: str) -> None:
+    def _do_commit(self, queue_client: AnvilQueueClient, commit_queue_name: str) -> None:
         """Execute LanceDataset.commit() with accumulated fragments, then ack."""
         if not self._pending_fragments:
             return

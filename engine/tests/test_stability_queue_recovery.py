@@ -15,12 +15,12 @@
 """Queue and network fault tests for distributed Nurion engine pipelines.
 
 These are P1 tests that verify:
-- WorkQueue broker restart recovery (with SlateDB persistence)
+- Anvil broker restart recovery (with SlateDB persistence)
 - Connection timeout handling
 - Slow network / backpressure behavior
 - Push/claim retry on failure
 
-All tests use real Ray clusters and WorkQueue brokers (no mocks).
+All tests use real Ray clusters and Anvil brokers (no mocks).
 Data volumes: 10,000+ records with complex operators.
 
 Note: Broker restart tests use file storage to ensure data persists
@@ -70,8 +70,8 @@ class TestQueueFaultRecovery:
 
     @pytest.mark.asyncio
     @pytest.mark.timeout(120)
-    async def test_workqueue_broker_restart(self, ray_cluster, workqueue_storage_path):
-        """WorkQueue broker restart: job should exit on broker loss.
+    async def test_anvil_broker_restart(self, ray_cluster, anvil_storage_path):
+        """Anvil broker restart: job should exit on broker loss.
 
         This test verifies that when the broker goes down:
         1. The job exits instead of hanging
@@ -98,7 +98,7 @@ class TestQueueFaultRecovery:
                 modulo=FILTER_MODULO,
                 remainder=FILTER_REMAINDER,
             ),
-            workqueue_db_path=workqueue_storage_path,  # Use file storage for persistence
+            anvil_db_path=anvil_storage_path,  # Use file storage for persistence
         )
 
         runner = RayJobRunner(job)
@@ -121,7 +121,7 @@ class TestQueueFaultRecovery:
             # Restart the broker by creating a new instance
             # Note: We create a new broker instance instead of restarting the same one
             # because the underlying Rust/Tokio runtime may have residual state
-            from _internal.queue import WorkQueueBrokerManager
+            from _internal.queue import AnvilBrokerManager
 
             old_broker = runner._shared_broker
             old_url = old_broker.get_broker_url()
@@ -137,7 +137,7 @@ class TestQueueFaultRecovery:
 
             # Create and start a new broker instance on the same port
             # Using the same db_path ensures data persistence
-            new_broker = WorkQueueBrokerManager(
+            new_broker = AnvilBrokerManager(
                 db_path=old_db_path,
                 port=old_port,
                 claim_timeout_secs=old_claim_timeout,
@@ -159,7 +159,7 @@ class TestQueueFaultRecovery:
         assert broker_restarted
 
     @pytest.mark.asyncio
-    async def test_workqueue_connection_timeout(self, ray_cluster):
+    async def test_anvil_connection_timeout(self, ray_cluster):
         """Connection timeout: correct retry, no panic.
 
         This test verifies the system handles connection issues gracefully
@@ -202,7 +202,7 @@ class TestQueueFaultRecovery:
         assert validator.verify_explode_result(sink_data, NUM_RECORDS, EXPLODE_FACTOR)
 
     @pytest.mark.asyncio
-    async def test_workqueue_slow_network(self, ray_cluster):
+    async def test_anvil_slow_network(self, ray_cluster):
         """Slow network: backpressure should work correctly, no data loss.
 
         Simulates slow network by using slow transform operators combined

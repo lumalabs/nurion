@@ -33,7 +33,7 @@ from typing import TYPE_CHECKING, runtime_checkable
 from typing_extensions import Protocol
 
 if TYPE_CHECKING:
-    from _internal.queue import WorkQueueQueueClient
+    from _internal.queue import AnvilQueueClient
 
 
 @runtime_checkable
@@ -54,7 +54,7 @@ class SinkCommitter(Protocol):
     """
 
     async def run_commit_loop(
-        self, queue_client: WorkQueueQueueClient, commit_queue_name: str
+        self, queue_client: AnvilQueueClient, commit_queue_name: str
     ) -> None:
         """Background task: claim from commit queue, accumulate, commit on schedule.
 
@@ -63,6 +63,6 @@ class SinkCommitter(Protocol):
         """
         ...
 
-    async def finalize(self, queue_client: WorkQueueQueueClient, commit_queue_name: str) -> None:
+    async def finalize(self, queue_client: AnvilQueueClient, commit_queue_name: str) -> None:
         """After all workers exit: drain the commit queue and do the final commit."""
         ...
