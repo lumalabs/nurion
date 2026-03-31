@@ -96,7 +96,7 @@ RUN uv pip install --system --no-cache \
 
 # Verify installations and remove build dependencies
 RUN python -c "import ray; print(f'Ray: {ray.__version__}')" && \
-    python -c "import workqueue_py; print('workqueue_py: OK')" && \
+    python -c "import anvil_py; print('anvil_py: OK')" && \
     python -c "import pyarrow; print(f'PyArrow: {pyarrow.__version__}')" && \
     ffmpeg -version | head -1 && \
     java -version 2>&1 | head -1
