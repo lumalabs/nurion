@@ -202,7 +202,14 @@ class LanceSink(SinkOperator):
 
             table = pa.table(dict(zip(table.column_names, new_columns)), schema=new_schema)
 
-        return table
+        # Force buffer alignment via IPC round-trip. Arrow IPC always writes
+        # aligned buffers. combine_chunks() alone is insufficient — Lance's
+        # Rust FFI panics on buffers deserialized from NVMe payload store.
+        sink_buf = pa.BufferOutputStream()
+        writer = pa.ipc.new_stream(sink_buf, table.schema)
+        writer.write_table(table)
+        writer.close()
+        return pa.ipc.open_stream(sink_buf.getvalue()).read_all()
 
     def close(self) -> None:
         """No cleanup needed -- no buffer, no queue client."""

@@ -36,6 +36,7 @@ from _internal.operators.sources import (
     SparkSourceV2Config,
     UnionSourceConfig,
 )
+# SparkSourceConfig / SparkSourceV2Config are None when [spark] extra is not installed
 from _internal.operators.llm import (
     EmbeddedLLMOperator,
     EmbeddedLLMOperatorConfig,
