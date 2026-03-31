@@ -455,40 +455,40 @@ class _FlightServerActor:
         self._start_server()
 
     def _start_server(self) -> None:
-        import _internal
-
-        pkg_dir = os.path.dirname(os.path.dirname(_internal.__file__))
-        python_exe = sys.executable
-        for parent in [pkg_dir] + list(Path(pkg_dir).parents):
-            candidate = os.path.join(parent, "bin", "python")
-            if os.path.isfile(candidate):
-                python_exe = candidate
-                break
+        # Run _flight_server_proc.py as a script (not -m module) because
+        # inside Ray workers the code lives in a temporary working_dir that
+        # isn't on the subprocess's PYTHONPATH.  The script only imports
+        # pyarrow (no _internal), so running it directly works everywhere.
+        script = os.path.join(os.path.dirname(__file__), "_flight_server_proc.py")
 
         self._proc = subprocess.Popen(
             [
-                python_exe,
-                "-m",
-                "_internal.core._flight_server_proc",
+                sys.executable,
+                script,
                 "--root-dir",
                 self._root_dir,
                 "--port",
                 str(self._port),
             ],
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
             stdin=subprocess.DEVNULL,
         )
 
         assert self._proc.stdout is not None
         ready, _, _ = select.select([self._proc.stdout], [], [], 10.0)
         if not ready:
+            stderr_tail = ""
+            if self._proc.stderr:
+                stderr_tail = self._proc.stderr.read(2048).decode(errors="replace")
             self._proc.kill()
             self._proc.wait()
-            raise RuntimeError("Flight server subprocess timed out")
+            raise RuntimeError(f"Flight server subprocess timed out. stderr: {stderr_tail}")
 
         line = self._proc.stdout.readline().decode().strip()
         self._proc.stdout.close()
+        if self._proc.stderr:
+            self._proc.stderr.close()
 
         if line.startswith("FLIGHT_READY:"):
             self._port = int(line.split(":", 1)[1])

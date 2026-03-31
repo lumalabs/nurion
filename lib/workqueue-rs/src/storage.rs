@@ -335,10 +335,7 @@ impl WorkQueueStorage {
             // Persist new counter keys
             let mut batch = WriteBatch::new();
             batch.put(Self::seq_push_key(queue), old_meta.push_seq.to_le_bytes());
-            batch.put(
-                Self::seq_claim_key(queue),
-                old_meta.claim_seq.to_le_bytes(),
-            );
+            batch.put(Self::seq_claim_key(queue), old_meta.claim_seq.to_le_bytes());
             batch.put(
                 Self::cnt_total_pushed_key(queue),
                 old_meta.total_pushed.to_le_bytes(),

@@ -39,6 +39,32 @@ from _internal.core.nvme_payload_store import (
 
 
 # ---------------------------------------------------------------------------
+# Fixtures — thread-based Flight fallback for unit tests (no Ray needed)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _use_thread_flight(monkeypatch, request):
+    """Patch FlightServerProcess.get_or_start to use thread-based FlightPayloadServer.
+
+    FlightServerProcess uses Ray actors (production requirement: isolate Flight
+    gRPC from Ray gRPC). Unit tests don't have Ray, so we fall back to the
+    thread-based server. TestFlightServerProcess is excluded (needs real Ray).
+    """
+    if request.cls and request.cls.__name__ == "TestFlightServerProcess":
+        return
+
+    _original_port = [0]
+
+    def _thread_start(job_dirs, port=0, max_concurrent_reads=8):
+        server = FlightPayloadServer.get_or_start(job_dirs, port)
+        _original_port[0] = server.port
+        return FlightServerProcess(server.port)
+
+    monkeypatch.setattr(FlightServerProcess, "get_or_start", staticmethod(_thread_start))
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -485,32 +511,51 @@ class TestFlightPayloadServer:
 
 
 # ---------------------------------------------------------------------------
-# FlightServerProcess (subprocess isolation)
+# FlightServerProcess — Ray actor lifecycle tests
+#
+# Architecture: FlightServerProcess.get_or_start() →
+#   1. Check in-process cache
+#   2. Try ray.get_actor(name) for existing detached actor
+#   3. Create new _FlightServerActor (detached, pinned to current node)
+#      → actor launches Flight subprocess via _flight_server_proc.py
+#
+# These tests validate the Ray actor lifecycle (creation, singleton,
+# survival across cache clears). They require Ray and are excluded from
+# unit tests via the `distributed` marker.
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.distributed
 class TestFlightServerProcess:
-    """Test per-node Flight server via Ray actor + subprocess."""
-
-    _next_port = 19100
+    """Test FlightServerProcess Ray actor lifecycle."""
 
     @pytest.fixture(autouse=True)
-    def _ray_init(self):
-        """Ensure Ray is initialized for actor-based Flight server."""
+    def _ray_and_cleanup(self):
+        """Init Ray, assign unique port, and clean up detached actors after each test."""
         import ray
 
         if not ray.is_initialized():
             ray.init(ignore_reinit_error=True)
-        FlightServerProcess._cache.clear()
-        # Use unique port per test to avoid conflicts with detached actors
-        TestFlightServerProcess._next_port += 1
-        from _internal.core import nvme_payload_store
 
-        nvme_payload_store.FLIGHT_SERVER_PORT = self._next_port
+        FlightServerProcess._cache.clear()
+
+        # Determine actor name used by get_or_start
+        from _internal.utils.network import get_node_ip
+
+        self._actor_name = f"flight_server_{get_node_ip()}"
+
         yield
 
-    def test_start_and_read(self, tmp_path):
-        """Start Flight server via Ray actor, write payload, read via client."""
+        # Teardown: kill the detached actor to isolate tests
+        FlightServerProcess._cache.clear()
+        try:
+            actor = ray.get_actor(self._actor_name)
+            ray.kill(actor, no_restart=True)
+        except ValueError:
+            pass  # Actor doesn't exist — nothing to clean
+
+    def test_actor_created_and_serves_data(self, tmp_path):
+        """get_or_start creates a Ray actor that serves Flight data."""
         disk = NvmeDisk(str(tmp_path), "job1")
         disk.write("k1", _make_payload("k1", num_rows=5))
 
@@ -521,35 +566,48 @@ class TestFlightServerProcess:
         table = client.do_get(flight.Ticket(b"k1")).read_all()
         assert table.num_rows == 5
 
-    def test_singleton(self, tmp_path):
-        """Second get_or_start reuses existing actor."""
+    def test_cache_hit(self, tmp_path):
+        """Second get_or_start in same process returns cached instance."""
         disk = NvmeDisk(str(tmp_path), "job1")
 
         s1 = FlightServerProcess.get_or_start([disk.job_dir])
         s2 = FlightServerProcess.get_or_start([disk.job_dir])
         assert s1.port == s2.port
 
-    def test_multi_job_dirs_auto_discovered(self, tmp_path):
+    def test_named_actor_reuse_after_cache_clear(self, tmp_path):
+        """After cache clear, get_or_start finds the existing named actor."""
+        disk = NvmeDisk(str(tmp_path), "job1")
+        s1 = FlightServerProcess.get_or_start([disk.job_dir])
+
+        # Simulate a new worker process (clear in-process cache)
+        FlightServerProcess._cache.clear()
+
+        # get_or_start should find the existing detached actor via ray.get_actor
+        s2 = FlightServerProcess.get_or_start([disk.job_dir])
+        assert s2.port == s1.port
+
+    def test_auto_discovery_new_job_dirs(self, tmp_path):
         """Server scans root dir — new job dirs found automatically."""
         root = tmp_path / "nvme"
         disk1 = NvmeDisk(str(root), "job1")
-        disk2 = NvmeDisk(str(root), "job2")
-
         disk1.write("k1", _make_payload("k1", num_rows=3))
 
         server = FlightServerProcess.get_or_start([disk1.job_dir])
-
         client = flight.connect(f"grpc://127.0.0.1:{server.port}")
+
         table = client.do_get(flight.Ticket(b"k1")).read_all()
         assert table.num_rows == 3
 
-        # Write k2 AFTER server started — auto-discovered via scandir
+        # Write data to a new job dir AFTER server started
+        disk2 = NvmeDisk(str(root), "job2")
         disk2.write("k2", _make_payload("k2", num_rows=7))
+
+        # Server auto-discovers via root dir scandir
         table = client.do_get(flight.Ticket(b"k2")).read_all()
         assert table.num_rows == 7
 
-    def test_concurrent_reads(self, tmp_path):
-        """Multiple concurrent Flight reads."""
+    def test_concurrent_reads_via_actor(self, tmp_path):
+        """Multiple concurrent Flight reads through the Ray actor path."""
         disk = NvmeDisk(str(tmp_path), "job1")
         for i in range(10):
             disk.write(f"k{i}", _make_payload(f"k{i}", num_rows=50))
