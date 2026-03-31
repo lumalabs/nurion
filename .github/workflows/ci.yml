@@ -164,7 +164,7 @@ jobs:
   # ============================================================================
 
   test-anvil-rs:
-    name: Workqueue-rs Tests
+    name: Anvil-rs Tests
     runs-on: ubuntu-latest
 
     steps:
@@ -224,7 +224,7 @@ jobs:
   # ============================================================================
 
   lint-anvil-rs:
-    name: Workqueue-rs Lint
+    name: Anvil-rs Lint
     runs-on: ubuntu-latest
 
     steps:
