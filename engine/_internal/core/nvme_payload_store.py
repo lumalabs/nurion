@@ -480,6 +480,7 @@ class _FlightServerActor:
             stdin=subprocess.DEVNULL,
         )
 
+        assert self._proc.stdout is not None
         ready, _, _ = select.select([self._proc.stdout], [], [], 10.0)
         if not ready:
             self._proc.kill()
@@ -546,16 +547,14 @@ class FlightServerProcess:
                 actual_port = ray.get(actor.get_port.remote(), timeout=5)
                 instance = cls(actual_port)
                 cls._cache[actor_name] = instance
-                logger.info(
-                    f"Reusing existing Flight server actor on {node_ip}:{actual_port}"
-                )
+                logger.info(f"Reusing existing Flight server actor on {node_ip}:{actual_port}")
                 return instance
             except (ValueError, ray.exceptions.GetTimeoutError):
                 pass  # Actor doesn't exist or unresponsive
 
             # Schedule actor on THIS node
             current_node = ray.get_runtime_context().get_node_id()
-            actor = _FlightServerActor.options(
+            actor = _FlightServerActor.options(  # type: ignore[attr-defined]
                 name=actor_name,
                 lifetime="detached",
                 scheduling_strategy=ray.util.scheduling_strategies.NodeAffinitySchedulingStrategy(
@@ -567,9 +566,7 @@ class FlightServerProcess:
             actual_port = ray.get(actor.get_port.remote(), timeout=15)
             instance = cls(actual_port)
             cls._cache[actor_name] = instance
-            logger.info(
-                f"Started Flight server actor on {node_ip}:{actual_port}"
-            )
+            logger.info(f"Started Flight server actor on {node_ip}:{actual_port}")
             return instance
 
 

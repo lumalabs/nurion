@@ -302,7 +302,11 @@ class StageWorker:
 
         group_name = self._runtime.upstream.name
         # None = no partition affinity (claim from any); [] would mean "owns nothing".
-        assigned = list(self._runtime.assigned_partition_ids) if self._runtime.assigned_partition_ids else None
+        assigned = (
+            list(self._runtime.assigned_partition_ids)
+            if self._runtime.assigned_partition_ids
+            else None
+        )
         merge = self._merge_upstream
         pending: list[WorkQueueRecord] = []
         # Track which partition queue the current pending batch came from

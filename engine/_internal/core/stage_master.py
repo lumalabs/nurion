@@ -33,12 +33,6 @@ import os
 import time
 from typing import TYPE_CHECKING, Any, Dict, Optional, Protocol
 
-# Stage-level no-progress timeout. If no worker successfully processes a
-# message within this window, the stage is marked as failed. Prevents jobs
-# from hanging forever due to broker overload, deadlocks, or data issues.
-# Override via environment variable; 0 disables.
-_NO_PROGRESS_TIMEOUT_S = float(os.environ.get("NURION_NO_PROGRESS_TIMEOUT_S", "600"))
-
 from _internal.core.managers import RecoveryManager, SinkManager, SourceManager, WorkerManager
 from _internal.core.models import (
     FailurePolicy,
@@ -55,6 +49,12 @@ from _internal.webui.state.schema import encode_json, job_namespace, stage_key, 
 if TYPE_CHECKING:
     from _internal.core.stage import Stage, StageRuntime
     from _internal.runtime.queue_stats import QueueRef
+
+# Stage-level no-progress timeout. If no worker successfully processes a
+# message within this window, the stage is marked as failed. Prevents jobs
+# from hanging forever due to broker overload, deadlocks, or data issues.
+# Override via environment variable; 0 disables.
+_NO_PROGRESS_TIMEOUT_S = float(os.environ.get("NURION_NO_PROGRESS_TIMEOUT_S", "600"))
 
 
 class BackpressureProvider(Protocol):

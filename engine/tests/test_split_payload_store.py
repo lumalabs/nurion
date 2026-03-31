@@ -19,7 +19,6 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pyarrow as pa
-import pytest
 
 from _internal.core.models import SplitPayload
 from _internal.core.split_payload_store import (

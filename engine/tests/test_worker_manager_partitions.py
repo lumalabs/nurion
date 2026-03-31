@@ -22,10 +22,8 @@ in non-shuffle pipelines.  Fixed to `<= 1`.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 from unittest.mock import MagicMock
 
-import pytest
 
 from _internal.core.managers.worker_manager import WorkerManager
 from _internal.core.stage_worker import OutputRouting

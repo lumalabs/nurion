@@ -16,11 +16,8 @@
 
 from __future__ import annotations
 
-import json
 import os
-import signal
 import threading
-import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import pickle
@@ -501,12 +498,14 @@ class TestFlightServerProcess:
     def _ray_init(self):
         """Ensure Ray is initialized for actor-based Flight server."""
         import ray
+
         if not ray.is_initialized():
             ray.init(ignore_reinit_error=True)
         FlightServerProcess._cache.clear()
         # Use unique port per test to avoid conflicts with detached actors
         TestFlightServerProcess._next_port += 1
         from _internal.core import nvme_payload_store
+
         nvme_payload_store.FLIGHT_SERVER_PORT = self._next_port
         yield
 

@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import json
 import multiprocessing as mp
-import os
 import time
 from typing import List
 
@@ -224,10 +223,7 @@ class TestConcurrentClaim:
         with _CTX.Pool(processes=num_workers) as pool:
             results = pool.starmap(
                 _claim_ack_worker,
-                [
-                    (broker_url, queue, f"w_{i:04d}", 30)
-                    for i in range(num_workers)
-                ],
+                [(broker_url, queue, f"w_{i:04d}", 30) for i in range(num_workers)],
             )
 
         all_ids = [mid for batch in results for mid in batch]
@@ -326,10 +322,7 @@ class TestConcurrentClaimFromGroup:
         with _CTX.Pool(processes=num_workers) as pool:
             results = pool.starmap(
                 _claim_from_group_worker,
-                [
-                    (broker_url, group, f"gw_{i:04d}", [i % 8], 30)
-                    for i in range(num_workers)
-                ],
+                [(broker_url, group, f"gw_{i:04d}", [i % 8], 30) for i in range(num_workers)],
             )
 
         all_ids = [mid for batch in results for mid in batch]
@@ -379,10 +372,7 @@ class TestConcurrentAckAndScatter:
         with _CTX.Pool(processes=50) as pool:
             drain_results = pool.starmap(
                 _claim_from_group_worker,
-                [
-                    (broker_url, downstream, f"drain_{i}", [i % 4], 30)
-                    for i in range(50)
-                ],
+                [(broker_url, downstream, f"drain_{i}", [i % 4], 30) for i in range(50)],
             )
 
         all_downstream = [mid for batch in drain_results for mid in batch]
@@ -413,10 +403,7 @@ class TestThroughputBenchmark:
         with _CTX.Pool(processes=num_workers) as pool:
             results = pool.starmap(
                 _claim_ack_worker,
-                [
-                    (broker_url, queue, f"bench_{i:04d}", 30)
-                    for i in range(num_workers)
-                ],
+                [(broker_url, queue, f"bench_{i:04d}", 30) for i in range(num_workers)],
             )
         elapsed = time.monotonic() - start
 

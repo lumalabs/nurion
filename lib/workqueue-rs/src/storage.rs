@@ -187,12 +187,12 @@ impl WorkQueueStorage {
     /// Write 6 zero counter keys for a new queue into a WriteBatch.
     fn write_zero_counters(batch: &mut WriteBatch, queue: &str) {
         let zero = 0u64.to_le_bytes();
-        batch.put(Self::seq_push_key(queue), &zero);
-        batch.put(Self::seq_claim_key(queue), &zero);
-        batch.put(Self::cnt_total_pushed_key(queue), &zero);
-        batch.put(Self::cnt_total_claimed_key(queue), &zero);
-        batch.put(Self::cnt_total_unclaimed_key(queue), &zero);
-        batch.put(Self::cnt_total_acked_key(queue), &zero);
+        batch.put(Self::seq_push_key(queue), zero);
+        batch.put(Self::seq_claim_key(queue), zero);
+        batch.put(Self::cnt_total_pushed_key(queue), zero);
+        batch.put(Self::cnt_total_claimed_key(queue), zero);
+        batch.put(Self::cnt_total_unclaimed_key(queue), zero);
+        batch.put(Self::cnt_total_acked_key(queue), zero);
     }
 
     /// Validate claim tokens for a batch of message IDs.
@@ -207,9 +207,10 @@ impl WorkQueueStorage {
     ) -> Result<(), StorageError> {
         for (msg_id, token) in msg_ids.iter().zip(claim_tokens.iter()) {
             let claim_key = Self::claimed_key(queue, msg_id);
-            let claim_data = self.db.get(&claim_key).await?.ok_or_else(|| {
-                SlateError::invalid(format!("Message not claimed: {}", msg_id))
-            })?;
+            let claim_data =
+                self.db.get(&claim_key).await?.ok_or_else(|| {
+                    SlateError::invalid(format!("Message not claimed: {}", msg_id))
+                })?;
             let claim_info: ClaimInfo = serde_json::from_slice(&claim_data)?;
 
             if claim_info.claim_token != *token {
@@ -239,9 +240,17 @@ impl WorkQueueStorage {
     }
 
     /// Persist push counters into a WriteBatch (push_seq + total_pushed for a queue).
-    fn persist_push_counters(batch: &mut WriteBatch, queue: &str, new_push_seq: u64, new_total_pushed: u64) {
-        batch.put(Self::seq_push_key(queue), &new_push_seq.to_le_bytes());
-        batch.put(Self::cnt_total_pushed_key(queue), &new_total_pushed.to_le_bytes());
+    fn persist_push_counters(
+        batch: &mut WriteBatch,
+        queue: &str,
+        new_push_seq: u64,
+        new_total_pushed: u64,
+    ) {
+        batch.put(Self::seq_push_key(queue), new_push_seq.to_le_bytes());
+        batch.put(
+            Self::cnt_total_pushed_key(queue),
+            new_total_pushed.to_le_bytes(),
+        );
     }
 
     /// Load or initialize counters for a queue.
@@ -325,38 +334,33 @@ impl WorkQueueStorage {
 
             // Persist new counter keys
             let mut batch = WriteBatch::new();
-            batch.put(
-                Self::seq_push_key(queue),
-                &old_meta.push_seq.to_le_bytes(),
-            );
+            batch.put(Self::seq_push_key(queue), old_meta.push_seq.to_le_bytes());
             batch.put(
                 Self::seq_claim_key(queue),
-                &old_meta.claim_seq.to_le_bytes(),
+                old_meta.claim_seq.to_le_bytes(),
             );
             batch.put(
                 Self::cnt_total_pushed_key(queue),
-                &old_meta.total_pushed.to_le_bytes(),
+                old_meta.total_pushed.to_le_bytes(),
             );
             batch.put(
                 Self::cnt_total_claimed_key(queue),
-                &migrated_total_claimed.to_le_bytes(),
+                migrated_total_claimed.to_le_bytes(),
             );
             batch.put(
                 Self::cnt_total_unclaimed_key(queue),
-                &migrated_total_unclaimed.to_le_bytes(),
+                migrated_total_unclaimed.to_le_bytes(),
             );
             batch.put(
                 Self::cnt_total_acked_key(queue),
-                &old_meta.total_acked.to_le_bytes(),
+                old_meta.total_acked.to_le_bytes(),
             );
             self.db.write(batch).await?;
 
             c
         };
 
-        let _ = self.counters
-            .entry(queue.to_string())
-            .or_insert(counters);
+        let _ = self.counters.entry(queue.to_string()).or_insert(counters);
         Ok(self.counters.get(queue).unwrap().clone())
     }
 
@@ -428,10 +432,7 @@ impl WorkQueueStorage {
         let mut batch = WriteBatch::new();
         for (i, msg) in messages.iter().enumerate() {
             let seq = base_seq + i as u64;
-            batch.put(
-                Self::msg_key(queue, &msg.msg_id),
-                &serde_json::to_vec(msg)?,
-            );
+            batch.put(Self::msg_key(queue, &msg.msg_id), &serde_json::to_vec(msg)?);
             batch.put(Self::pending_key(queue, seq), msg.msg_id.as_bytes());
         }
         // Persist counters
@@ -482,11 +483,8 @@ impl WorkQueueStorage {
                 let msg_id = String::from_utf8_lossy(&msg_id_bytes).to_string();
                 if let Some(msg_data) = self.db.get(&Self::msg_key(queue, &msg_id)).await? {
                     let msg: Message = serde_json::from_slice(&msg_data)?;
-                    let claim_info = ClaimInfo::new(
-                        msg_id.clone(),
-                        worker_id.to_string(),
-                        lease_id.to_string(),
-                    );
+                    let claim_info =
+                        ClaimInfo::new(msg_id.clone(), worker_id.to_string(), lease_id.to_string());
                     claimed_items.push((pending_key, msg_id, msg, claim_info));
                 }
             }
@@ -514,10 +512,10 @@ impl WorkQueueStorage {
                 claim_token: claim_info.claim_token.clone(),
             });
         }
-        batch.put(Self::seq_claim_key(queue), &end.to_le_bytes());
+        batch.put(Self::seq_claim_key(queue), end.to_le_bytes());
         batch.put(
             Self::cnt_total_claimed_key(queue),
-            &new_total_claimed.to_le_bytes(),
+            new_total_claimed.to_le_bytes(),
         );
         self.db.write(batch).await?;
 
@@ -563,13 +561,19 @@ impl WorkQueueStorage {
 
         // 1. Validate claims + move messages from claimed to acked
         if !msg_ids.is_empty() {
-            self.validate_claims(queue, msg_ids, claim_tokens.unwrap(), expected_lease_id, expected_worker_id).await?;
+            self.validate_claims(
+                queue,
+                msg_ids,
+                claim_tokens.unwrap(),
+                expected_lease_id,
+                expected_worker_id,
+            )
+            .await?;
 
             let c = self.load_or_init_counters(queue).await?;
             let new_total_unclaimed =
                 c.total_unclaimed.fetch_add(ack_count, Ordering::Relaxed) + ack_count;
-            let new_total_acked =
-                c.total_acked.fetch_add(ack_count, Ordering::Relaxed) + ack_count;
+            let new_total_acked = c.total_acked.fetch_add(ack_count, Ordering::Relaxed) + ack_count;
 
             for msg_id in msg_ids {
                 batch.delete(Self::claimed_key(queue, msg_id));
@@ -577,11 +581,11 @@ impl WorkQueueStorage {
             }
             batch.put(
                 Self::cnt_total_unclaimed_key(queue),
-                &new_total_unclaimed.to_le_bytes(),
+                new_total_unclaimed.to_le_bytes(),
             );
             batch.put(
                 Self::cnt_total_acked_key(queue),
-                &new_total_acked.to_le_bytes(),
+                new_total_acked.to_le_bytes(),
             );
         }
 
@@ -827,7 +831,14 @@ impl WorkQueueStorage {
 
         // Validate claim tokens via direct DB reads (no transaction needed)
         if let Some(tokens) = claim_tokens {
-            self.validate_claims(queue, msg_ids, tokens, expected_lease_id, expected_worker_id).await?;
+            self.validate_claims(
+                queue,
+                msg_ids,
+                tokens,
+                expected_lease_id,
+                expected_worker_id,
+            )
+            .await?;
         }
 
         let c = self.load_or_init_counters(queue).await?;
@@ -835,8 +846,7 @@ impl WorkQueueStorage {
 
         // Reserve new pending sequences at the tail
         let base_seq = c.push_seq.fetch_add(nack_count, Ordering::Relaxed);
-        let new_unclaimed =
-            c.total_unclaimed.fetch_add(nack_count, Ordering::Relaxed) + nack_count;
+        let new_unclaimed = c.total_unclaimed.fetch_add(nack_count, Ordering::Relaxed) + nack_count;
 
         let mut batch = WriteBatch::new();
         for (i, msg_id) in msg_ids.iter().enumerate() {
@@ -848,11 +858,11 @@ impl WorkQueueStorage {
         }
         batch.put(
             Self::seq_push_key(queue),
-            &(base_seq + nack_count).to_le_bytes(),
+            (base_seq + nack_count).to_le_bytes(),
         );
         batch.put(
             Self::cnt_total_unclaimed_key(queue),
-            &new_unclaimed.to_le_bytes(),
+            new_unclaimed.to_le_bytes(),
         );
 
         // State updates
@@ -1160,8 +1170,7 @@ impl WorkQueueStorage {
 
         // Fallback: also scan old meta: prefix for migration
         let mut iter = self.db.scan_prefix(b"meta:").await?;
-        let existing: std::collections::HashSet<String> =
-            queues.iter().cloned().collect();
+        let existing: std::collections::HashSet<String> = queues.iter().cloned().collect();
         while let Ok(Some(kv)) = iter.next().await {
             let key_str = String::from_utf8_lossy(&kv.key);
             if let Some(queue) = key_str.strip_prefix("meta:") {
@@ -1318,7 +1327,14 @@ impl WorkQueueStorage {
                 )));
             }
 
-            self.validate_claims(upstream_queue, upstream_msg_ids, upstream_claim_tokens, expected_lease_id, expected_worker_id).await?;
+            self.validate_claims(
+                upstream_queue,
+                upstream_msg_ids,
+                upstream_claim_tokens,
+                expected_lease_id,
+                expected_worker_id,
+            )
+            .await?;
 
             let uc = self.load_or_init_counters(upstream_queue).await?;
             let new_total_unclaimed =
@@ -1332,11 +1348,11 @@ impl WorkQueueStorage {
             }
             batch.put(
                 Self::cnt_total_unclaimed_key(upstream_queue),
-                &new_total_unclaimed.to_le_bytes(),
+                new_total_unclaimed.to_le_bytes(),
             );
             batch.put(
                 Self::cnt_total_acked_key(upstream_queue),
-                &new_total_acked.to_le_bytes(),
+                new_total_acked.to_le_bytes(),
             );
         }
 

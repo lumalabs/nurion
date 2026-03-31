@@ -103,6 +103,7 @@ def main() -> None:
     # into a generic "Server did not start properly" error, so we detect it
     # ourselves with a quick socket bind test.
     import socket
+
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         sock.bind(("0.0.0.0", args.port))

@@ -135,8 +135,10 @@ class SimpleAutoscaler:
             if headroom <= 0:
                 continue
             spawnable = self._get_spawnable_count(
-                master.stage, headroom,
-                reserved_cpu=allocated_cpu, reserved_gpu=allocated_gpu,
+                master.stage,
+                headroom,
+                reserved_cpu=allocated_cpu,
+                reserved_gpu=allocated_gpu,
             )
             if spawnable > 0:
                 try:
@@ -144,9 +146,7 @@ class SimpleAutoscaler:
                     # Track what we just allocated
                     allocated_cpu += added * (master.stage.num_cpus or 0)
                     allocated_gpu += added * (master.stage.num_gpus or 0)
-                    self.logger.info(
-                        f"Eager fill {stage_id}: {current} -> {current + added}"
-                    )
+                    self.logger.info(f"Eager fill {stage_id}: {current} -> {current + added}")
                 except Exception as e:
                     self.logger.error(f"Eager fill failed for {stage_id}: {e}")
 
@@ -192,9 +192,7 @@ class SimpleAutoscaler:
     # Metrics
     # -----------------------------------------------------------------
 
-    async def _collect_metrics(
-        self, masters: Dict[str, "StageMaster"]
-    ) -> Dict[str, StageMetrics]:
+    async def _collect_metrics(self, masters: Dict[str, "StageMaster"]) -> Dict[str, StageMetrics]:
         """Collect metrics from all stages."""
         if not self._queue_stats_client:
             raise RuntimeError("Queue stats client is required for autoscaling")

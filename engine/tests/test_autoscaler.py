@@ -328,7 +328,9 @@ class TestCooldown:
 
     async def test_scaling_after_cooldown(self):
         """Scaling should work after cooldown period."""
-        config = StageAutoscaleConfig(cooldown_up_s=0.1, cooldown_down_s=0.1)  # Short cooldown for testing
+        config = StageAutoscaleConfig(
+            cooldown_up_s=0.1, cooldown_down_s=0.1
+        )  # Short cooldown for testing
         autoscaler = SimpleAutoscaler(config)
 
         master = MockStageMaster(

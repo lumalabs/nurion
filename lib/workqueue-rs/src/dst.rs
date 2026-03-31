@@ -705,11 +705,7 @@ mod tests {
     async fn test_concurrent_push_claim_ack() {
         use std::sync::atomic::AtomicU64;
 
-        let storage = Arc::new(
-            WorkQueueStorage::new("memory://")
-                .await
-                .unwrap(),
-        );
+        let storage = Arc::new(WorkQueueStorage::new("memory://").await.unwrap());
         let queue = "pca_q";
         storage.create_queue(queue).await.unwrap();
 
@@ -721,10 +717,7 @@ mod tests {
             let tp = total_pushed.clone();
             push_handles.push(tokio::spawn(async move {
                 for i in 0..100u32 {
-                    let msg = Message::new(
-                        queue.to_string(),
-                        format!("p{pid}_m{i}").into_bytes(),
-                    );
+                    let msg = Message::new(queue.to_string(), format!("p{pid}_m{i}").into_bytes());
                     s.push_message(queue, &msg).await.unwrap();
                     tp.fetch_add(1, Ordering::Relaxed);
                 }
@@ -775,11 +768,7 @@ mod tests {
     /// 200 workers claiming from a 4-partition group simultaneously.
     #[tokio::test]
     async fn test_concurrent_claim_from_group() {
-        let storage = Arc::new(
-            WorkQueueStorage::new("memory://")
-                .await
-                .unwrap(),
-        );
+        let storage = Arc::new(WorkQueueStorage::new("memory://").await.unwrap());
         let group = "stress_grp";
         storage.create_queue_group(group, 4).await.unwrap();
 
@@ -787,9 +776,7 @@ mod tests {
         for pid in 0..4u32 {
             let q = format!("{group}_p{pid}");
             let msgs: Vec<Message> = (0..500)
-                .map(|i| {
-                    Message::new(q.clone(), format!("p{pid}_m{i}").into_bytes())
-                })
+                .map(|i| Message::new(q.clone(), format!("p{pid}_m{i}").into_bytes()))
                 .collect();
             for chunk in msgs.chunks(50) {
                 storage.push_messages(&q, chunk).await.unwrap();
