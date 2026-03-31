@@ -120,7 +120,7 @@ class SplitPayloadStoreWriter(
     // 4. Send via gRPC Push
     val request = PushRequest.newBuilder()
       .setQueue(queueTopic)
-      .setPayload(com.google.protobuf.ByteString.copyFrom(jsonBytes))
+      .addPayloads(com.google.protobuf.ByteString.copyFrom(jsonBytes))
       .build()
 
     val response: PushResponse = stub.push(request)
