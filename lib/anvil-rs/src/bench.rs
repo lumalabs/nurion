@@ -53,6 +53,7 @@ mod tests {
         payload_bytes: usize,
     }
 
+    #[allow(dead_code)]
     struct BenchResult {
         operation: String,
         num_clients: usize,

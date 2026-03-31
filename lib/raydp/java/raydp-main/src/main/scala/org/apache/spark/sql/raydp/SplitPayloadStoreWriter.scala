@@ -20,7 +20,7 @@ package org.apache.spark.sql.raydp
 import com.google.gson.Gson
 import io.grpc.ManagedChannel
 import io.grpc.ManagedChannelBuilder
-import anvil.Anvil.{PushRequest, PushResponse}
+import anvil.AnvilProto.{PushRequest, PushResponse}
 import anvil.AnvilGrpc
 
 import java.util.{Base64, HashMap => JHashMap}

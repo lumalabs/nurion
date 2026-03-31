@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package anvil;
 
+option java_outer_classname = "AnvilProto";
+
 // ============================================================================
 // Anvil Service Definition (Protocol v2)
 //
