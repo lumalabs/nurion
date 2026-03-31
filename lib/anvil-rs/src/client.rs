@@ -143,7 +143,7 @@ async fn heartbeat_loop(inner: Arc<ClientInner>) {
                 reconnect_attempts += 1;
                 if reconnect_attempts == 1 {
                     tracing::warn!("Heartbeat disconnected, reconnecting...");
-                } else if reconnect_attempts % 10 == 0 {
+                } else if reconnect_attempts.is_multiple_of(10) {
                     tracing::debug!("Heartbeat reconnect attempt {}", reconnect_attempts);
                 }
                 tokio::time::sleep(Duration::from_secs(1)).await;
@@ -439,6 +439,7 @@ impl AnvilRustClient {
     // ========================================================================
 
     #[pyo3(signature = (queue, msg_ids, claim_tokens=None, state_namespace=None, state_puts=None, state_deletes=None))]
+    #[allow(clippy::too_many_arguments)]
     fn ack(
         &self,
         py: Python<'_>,
@@ -790,7 +791,12 @@ impl AnvilRustClient {
     // ========================================================================
 
     #[pyo3(signature = (queue, max_depth=0))]
-    fn create_queue(&self, py: Python<'_>, queue: String, #[allow(unused)] max_depth: i32) -> PyResult<bool> {
+    fn create_queue(
+        &self,
+        py: Python<'_>,
+        queue: String,
+        #[allow(unused)] max_depth: i32,
+    ) -> PyResult<bool> {
         let inner = self.inner.clone();
         py.allow_threads(move || {
             inner.runtime.block_on(async {
@@ -807,7 +813,12 @@ impl AnvilRustClient {
     }
 
     #[pyo3(signature = (queue, force=false))]
-    fn delete_queue(&self, py: Python<'_>, queue: String, #[allow(unused)] force: bool) -> PyResult<(bool, i32)> {
+    fn delete_queue(
+        &self,
+        py: Python<'_>,
+        queue: String,
+        #[allow(unused)] force: bool,
+    ) -> PyResult<(bool, i32)> {
         let inner = self.inner.clone();
         py.allow_threads(move || {
             inner.runtime.block_on(async {

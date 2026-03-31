@@ -276,9 +276,7 @@ class AnvilQueueClient:
         return client.push_batch(queue, values)
 
     # Consumer
-    def claim(
-        self, queue: str, batch_size: int = 1, timeout_ms: int = 5000
-    ) -> List[AnvilRecord]:
+    def claim(self, queue: str, batch_size: int = 1, timeout_ms: int = 5000) -> List[AnvilRecord]:
         client = self._check()
         messages = client.claim(queue, batch_size, timeout_ms)
         return [AnvilRecord.from_message(m) for m in messages]

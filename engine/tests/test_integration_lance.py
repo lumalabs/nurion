@@ -185,9 +185,7 @@ class TestLancePipeline:
     """Integration tests for full Lance pipeline with Anvil."""
 
     @pytest.mark.asyncio
-    async def test_full_pipeline_with_queue(
-        self, lance_dataset_local, ray_cluster, anvil_backend
-    ):
+    async def test_full_pipeline_with_queue(self, lance_dataset_local, ray_cluster, anvil_backend):
         """Test complete LanceSource pipeline with Anvil queue.
 
         This test verifies the full flow:

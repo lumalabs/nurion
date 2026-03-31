@@ -26,7 +26,6 @@ Test categories:
 4. Edge cases: empty queues, concurrent access
 """
 
-import grpc
 import pytest
 
 from _internal.queue import AnvilQueueClient
@@ -123,7 +122,7 @@ class TestAnvilQueueClient:
         records = client.claim(queue, batch_size=1, timeout_ms=1000)
         assert len(records) == 1
 
-        with pytest.raises(grpc.RpcError):
+        with pytest.raises(RuntimeError):
             client.ack(queue, [records[0].msg_id], claim_tokens=["bad-token"])
 
     def test_ack_rejects_token_length_mismatch(self, anvil_broker_and_client):
@@ -189,7 +188,7 @@ class TestAnvilQueueClient:
         records = client.claim(queue, batch_size=1, timeout_ms=1000)
         assert len(records) == 1
 
-        with pytest.raises(grpc.RpcError):
+        with pytest.raises(RuntimeError):
             client.nack(queue, [records[0].msg_id], claim_tokens=["bad-token"])
 
     def test_nack_rejects_token_length_mismatch(self, anvil_broker_and_client):
@@ -237,7 +236,7 @@ class TestAnvilQueueClient:
         records2 = client.claim(queue, batch_size=1, timeout_ms=1000)
         assert len(records2) == 1
 
-        with pytest.raises(grpc.RpcError):
+        with pytest.raises(RuntimeError):
             client.ack(queue, [msg_id], claim_tokens=[token1])
 
     def test_get_stats(self, anvil_broker_and_client):

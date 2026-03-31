@@ -366,14 +366,12 @@ impl AnvilStorageReader {
         let runtime = Runtime::new().map_err(|e| {
             pyo3::exceptions::PyRuntimeError::new_err(format!("Failed to create runtime: {}", e))
         })?;
-        let storage = runtime
-            .block_on(AnvilStorage::new(&db_path))
-            .map_err(|e| {
-                pyo3::exceptions::PyRuntimeError::new_err(format!(
-                    "Failed to open storage {}: {}",
-                    db_path, e
-                ))
-            })?;
+        let storage = runtime.block_on(AnvilStorage::new(&db_path)).map_err(|e| {
+            pyo3::exceptions::PyRuntimeError::new_err(format!(
+                "Failed to open storage {}: {}",
+                db_path, e
+            ))
+        })?;
         Ok(Self {
             db_path,
             runtime,

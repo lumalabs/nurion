@@ -152,9 +152,7 @@ class TestIcebergPipeline:
     """Integration tests for full Iceberg pipeline with Anvil."""
 
     @pytest.mark.asyncio
-    async def test_full_pipeline_with_queue(
-        self, iceberg_test_table, ray_cluster, anvil_backend
-    ):
+    async def test_full_pipeline_with_queue(self, iceberg_test_table, ray_cluster, anvil_backend):
         """Test complete IcebergSource pipeline with Anvil queue.
 
         This test verifies the full flow:

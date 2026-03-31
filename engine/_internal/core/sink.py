@@ -53,9 +53,7 @@ class SinkCommitter(Protocol):
     3. stop(): Cancels the background loop
     """
 
-    async def run_commit_loop(
-        self, queue_client: AnvilQueueClient, commit_queue_name: str
-    ) -> None:
+    async def run_commit_loop(self, queue_client: AnvilQueueClient, commit_queue_name: str) -> None:
         """Background task: claim from commit queue, accumulate, commit on schedule.
 
         Runs until cancelled by StageMaster. Should handle asyncio.CancelledError

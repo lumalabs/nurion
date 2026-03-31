@@ -71,12 +71,12 @@ class TestQueueFaultRecovery:
     @pytest.mark.asyncio
     @pytest.mark.timeout(120)
     async def test_anvil_broker_restart(self, ray_cluster, anvil_storage_path):
-        """Anvil broker restart: job should exit on broker loss.
+        """Anvil broker restart: job must not hang.
 
-        This test verifies that when the broker goes down:
-        1. The job exits instead of hanging
-
-        Uses file storage backend to ensure data durability.
+        Verifies that when the broker restarts (same port, same db_path):
+        - Rust client auto-reconnects → pipeline completes
+        - File storage preserves queue state across restart
+        - Job finishes within timeout (no deadlock)
         """
         NUM_RECORDS = 1500  # Smaller dataset for faster test
         FILTER_MODULO = 4
@@ -150,9 +150,10 @@ class TestQueueFaultRecovery:
             runner._shared_broker = new_broker
             broker_restarted = True
 
-            # Wait for pipeline to fail (broker down => job exits)
-            with pytest.raises(RuntimeError):
-                await asyncio.wait_for(run_task, timeout=60)
+            # Rust client auto-reconnects after broker restart on same port.
+            # File storage preserves state → pipeline completes normally.
+            # wait_for guards against deadlock (the original test concern).
+            await asyncio.wait_for(run_task, timeout=60)
         finally:
             await runner.stop()
 

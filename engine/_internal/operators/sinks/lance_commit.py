@@ -99,9 +99,7 @@ class LanceSinkCommitter:
         self._schema: Optional[pa.Schema] = None
         self._first_commit = True
 
-    async def run_commit_loop(
-        self, queue_client: AnvilQueueClient, commit_queue_name: str
-    ) -> None:
+    async def run_commit_loop(self, queue_client: AnvilQueueClient, commit_queue_name: str) -> None:
         """Background task: claim from commit queue, accumulate, commit on schedule."""
         self._logger.info(
             f"Starting commit loop for {self._table_path} "
@@ -149,9 +147,7 @@ class LanceSinkCommitter:
     # Internal Methods
     # =========================================================================
 
-    def _claim_and_accumulate(
-        self, queue_client: AnvilQueueClient, commit_queue_name: str
-    ) -> None:
+    def _claim_and_accumulate(self, queue_client: AnvilQueueClient, commit_queue_name: str) -> None:
         """Claim messages from commit queue and accumulate fragment metadata.
 
         Messages are NOT acked here -- they are acked after a successful commit.

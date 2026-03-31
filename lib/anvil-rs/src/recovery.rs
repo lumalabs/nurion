@@ -42,11 +42,7 @@ pub struct RecoveryTask {
 }
 
 impl RecoveryTask {
-    pub fn new(
-        storage: Arc<AnvilStorage>,
-        state: Arc<AnvilState>,
-        config: AnvilConfig,
-    ) -> Self {
+    pub fn new(storage: Arc<AnvilStorage>, state: Arc<AnvilState>, config: AnvilConfig) -> Self {
         Self {
             storage,
             state,

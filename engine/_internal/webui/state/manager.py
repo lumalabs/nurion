@@ -40,9 +40,7 @@ from _internal.webui.state.schema import (
 class JobStateManager:
     """Read-only state access for WebUI (no state queue, no SlateDB)."""
 
-    def __init__(
-        self, db_path: Optional[str] = None, storage: Optional[AnvilStorageReader] = None
-    ):
+    def __init__(self, db_path: Optional[str] = None, storage: Optional[AnvilStorageReader] = None):
         if storage is None:
             if db_path is None:
                 raise ValueError("db_path is required when storage is not provided")

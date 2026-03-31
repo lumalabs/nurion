@@ -544,9 +544,7 @@ class TestStageWorkerPayloadCleanup:
         )
         anvil_backend.client.push("fail_fast_upstream", msg.to_bytes())
 
-        records = anvil_backend.client.claim(
-            "fail_fast_upstream", batch_size=1, timeout_ms=1000
-        )
+        records = anvil_backend.client.claim("fail_fast_upstream", batch_size=1, timeout_ms=1000)
         assert len(records) == 1
 
         with pytest.raises(RuntimeError, match="Payload unreachable"):

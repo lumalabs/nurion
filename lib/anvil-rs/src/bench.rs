@@ -207,8 +207,7 @@ mod tests {
             let batch = config.batch_size;
 
             handles.push(tokio::spawn(async move {
-                let (mut client, _lease) =
-                    connect_client(port, &format!("push-{}", i)).await;
+                let (mut client, _lease) = connect_client(port, &format!("push-{}", i)).await;
                 let mut local_lats = Vec::with_capacity(msgs);
 
                 let mut remaining = msgs;
@@ -241,9 +240,7 @@ mod tests {
 
         let duration = start.elapsed();
         let total = total_sent.load(Ordering::Relaxed);
-        let mut latencies = Arc::try_unwrap(all_latencies)
-            .unwrap()
-            .into_inner();
+        let mut latencies = Arc::try_unwrap(all_latencies).unwrap().into_inner();
         latencies.sort();
 
         BenchResult {
@@ -307,8 +304,7 @@ mod tests {
             let batch_sz = config.batch_size;
 
             handles.push(tokio::spawn(async move {
-                let (mut client, lease) =
-                    connect_client(port, &format!("ca-{}", i)).await;
+                let (mut client, lease) = connect_client(port, &format!("ca-{}", i)).await;
                 let wid = format!("ca-{}", i);
                 let mut local_lats = Vec::with_capacity(target);
                 let mut done = 0;
@@ -333,8 +329,11 @@ mod tests {
                         break;
                     }
 
-                    let msg_ids: Vec<String> =
-                        claim_resp.messages.iter().map(|m| m.msg_id.clone()).collect();
+                    let msg_ids: Vec<String> = claim_resp
+                        .messages
+                        .iter()
+                        .map(|m| m.msg_id.clone())
+                        .collect();
                     let tokens: Vec<String> = claim_resp
                         .messages
                         .iter()
@@ -350,9 +349,7 @@ mod tests {
                             claim_tokens: tokens,
                             worker_id: wid.clone(),
                             lease_id: lease.clone(),
-                            action: Some(proto::complete_request::Action::Ack(
-                                proto::AckAction {},
-                            )),
+                            action: Some(proto::complete_request::Action::Ack(proto::AckAction {})),
                             state: None,
                         })
                         .await
@@ -373,9 +370,7 @@ mod tests {
 
         let duration = start.elapsed();
         let total = total_acked.load(Ordering::Relaxed);
-        let mut latencies = Arc::try_unwrap(all_latencies)
-            .unwrap()
-            .into_inner();
+        let mut latencies = Arc::try_unwrap(all_latencies).unwrap().into_inner();
         latencies.sort();
 
         BenchResult {
@@ -426,8 +421,7 @@ mod tests {
             let batch = config.batch_size;
 
             handles.push(tokio::spawn(async move {
-                let (mut client, _) =
-                    connect_client(port, &format!("prod-{}", i)).await;
+                let (mut client, _) = connect_client(port, &format!("prod-{}", i)).await;
                 let mut remaining = msgs;
                 while remaining > 0 {
                     let n = remaining.min(batch);
@@ -457,8 +451,7 @@ mod tests {
             let expected = (producers * config.messages_per_client) / consumers;
 
             handles.push(tokio::spawn(async move {
-                let (mut client, lease) =
-                    connect_client(port, &format!("cons-{}", i)).await;
+                let (mut client, lease) = connect_client(port, &format!("cons-{}", i)).await;
                 let wid = format!("cons-{}", i);
                 let mut local_lats = Vec::new();
                 let mut got = 0usize;
@@ -492,8 +485,11 @@ mod tests {
                         continue;
                     }
 
-                    let msg_ids: Vec<String> =
-                        claim_resp.messages.iter().map(|m| m.msg_id.clone()).collect();
+                    let msg_ids: Vec<String> = claim_resp
+                        .messages
+                        .iter()
+                        .map(|m| m.msg_id.clone())
+                        .collect();
                     let tokens: Vec<String> = claim_resp
                         .messages
                         .iter()
@@ -508,9 +504,7 @@ mod tests {
                             claim_tokens: tokens,
                             worker_id: wid.clone(),
                             lease_id: lease.clone(),
-                            action: Some(proto::complete_request::Action::Ack(
-                                proto::AckAction {},
-                            )),
+                            action: Some(proto::complete_request::Action::Ack(proto::AckAction {})),
                             state: None,
                         })
                         .await
@@ -538,9 +532,7 @@ mod tests {
 
         let duration = start.elapsed();
         let total = total_processed.load(Ordering::Relaxed);
-        let mut latencies = Arc::try_unwrap(all_latencies)
-            .unwrap()
-            .into_inner();
+        let mut latencies = Arc::try_unwrap(all_latencies).unwrap().into_inner();
         latencies.sort();
 
         BenchResult {
@@ -566,7 +558,10 @@ mod tests {
             "  {:20} | {:>13} | {:>9} | {:>13} | {:>43}",
             "Operation", "Clients", "Messages", "Throughput", "Latency (per batch RPC)"
         );
-        println!("  {:─>20}─┼─{:─>13}─┼─{:─>9}─┼─{:─>13}─┼─{:─>43}", "", "", "", "", "");
+        println!(
+            "  {:─>20}─┼─{:─>13}─┼─{:─>9}─┼─{:─>13}─┼─{:─>43}",
+            "", "", "", "", ""
+        );
     }
 
     fn print_footer() {
@@ -615,7 +610,10 @@ mod tests {
                 r.print();
             }
 
-            println!("  {:─>20}─┼─{:─>13}─┼─{:─>9}─┼─{:─>13}─┼─{:─>43}", "", "", "", "", "");
+            println!(
+                "  {:─>20}─┼─{:─>13}─┼─{:─>9}─┼─{:─>13}─┼─{:─>43}",
+                "", "", "", "", ""
+            );
         }
 
         print_footer();
@@ -639,8 +637,10 @@ mod tests {
 
         println!();
         println!("=== 1000-Client Stress Test ===");
-        println!("  Payload: {} bytes, Batch: {}, Messages/client: {}",
-            config.payload_bytes, config.batch_size, config.messages_per_client);
+        println!(
+            "  Payload: {} bytes, Batch: {}, Messages/client: {}",
+            config.payload_bytes, config.batch_size, config.messages_per_client
+        );
         println!();
 
         print_header();

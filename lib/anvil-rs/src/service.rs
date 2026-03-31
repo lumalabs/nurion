@@ -176,8 +176,10 @@ impl AnvilService {
                     .iter()
                     .map(|payload| Message::new(fwd.downstream_queue.clone(), payload.clone()))
                     .collect();
-                let new_msg_ids: Vec<String> =
-                    downstream_messages.iter().map(|m| m.msg_id.clone()).collect();
+                let new_msg_ids: Vec<String> = downstream_messages
+                    .iter()
+                    .map(|m| m.msg_id.clone())
+                    .collect();
 
                 let result = if has_state {
                     self.storage
@@ -254,11 +256,7 @@ impl AnvilService {
                         &sct.group_name,
                         &partition_msgs,
                         if has_state { Some(state_ns) } else { None },
-                        if has_state {
-                            Some(&state_puts)
-                        } else {
-                            None
-                        },
+                        if has_state { Some(&state_puts) } else { None },
                         if has_state {
                             Some(&state_deletes)
                         } else {
@@ -333,8 +331,11 @@ impl AnvilService {
                     return Err(Status::invalid_argument("group_name is required"));
                 }
 
-                let assigned: Vec<u32> =
-                    group.assigned_partitions.iter().map(|&p| p as u32).collect();
+                let assigned: Vec<u32> = group
+                    .assigned_partitions
+                    .iter()
+                    .map(|&p| p as u32)
+                    .collect();
 
                 let (claimed, source_queue, source_partition) = self
                     .storage

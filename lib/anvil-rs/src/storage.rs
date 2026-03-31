@@ -438,7 +438,8 @@ impl AnvilStorage {
         Ok(())
     }
 
-    /// Push a single message (convenience wrapper)
+    /// Push a single message (convenience wrapper, used in tests)
+    #[allow(dead_code)]
     pub async fn push_message(&self, queue: &str, msg: &Message) -> Result<(), StorageError> {
         self.push_messages(queue, std::slice::from_ref(msg)).await
     }
