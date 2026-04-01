@@ -34,7 +34,7 @@ from tenacity import (
 
 from _internal.core.models import SourceQueueMessage, Split
 from _internal.core.source import DirectProduceContext, DirectProducer, SplitPlanner
-from _internal.queue.anvil import QueueFullError
+from _internal.queue.errors import QueueFullError
 from _internal.testing.fault_injection import InjectedFaultError
 
 if TYPE_CHECKING:

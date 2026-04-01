@@ -47,7 +47,8 @@ from _internal.core.models import (
 )
 from _internal.core.operator import Operator, OperatorRuntime
 from _internal.core.split_payload_store import SplitPayloadStore
-from _internal.queue import AnvilQueueClient, AnvilRecord, QueueFullError
+from _internal.queue import AnvilQueueClient, AnvilRecord
+from _internal.queue.errors import QueueFullError
 from _internal.testing.fault_injection import (
     FAULT_AFTER_PROCESS,
     FAULT_BEFORE_PROCESS,
