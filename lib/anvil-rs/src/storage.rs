@@ -400,6 +400,12 @@ impl AnvilStorage {
     /// Create a queue — write the 6 counter keys (all zeros).
     /// `max_pending`: 0 = unlimited (default), >0 = bounded queue.
     pub async fn create_queue(&self, queue: &str, max_pending: u64) -> Result<(), StorageError> {
+        // Always set in-memory limit (survives idempotent create on persistent DB).
+        if max_pending > 0 {
+            self.max_pending_limits
+                .insert(queue.to_string(), max_pending);
+        }
+
         // Check if already exists (either new or old format)
         if self.db.get(&Self::seq_push_key(queue)).await?.is_some() {
             return Ok(());
@@ -413,30 +419,29 @@ impl AnvilStorage {
         self.db.write(batch).await?;
         self.db.flush().await?;
 
-        if max_pending > 0 {
-            self.max_pending_limits
-                .insert(queue.to_string(), max_pending);
-        }
-
         Ok(())
     }
 
     /// Check if a queue has capacity for `additional` messages.
     /// Uses atomic counter reads (O(1)), no scans.
     /// Slight over-admission is acceptable (Relaxed ordering).
-    fn check_queue_capacity(&self, queue: &str, additional: usize) -> Result<(), StorageError> {
+    async fn check_queue_capacity(
+        &self,
+        queue: &str,
+        additional: usize,
+    ) -> Result<(), StorageError> {
         if let Some(limit) = self.max_pending_limits.get(queue) {
             let max = *limit;
             if max > 0 {
-                if let Some(counters) = self.counters.get(queue) {
-                    let total_pushed = counters.total_pushed.load(Ordering::Relaxed);
-                    let total_acked = counters.total_acked.load(Ordering::Relaxed);
-                    let in_flight = total_pushed.saturating_sub(total_acked);
-                    if in_flight + additional as u64 > max {
-                        return Err(Box::new(std::io::Error::other(format!(
-                            "QueueFull: queue={queue}, in_flight={in_flight}, max_pending={max}, attempted={additional}"
-                        ))));
-                    }
+                // Always load counters — they may not be cached yet on first access.
+                let counters = self.load_or_init_counters(queue).await?;
+                let total_pushed = counters.total_pushed.load(Ordering::Relaxed);
+                let total_acked = counters.total_acked.load(Ordering::Relaxed);
+                let in_flight = total_pushed.saturating_sub(total_acked);
+                if in_flight + additional as u64 > max {
+                    return Err(Box::new(std::io::Error::other(format!(
+                        "QueueFull: queue={queue}, in_flight={in_flight}, max_pending={max}, attempted={additional}"
+                    ))));
                 }
             }
         }
@@ -455,7 +460,7 @@ impl AnvilStorage {
             return Ok(());
         }
 
-        self.check_queue_capacity(queue, messages.len())?;
+        self.check_queue_capacity(queue, messages.len()).await?;
 
         let c = self.load_or_init_counters(queue).await?;
         let count = messages.len() as u64;
@@ -600,7 +605,7 @@ impl AnvilStorage {
             (opts.downstream_queue, opts.downstream_messages)
         {
             if !messages.is_empty() {
-                self.check_queue_capacity(downstream_queue, messages.len())?;
+                self.check_queue_capacity(downstream_queue, messages.len()).await?;
             }
         }
 
@@ -1297,6 +1302,13 @@ impl AnvilStorage {
     ) -> Result<QueueGroupMeta, StorageError> {
         // Check for existing group
         if let Some(existing) = self.get_group_meta(group_name).await? {
+            // Always set in-memory limits (survives idempotent create on persistent DB).
+            if max_pending_per_partition > 0 {
+                for queue_name in &existing.partition_queues {
+                    self.max_pending_limits
+                        .insert(queue_name.clone(), max_pending_per_partition);
+                }
+            }
             return Ok(existing);
         }
 
@@ -1378,7 +1390,7 @@ impl AnvilStorage {
                 continue;
             }
             let partition_queue = &group.partition_queues[*pid as usize];
-            self.check_queue_capacity(partition_queue, messages.len())?;
+            self.check_queue_capacity(partition_queue, messages.len()).await?;
         }
 
         let now_ns = now_nanos();
