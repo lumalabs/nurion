@@ -594,6 +594,17 @@ impl AnvilStorage {
         let now_ns = now_nanos();
         let ack_count = msg_ids.len() as u64;
 
+        // 0. Check downstream capacity BEFORE any mutations (atomic counters
+        //    are fetch_add — if we increment first and then fail on QueueFull,
+        //    the counters are permanently corrupted).
+        if let (Some(downstream_queue), Some(messages)) =
+            (opts.downstream_queue, opts.downstream_messages)
+        {
+            if !messages.is_empty() {
+                self.check_queue_capacity(downstream_queue, messages.len())?;
+            }
+        }
+
         let mut batch = WriteBatch::new();
 
         // 1. Validate claims + move messages from claimed to acked
@@ -626,12 +637,11 @@ impl AnvilStorage {
             );
         }
 
-        // 2. Push downstream messages if provided
+        // 2. Push downstream messages (capacity already checked in step 0)
         if let (Some(downstream_queue), Some(messages)) =
             (opts.downstream_queue, opts.downstream_messages)
         {
             if !messages.is_empty() {
-                self.check_queue_capacity(downstream_queue, messages.len())?;
                 let dc = self.load_or_init_counters(downstream_queue).await?;
                 let count = messages.len() as u64;
                 let base_seq = dc.push_seq.fetch_add(count, Ordering::Relaxed);

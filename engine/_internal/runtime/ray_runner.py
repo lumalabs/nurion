@@ -80,16 +80,15 @@ def compute_stage_bounds(
     """
     total_budget = int(node_memory_bytes * flow_config.buffer_memory_fraction)
 
-    # Collect downstream stages with their worker counts
+    # Collect downstream stages with their worker counts.
+    # For fan-out stages (multiple downstreams), sum all downstream parallelism.
     stage_workers: Dict[str, int] = {}
     for stage_id, stage in job.stages.items():
         downstream_ids = job.dag_edges.get(stage_id, [])
         if not downstream_ids:
             continue  # sink stage, no output queue to bound
-        # Use max_parallelism of downstream stages
-        for ds_id in downstream_ids:
-            ds_stage = job.stages[ds_id]
-            stage_workers[stage_id] = ds_stage.max_parallelism
+        total_ds_workers = sum(job.stages[ds_id].max_parallelism for ds_id in downstream_ids)
+        stage_workers[stage_id] = total_ds_workers
 
     total_workers = sum(stage_workers.values()) or 1
 

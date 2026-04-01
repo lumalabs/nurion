@@ -795,7 +795,7 @@ impl AnvilRustClient {
         &self,
         py: Python<'_>,
         queue: String,
-        #[allow(unused)] max_depth: i32,
+        max_depth: i32,
     ) -> PyResult<bool> {
         let inner = self.inner.clone();
         py.allow_threads(move || {
@@ -803,7 +803,7 @@ impl AnvilRustClient {
                 let mut client = inner.get_client()?;
                 let request = proto::CreateQueueRequest {
                     queue,
-                    max_pending: 0,
+                    max_pending: max_depth.max(0) as u64,
                 };
                 let resp = client
                     .create_queue(request)
