@@ -801,7 +801,10 @@ impl AnvilRustClient {
         py.allow_threads(move || {
             inner.runtime.block_on(async {
                 let mut client = inner.get_client()?;
-                let request = proto::CreateQueueRequest { queue };
+                let request = proto::CreateQueueRequest {
+                    queue,
+                    max_pending: 0,
+                };
                 let resp = client
                     .create_queue(request)
                     .await
@@ -912,11 +915,13 @@ impl AnvilRustClient {
     // QueueGroup API (unchanged)
     // ========================================================================
 
+    #[pyo3(signature = (group_name, num_partitions, max_pending_per_partition=0))]
     fn create_queue_group(
         &self,
         py: Python<'_>,
         group_name: String,
         num_partitions: i32,
+        max_pending_per_partition: u64,
     ) -> PyResult<PyObject> {
         let inner = self.inner.clone();
         let resp = py.allow_threads(move || {
@@ -925,6 +930,7 @@ impl AnvilRustClient {
                 let request = proto::CreateQueueGroupRequest {
                     group_name,
                     num_partitions,
+                    max_pending_per_partition,
                 };
                 client
                     .create_queue_group(request)

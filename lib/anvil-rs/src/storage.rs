@@ -95,6 +95,8 @@ pub struct AnvilStorage {
     counters: DashMap<String, Arc<QueueCounters>>,
     /// Per-group round-robin counters for O(1) steal path in claim_from_group
     steal_rr: std::sync::Mutex<HashMap<String, u64>>,
+    /// Per-queue max pending limits (0 = unlimited). Used for bounded queue support.
+    max_pending_limits: DashMap<String, u64>,
 }
 
 impl AnvilStorage {
@@ -105,6 +107,7 @@ impl AnvilStorage {
             db,
             counters: DashMap::new(),
             steal_rr: std::sync::Mutex::new(HashMap::new()),
+            max_pending_limits: DashMap::new(),
         })
     }
 
@@ -391,7 +394,8 @@ impl AnvilStorage {
     }
 
     /// Create a queue — write the 6 counter keys (all zeros).
-    pub async fn create_queue(&self, queue: &str) -> Result<(), StorageError> {
+    /// `max_pending`: 0 = unlimited (default), >0 = bounded queue.
+    pub async fn create_queue(&self, queue: &str, max_pending: u64) -> Result<(), StorageError> {
         // Check if already exists (either new or old format)
         if self.db.get(&Self::seq_push_key(queue)).await?.is_some() {
             return Ok(());
@@ -404,6 +408,32 @@ impl AnvilStorage {
         Self::write_zero_counters(&mut batch, queue);
         self.db.write(batch).await?;
         self.db.flush().await?;
+
+        if max_pending > 0 {
+            self.max_pending_limits
+                .insert(queue.to_string(), max_pending);
+        }
+
+        Ok(())
+    }
+
+    /// Check if a queue has capacity for `additional` messages.
+    /// Uses atomic counter reads (O(1)), no scans.
+    /// Slight over-admission is acceptable (Relaxed ordering).
+    fn check_queue_capacity(&self, queue: &str, additional: usize) -> Result<(), StorageError> {
+        if let Some(limit) = self.max_pending_limits.get(queue) {
+            let max = *limit;
+            if max > 0 {
+                if let Some(counters) = self.counters.get(queue) {
+                    let total_pushed = counters.total_pushed.load(Ordering::Relaxed);
+                    let total_acked = counters.total_acked.load(Ordering::Relaxed);
+                    let in_flight = total_pushed.saturating_sub(total_acked);
+                    if in_flight + additional as u64 > max {
+                        return Err(Box::new(std::io::Error::other("QueueFull")));
+                    }
+                }
+            }
+        }
         Ok(())
     }
 
@@ -418,6 +448,8 @@ impl AnvilStorage {
         if messages.is_empty() {
             return Ok(());
         }
+
+        self.check_queue_capacity(queue, messages.len())?;
 
         let c = self.load_or_init_counters(queue).await?;
         let count = messages.len() as u64;
@@ -592,6 +624,7 @@ impl AnvilStorage {
             (opts.downstream_queue, opts.downstream_messages)
         {
             if !messages.is_empty() {
+                self.check_queue_capacity(downstream_queue, messages.len())?;
                 let dc = self.load_or_init_counters(downstream_queue).await?;
                 let count = messages.len() as u64;
                 let base_seq = dc.push_seq.fetch_add(count, Ordering::Relaxed);
@@ -997,8 +1030,9 @@ impl AnvilStorage {
             self.db.write(batch).await?;
         }
 
-        // Remove from in-memory counter cache
+        // Remove from in-memory caches
         self.counters.remove(queue);
+        self.max_pending_limits.remove(queue);
 
         Ok(deleted)
     }
@@ -1238,10 +1272,12 @@ impl AnvilStorage {
 
     /// Create a queue group with N partition queues atomically.
     /// Idempotent: returns existing group if it already exists.
+    /// `max_pending_per_partition`: 0 = unlimited (default), >0 = bounded partitions.
     pub async fn create_queue_group(
         &self,
         group_name: &str,
         num_partitions: u32,
+        max_pending_per_partition: u64,
     ) -> Result<QueueGroupMeta, StorageError> {
         // Check for existing group
         if let Some(existing) = self.get_group_meta(group_name).await? {
@@ -1260,6 +1296,14 @@ impl AnvilStorage {
             Self::write_zero_counters(&mut batch, queue_name);
         }
         self.db.write(batch).await?;
+
+        // Store max_pending limits for each partition queue
+        if max_pending_per_partition > 0 {
+            for queue_name in &meta.partition_queues {
+                self.max_pending_limits
+                    .insert(queue_name.clone(), max_pending_per_partition);
+            }
+        }
 
         tracing::info!(
             "Created queue group '{}' with {} partitions",
@@ -1311,6 +1355,15 @@ impl AnvilStorage {
         } else {
             Some(worker_id)
         };
+
+        // 0. Check capacity for all downstream partition queues before any mutations
+        for (pid, messages) in partition_payloads {
+            if messages.is_empty() {
+                continue;
+            }
+            let partition_queue = &group.partition_queues[*pid as usize];
+            self.check_queue_capacity(partition_queue, messages.len())?;
+        }
 
         let now_ns = now_nanos();
         let ack_count = upstream_msg_ids.len() as u64;
@@ -1587,7 +1640,7 @@ mod tests {
         let storage = create_temp_storage().await;
         let queue = "test-queue";
 
-        storage.create_queue(queue).await.unwrap();
+        storage.create_queue(queue, 0).await.unwrap();
 
         let msg1 = Message::new(queue.to_string(), b"hello".to_vec());
         let msg2 = Message::new(queue.to_string(), b"world".to_vec());
@@ -1617,7 +1670,7 @@ mod tests {
         let storage = create_temp_storage().await;
         let queue = "test-queue";
 
-        storage.create_queue(queue).await.unwrap();
+        storage.create_queue(queue, 0).await.unwrap();
 
         let messages: Vec<Message> = (0..5)
             .map(|i| Message::new(queue.to_string(), format!("msg{}", i).into_bytes()))
@@ -1640,7 +1693,7 @@ mod tests {
         let storage = create_temp_storage().await;
         let queue = "test-queue";
 
-        storage.create_queue(queue).await.unwrap();
+        storage.create_queue(queue, 0).await.unwrap();
 
         let msg = Message::new(queue.to_string(), b"hello".to_vec());
         storage.push_message(queue, &msg).await.unwrap();
@@ -1667,7 +1720,7 @@ mod tests {
         let storage = create_temp_storage().await;
         let queue = "test-queue";
 
-        storage.create_queue(queue).await.unwrap();
+        storage.create_queue(queue, 0).await.unwrap();
 
         let msg = Message::new(queue.to_string(), b"hello".to_vec());
         storage.push_message(queue, &msg).await.unwrap();
@@ -1704,7 +1757,7 @@ mod tests {
         let storage = create_temp_storage().await;
         let queue = "test-queue";
 
-        storage.create_queue(queue).await.unwrap();
+        storage.create_queue(queue, 0).await.unwrap();
 
         let msg = Message::new(queue.to_string(), b"hello".to_vec());
         storage.push_message(queue, &msg).await.unwrap();
@@ -1731,7 +1784,7 @@ mod tests {
         let storage = create_temp_storage().await;
         let queue = "test-queue";
 
-        storage.create_queue(queue).await.unwrap();
+        storage.create_queue(queue, 0).await.unwrap();
 
         let msg = Message::new(queue.to_string(), b"hello".to_vec());
         storage.push_message(queue, &msg).await.unwrap();
@@ -1752,7 +1805,7 @@ mod tests {
         let storage = create_temp_storage().await;
         let queue = "test-queue";
 
-        storage.create_queue(queue).await.unwrap();
+        storage.create_queue(queue, 0).await.unwrap();
 
         let msg = Message::new(queue.to_string(), b"hello".to_vec());
         storage.push_message(queue, &msg).await.unwrap();
@@ -1772,8 +1825,8 @@ mod tests {
     async fn test_ack_and_forward_rejects_wrong_claim_token() {
         let storage = create_temp_storage().await;
 
-        storage.create_queue("upstream").await.unwrap();
-        storage.create_queue("downstream").await.unwrap();
+        storage.create_queue("upstream", 0).await.unwrap();
+        storage.create_queue("downstream", 0).await.unwrap();
 
         let upstream_msg = Message::new("upstream".to_string(), b"input".to_vec());
         storage
@@ -1807,7 +1860,7 @@ mod tests {
         let storage = create_temp_storage().await;
         let queue = "test-queue";
 
-        storage.create_queue(queue).await.unwrap();
+        storage.create_queue(queue, 0).await.unwrap();
 
         let msg = Message::new(queue.to_string(), b"hello".to_vec());
         storage.push_message(queue, &msg).await.unwrap();
@@ -1840,7 +1893,7 @@ mod tests {
         let storage = create_temp_storage().await;
         let queue = "test-queue";
 
-        storage.create_queue(queue).await.unwrap();
+        storage.create_queue(queue, 0).await.unwrap();
 
         let msg = Message::new(queue.to_string(), b"hello".to_vec());
         storage.push_message(queue, &msg).await.unwrap();
@@ -1879,7 +1932,7 @@ mod tests {
         let storage = create_temp_storage().await;
         let queue = "test-queue";
 
-        storage.create_queue(queue).await.unwrap();
+        storage.create_queue(queue, 0).await.unwrap();
 
         let msg = Message::new(queue.to_string(), b"hello".to_vec());
         storage.push_message(queue, &msg).await.unwrap();
@@ -1911,7 +1964,7 @@ mod tests {
         let storage = create_temp_storage().await;
         let queue = "test-queue";
 
-        storage.create_queue(queue).await.unwrap();
+        storage.create_queue(queue, 0).await.unwrap();
         storage.mark_queue_finished(queue).await.unwrap();
 
         let (finished, drained, pending, claimed) =
@@ -1926,8 +1979,8 @@ mod tests {
     async fn test_ack_and_forward() {
         let storage = create_temp_storage().await;
 
-        storage.create_queue("upstream").await.unwrap();
-        storage.create_queue("downstream").await.unwrap();
+        storage.create_queue("upstream", 0).await.unwrap();
+        storage.create_queue("downstream", 0).await.unwrap();
 
         let upstream_msg = Message::new("upstream".to_string(), b"input".to_vec());
         storage
@@ -1979,7 +2032,7 @@ mod tests {
         let storage = create_temp_storage().await;
         let queue = "test-queue";
 
-        storage.create_queue(queue).await.unwrap();
+        storage.create_queue(queue, 0).await.unwrap();
 
         for i in 0..5 {
             let msg = Message::new(queue.to_string(), format!("msg{}", i).into_bytes());
@@ -2015,7 +2068,7 @@ mod tests {
         let storage = create_temp_storage().await;
         let queue = "test-queue";
 
-        storage.create_queue(queue).await.unwrap();
+        storage.create_queue(queue, 0).await.unwrap();
 
         for i in 0..5 {
             let msg = Message::new(queue.to_string(), format!("msg{}", i).into_bytes());
@@ -2065,7 +2118,7 @@ mod tests {
         let queue = "test-queue";
         let namespace = "job1/stage1";
 
-        storage.create_queue(queue).await.unwrap();
+        storage.create_queue(queue, 0).await.unwrap();
 
         let msg = Message::new(queue.to_string(), b"hello".to_vec());
 
@@ -2105,7 +2158,7 @@ mod tests {
         let storage = create_temp_storage().await;
         let queue = "test-queue";
 
-        storage.create_queue(queue).await.unwrap();
+        storage.create_queue(queue, 0).await.unwrap();
 
         for i in 0..5 {
             let msg = Message::new(queue.to_string(), format!("msg{}", i).into_bytes());
@@ -2133,7 +2186,7 @@ mod tests {
         let storage = create_temp_storage().await;
         let queue = "test-queue";
 
-        storage.create_queue(queue).await.unwrap();
+        storage.create_queue(queue, 0).await.unwrap();
 
         let msg = Message::new(queue.to_string(), b"hello".to_vec());
         storage.push_message(queue, &msg).await.unwrap();
@@ -2161,7 +2214,7 @@ mod tests {
         let storage = create_temp_storage().await;
         let queue = "test-queue";
 
-        storage.create_queue(queue).await.unwrap();
+        storage.create_queue(queue, 0).await.unwrap();
 
         // Initial state
         let meta = storage.get_queue_stats(queue).await.unwrap();
