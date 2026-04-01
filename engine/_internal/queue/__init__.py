@@ -33,6 +33,7 @@ from _internal.queue.anvil import (
     AnvilBrokerManager,
     AnvilQueueClient,
     AnvilRecord,
+    QueueFullError,
 )
 from _internal.queue.anvil_storage import AnvilStorageReader
 
@@ -41,4 +42,5 @@ __all__ = [
     "AnvilQueueClient",
     "AnvilRecord",
     "AnvilStorageReader",
+    "QueueFullError",
 ]

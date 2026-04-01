@@ -47,7 +47,7 @@ from _internal.core.models import (
 )
 from _internal.core.operator import Operator, OperatorRuntime
 from _internal.core.split_payload_store import SplitPayloadStore
-from _internal.queue import AnvilQueueClient, AnvilRecord
+from _internal.queue import AnvilQueueClient, AnvilRecord, QueueFullError
 from _internal.testing.fault_injection import (
     FAULT_AFTER_PROCESS,
     FAULT_BEFORE_PROCESS,
@@ -751,16 +751,14 @@ class StageWorker:
                     state_puts=event_puts,
                 )
                 break
-            except RuntimeError as e:
-                if "QueueFull" in str(e):
-                    if attempt % 10 == 0:
-                        self.logger.info(
-                            f"Worker {self.worker_id}: downstream queue full, "
-                            f"waiting for drain (attempt {attempt + 1}/{max_retries})"
-                        )
-                    await asyncio.sleep(1.0)
-                    continue
-                raise
+            except QueueFullError:
+                if attempt % 10 == 0:
+                    self.logger.info(
+                        f"Worker {self.worker_id}: downstream queue full, "
+                        f"waiting for drain (attempt {attempt + 1}/{max_retries})"
+                    )
+                await asyncio.sleep(1.0)
+                continue
         else:
             raise RuntimeError(
                 f"Worker {self.worker_id}: downstream queue full for {max_retries}s, giving up"
@@ -789,16 +787,14 @@ class StageWorker:
                     state_puts=event_puts,
                 )
                 return
-            except RuntimeError as e:
-                if "QueueFull" in str(e):
-                    if attempt % 10 == 0:
-                        self.logger.info(
-                            f"Worker {self.worker_id}: downstream queue full, "
-                            f"waiting for drain (attempt {attempt + 1}/{max_retries})"
-                        )
-                    await asyncio.sleep(1.0)
-                    continue
-                raise
+            except QueueFullError:
+                if attempt % 10 == 0:
+                    self.logger.info(
+                        f"Worker {self.worker_id}: downstream queue full, "
+                        f"waiting for drain (attempt {attempt + 1}/{max_retries})"
+                    )
+                await asyncio.sleep(1.0)
+                continue
         raise RuntimeError(
             f"Worker {self.worker_id}: downstream queue full for {max_retries}s, giving up"
         )

@@ -34,6 +34,7 @@ from tenacity import (
 
 from _internal.core.models import SourceQueueMessage, Split
 from _internal.core.source import DirectProduceContext, DirectProducer, SplitPlanner
+from _internal.queue.anvil import QueueFullError
 from _internal.testing.fault_injection import InjectedFaultError
 
 if TYPE_CHECKING:
@@ -325,17 +326,15 @@ class SourceManager:
             try:
                 await _do_produce()
                 return
-            except RuntimeError as e:
-                if "QueueFull" in str(e):
-                    if attempt % 10 == 0:
-                        self._logger.info(
-                            f"Source {self._stage_id}: bounded queue full, "
-                            f"waiting for downstream to drain "
-                            f"(attempt {attempt + 1}/{max_queue_full_retries})"
-                        )
-                    await asyncio.sleep(1.0)
-                    continue
-                raise
+            except QueueFullError:
+                if attempt % 10 == 0:
+                    self._logger.info(
+                        f"Source {self._stage_id}: bounded queue full, "
+                        f"waiting for downstream to drain "
+                        f"(attempt {attempt + 1}/{max_queue_full_retries})"
+                    )
+                await asyncio.sleep(1.0)
+                continue
         raise RuntimeError(
             f"Source {self._stage_id}: bounded queue full for "
             f"{max_queue_full_retries}s, giving up on split {split.split_id}"
