@@ -396,7 +396,7 @@ class RayJobRunner:
             upstream=upstream,
             claim_timeout_secs=self.job.config.claim_timeout_secs,
             upstream_num_partitions=upstream_num_partitions,
-            max_pending_per_partition=self._stage_bounds.get(stage.stage_id, 0),
+            max_pending_total=self._stage_bounds.get(stage.stage_id, 0),
         )
 
     def _stage_info(self, stage: "Stage") -> Dict[str, Any]:

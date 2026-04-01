@@ -605,7 +605,8 @@ impl AnvilStorage {
             (opts.downstream_queue, opts.downstream_messages)
         {
             if !messages.is_empty() {
-                self.check_queue_capacity(downstream_queue, messages.len()).await?;
+                self.check_queue_capacity(downstream_queue, messages.len())
+                    .await?;
             }
         }
 
@@ -1390,7 +1391,8 @@ impl AnvilStorage {
                 continue;
             }
             let partition_queue = &group.partition_queues[*pid as usize];
-            self.check_queue_capacity(partition_queue, messages.len()).await?;
+            self.check_queue_capacity(partition_queue, messages.len())
+                .await?;
         }
 
         let now_ns = now_nanos();
