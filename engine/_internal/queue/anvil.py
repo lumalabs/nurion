@@ -62,7 +62,11 @@ from _internal.utils.logging import create_ray_logger
 from _internal.queue.anvil_storage import AnvilStorageReader
 
 
-class QueueFullError(RuntimeError):
+class AnvilError(RuntimeError):
+    """Base class for Anvil queue errors."""
+
+
+class QueueFullError(AnvilError):
     """Raised when a bounded queue reaches its max_pending limit.
 
     Callers should catch this and retry after a short delay to let
@@ -70,10 +74,21 @@ class QueueFullError(RuntimeError):
     """
 
 
-def _raise_if_queue_full(e: Exception) -> None:
-    """Convert RuntimeError containing 'QueueFull' to QueueFullError."""
-    if isinstance(e, RuntimeError) and "QueueFull" in str(e):
-        raise QueueFullError(str(e)) from e
+class ClaimTokenError(AnvilError):
+    """Raised when a claim token, lease, or worker identity is invalid.
+
+    This typically means the message was reclaimed by another worker
+    (lease expired) or the token is stale after a nack+reclaim cycle.
+    """
+
+
+def _raise_typed(e: RuntimeError) -> None:
+    """Convert generic RuntimeError from Rust/gRPC into typed Anvil errors."""
+    msg = str(e)
+    if "QueueFull" in msg:
+        raise QueueFullError(msg) from e
+    if "claim_token mismatch" in msg or "lease_id mismatch" in msg or "worker_id mismatch" in msg:
+        raise ClaimTokenError(msg) from e
 
 
 # =============================================================================
@@ -290,7 +305,7 @@ class AnvilQueueClient:
         try:
             return client.push(queue, value, metadata or {})
         except RuntimeError as e:
-            _raise_if_queue_full(e)
+            _raise_typed(e)
             raise
 
     def push_batch(self, queue: str, values: List[bytes]) -> List[str]:
@@ -298,7 +313,7 @@ class AnvilQueueClient:
         try:
             return client.push_batch(queue, values)
         except RuntimeError as e:
-            _raise_if_queue_full(e)
+            _raise_typed(e)
             raise
 
     # Consumer
@@ -317,14 +332,18 @@ class AnvilQueueClient:
         state_deletes: Optional[List[str]] = None,
     ) -> int:
         client = self._check()
-        return client.ack(
-            queue,
-            msg_ids,
-            claim_tokens=claim_tokens,
-            state_namespace=state_namespace,
-            state_puts=state_puts,
-            state_deletes=state_deletes,
-        )
+        try:
+            return client.ack(
+                queue,
+                msg_ids,
+                claim_tokens=claim_tokens,
+                state_namespace=state_namespace,
+                state_puts=state_puts,
+                state_deletes=state_deletes,
+            )
+        except RuntimeError as e:
+            _raise_typed(e)
+            raise
 
     def nack(
         self,
@@ -373,7 +392,7 @@ class AnvilQueueClient:
                 state_deletes=state_deletes,
             )
         except RuntimeError as e:
-            _raise_if_queue_full(e)
+            _raise_typed(e)
             raise
 
     # State
@@ -450,7 +469,7 @@ class AnvilQueueClient:
                 state_deletes=state_deletes,
             )
         except RuntimeError as e:
-            _raise_if_queue_full(e)
+            _raise_typed(e)
             raise
 
     def claim_from_group(
