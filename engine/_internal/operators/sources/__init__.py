@@ -6,14 +6,27 @@ from _internal.operators.sources.anti_join import (
     AntiJoinSourceOperator,
 )
 from _internal.operators.sources.file import FileSource, FileSourceConfig
-from _internal.operators.sources.iceberg import IcebergSource, IcebergSourceConfig
-from _internal.operators.sources.lance import (
-    LanceTableSource,
-    LanceTableSourceConfig,
-    LanceSplitPlanner,
-)
 from _internal.core.source import SplitPlanner
 from _internal.operators.sources.union import UnionSourceConfig, UnionSplitPlanner
+
+# Iceberg source requires optional [iceberg] extra (pyiceberg + sqlalchemy)
+try:
+    from _internal.operators.sources.iceberg import IcebergSource, IcebergSourceConfig
+except ImportError:
+    IcebergSource = None  # type: ignore[assignment,misc]
+    IcebergSourceConfig = None  # type: ignore[assignment,misc]
+
+# Lance source requires optional [lance] extra (pylance)
+try:
+    from _internal.operators.sources.lance import (
+        LanceTableSource,
+        LanceTableSourceConfig,
+        LanceSplitPlanner,
+    )
+except ImportError:
+    LanceTableSource = None  # type: ignore[assignment,misc]
+    LanceTableSourceConfig = None  # type: ignore[assignment,misc]
+    LanceSplitPlanner = None  # type: ignore[assignment,misc]
 
 # Spark sources require optional [spark] extra (pyspark + nurion-raydp)
 try:
