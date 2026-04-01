@@ -210,12 +210,11 @@ impl AnvilStorage {
     ) -> Result<(), StorageError> {
         for (msg_id, token) in msg_ids.iter().zip(claim_tokens.iter()) {
             let claim_key = Self::claimed_key(queue, msg_id);
-            let claim_data =
-                self.db.get(&claim_key).await?.ok_or_else(|| {
-                    SlateError::invalid(format!(
-                        "message_not_claimed: queue={queue}, msg_id={msg_id}"
-                    ))
-                })?;
+            let claim_data = self.db.get(&claim_key).await?.ok_or_else(|| {
+                SlateError::invalid(format!(
+                    "message_not_claimed: queue={queue}, msg_id={msg_id}"
+                ))
+            })?;
             let claim_info: ClaimInfo = serde_json::from_slice(&claim_data)?;
 
             if claim_info.claim_token != *token {

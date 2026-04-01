@@ -791,12 +791,7 @@ impl AnvilRustClient {
     // ========================================================================
 
     #[pyo3(signature = (queue, max_depth=0))]
-    fn create_queue(
-        &self,
-        py: Python<'_>,
-        queue: String,
-        max_depth: i32,
-    ) -> PyResult<bool> {
+    fn create_queue(&self, py: Python<'_>, queue: String, max_depth: i32) -> PyResult<bool> {
         let inner = self.inner.clone();
         py.allow_threads(move || {
             inner.runtime.block_on(async {
