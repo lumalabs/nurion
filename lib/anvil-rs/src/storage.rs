@@ -212,29 +212,34 @@ impl AnvilStorage {
             let claim_key = Self::claimed_key(queue, msg_id);
             let claim_data =
                 self.db.get(&claim_key).await?.ok_or_else(|| {
-                    SlateError::invalid(format!("Message not claimed: {}", msg_id))
+                    SlateError::invalid(format!(
+                        "message_not_claimed: queue={queue}, msg_id={msg_id}"
+                    ))
                 })?;
             let claim_info: ClaimInfo = serde_json::from_slice(&claim_data)?;
 
             if claim_info.claim_token != *token {
                 return Err(Box::new(SlateError::invalid(format!(
-                    "claim_token mismatch for msg_id {}",
-                    msg_id
+                    "claim_token mismatch: queue={queue}, msg_id={msg_id}, \
+                     expected={token}, actual={}",
+                    claim_info.claim_token
                 ))));
             }
             if let Some(expected) = expected_lease_id {
                 if claim_info.lease_id != expected {
                     return Err(Box::new(SlateError::invalid(format!(
-                        "lease_id mismatch for msg_id {}",
-                        msg_id
+                        "lease_id mismatch: queue={queue}, msg_id={msg_id}, \
+                         expected={expected}, actual={}",
+                        claim_info.lease_id
                     ))));
                 }
             }
             if let Some(expected) = expected_worker_id {
                 if claim_info.worker_id != expected {
                     return Err(Box::new(SlateError::invalid(format!(
-                        "worker_id mismatch for msg_id {}",
-                        msg_id
+                        "worker_id mismatch: queue={queue}, msg_id={msg_id}, \
+                         expected={expected}, actual={}",
+                        claim_info.worker_id
                     ))));
                 }
             }
@@ -429,7 +434,9 @@ impl AnvilStorage {
                     let total_acked = counters.total_acked.load(Ordering::Relaxed);
                     let in_flight = total_pushed.saturating_sub(total_acked);
                     if in_flight + additional as u64 > max {
-                        return Err(Box::new(std::io::Error::other("QueueFull")));
+                        return Err(Box::new(std::io::Error::other(format!(
+                            "QueueFull: queue={queue}, in_flight={in_flight}, max_pending={max}, attempted={additional}"
+                        ))));
                     }
                 }
             }
