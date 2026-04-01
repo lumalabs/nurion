@@ -26,8 +26,8 @@ if TYPE_CHECKING:
 
 
 @dataclass
-class PipelineFlowConfig:
-    """Pipeline-level flow control configuration.
+class WorkflowFlowConfig:
+    """Workflow-level flow control configuration.
 
     Controls inter-stage queue bounds to prevent OOM, disk-full, and
     network saturation while keeping GPUs fed.
@@ -83,7 +83,7 @@ class JobConfig:
     webui: WebUIConfig = field(default_factory=WebUIConfig)
     payload_store_uri: str = "ray://"
     payload_store_options: Dict[str, Any] = field(default_factory=dict)
-    flow_config: PipelineFlowConfig = field(default_factory=PipelineFlowConfig)
+    flow_config: WorkflowFlowConfig = field(default_factory=WorkflowFlowConfig)
 
 
 class Job:

@@ -30,7 +30,7 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 import ray
 
-from _internal.core.job import Job, PipelineFlowConfig
+from _internal.core.job import Job, WorkflowFlowConfig
 
 if TYPE_CHECKING:
     from _internal.core.stage import Stage
@@ -62,7 +62,7 @@ from _internal.webui.state.writer import AnvilStateWriter
 def compute_stage_bounds(
     job: "Job",
     node_memory_bytes: int,
-    flow_config: "PipelineFlowConfig",
+    flow_config: "WorkflowFlowConfig",
 ) -> Dict[str, int]:
     """Compute max_pending for each inter-stage queue.
 
@@ -289,7 +289,7 @@ class RayJobRunner:
         import psutil  # type: ignore[import-untyped]
 
         node_memory = psutil.virtual_memory().total
-        flow_config = self.job.config.flow_config if self.job.config else PipelineFlowConfig()
+        flow_config = self.job.config.flow_config if self.job.config else WorkflowFlowConfig()
         self._stage_bounds = compute_stage_bounds(self.job, node_memory, flow_config)
         if self._stage_bounds:
             self.logger.info(f"Computed stage bounds: {self._stage_bounds}")
