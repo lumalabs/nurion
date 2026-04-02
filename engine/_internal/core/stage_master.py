@@ -389,12 +389,28 @@ class StageMaster:
                             f"not recovering {len(failed)} idle workers"
                         )
                     else:
+                        # Clear safe_to_exit so recovery can spawn workers.
+                        # Without this, spawn_worker() skips when _safe_to_exit
+                        # is True (worker_manager.py:117), silently losing data.
+                        self._worker_manager.clear_safe_to_exit()
                         self._recovery_manager.record_failures(
                             len(failed), self._worker_manager.worker_count
                         )
                         result = await self._recovery_manager.recover_failed_workers(
                             failed_worker_ids=failed,
                         )
+                        # Restart completion polling so recovered workers
+                        # get notified when their work is done.
+                        if (
+                            self._upstream_finished
+                            and self.upstream
+                            and self._queue_client
+                            and result.spawned_count > 0
+                        ):
+                            asyncio.create_task(
+                                self._poll_queue_completion(),
+                                name=f"poll_completion_recovery_{self.stage_id}",
+                            )
                         if result.should_give_up:
                             self._failed = True
                             self._failure_message = result.give_up_reason
