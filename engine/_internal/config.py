@@ -136,7 +136,6 @@ _TYPE_MAP: dict[str, type] = {
     "str": str,
 }
 
-
 def _read_from_env() -> EngineConfig:
     """Build an EngineConfig by reading env vars, falling back to defaults."""
     kwargs: dict[str, Any] = {}
@@ -168,9 +167,8 @@ def configure(**kwargs: object) -> EngineConfig:
 
     Returns the new config.
     """
+    valid = {f.name for f in fields(EngineConfig)}
     for key, value in kwargs.items():
-        # Validate field name
-        valid = {f.name for f in fields(EngineConfig)}
         if key not in valid:
             raise ValueError(f"Unknown config key: {key!r}. Valid keys: {sorted(valid)}")
         os.environ[_ENV_PREFIX + key.upper()] = str(value)

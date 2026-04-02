@@ -20,7 +20,6 @@ Verifies that:
 3. Subclassing optional classes also raises ImportError
 """
 
-import importlib
 import sys
 from contextlib import contextmanager
 from unittest import mock
