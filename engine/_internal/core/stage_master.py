@@ -109,7 +109,6 @@ class StageMaster:
         self._failed = False
         self._failure_message: Optional[str] = None
         self._start_time: Optional[float] = None
-        self._upstream_finished = False
         self._last_progress_time: Optional[float] = None  # set when first worker completes
 
         # Worker and recovery managers (created in _init_managers)
@@ -368,14 +367,12 @@ class StageMaster:
                     self._write_worker_state(wid, "FAILED")
 
                 if failed:
-                    # When upstream is finished and the input queue is drained,
-                    # worker failures are expected (idle timeout — no more work).
-                    # Skip recovery so worker_count can reach 0 and the master
-                    # exits cleanly on the next iteration.
-                    if self._upstream_finished and not self._has_unprocessed_messages():
+                    # Skip recovery when queue is fully drained — worker failures
+                    # are expected (idle timeout as safety valve).
+                    if not self._has_unprocessed_messages():
                         self.logger.info(
-                            f"Stage {self.stage_id}: upstream finished and queue drained, "
-                            f"not recovering {len(failed)} idle workers"
+                            f"Stage {self.stage_id}: queue drained, "
+                            f"not recovering {len(failed)} workers"
                         )
                     else:
                         self._recovery_manager.record_failures(
@@ -520,8 +517,11 @@ class StageMaster:
     # =========================================================================
 
     async def notify_upstream_finished(self) -> None:
-        """Notify this stage that all upstream stages have finished."""
-        self._upstream_finished = True
+        """Notify this stage that all upstream stages have finished.
+
+        Informational only — workers detect completion via broker's
+        upstream_drained flag in claim responses.
+        """
         self.logger.info(f"Stage {self.stage_id} notified: upstream finished")
 
     def get_queue_client(self) -> Optional[AnvilQueueClient]:

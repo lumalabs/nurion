@@ -380,11 +380,7 @@ impl AnvilService {
 
                 // When empty, check if upstream group is finished + fully drained
                 let upstream_drained = if messages.is_empty() {
-                    match self
-                        .storage
-                        .check_group_completion(&group.group_name)
-                        .await
-                    {
+                    match self.storage.check_group_completion(&group.group_name).await {
                         Ok((all_finished, all_drained, _)) => all_finished && all_drained,
                         Err(_) => false,
                     }

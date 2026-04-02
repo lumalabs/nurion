@@ -364,14 +364,6 @@ class WorkerManager:
             if slot is not None:
                 self._free_slots.append(slot)
 
-    async def notify_worker_safe_to_exit(self, worker_id: str) -> None:
-        """No-op. Workers now exit based on broker's upstream_drained flag."""
-        pass
-
-    async def notify_safe_to_exit(self) -> None:
-        """No-op. Workers now exit based on broker's upstream_drained flag."""
-        pass
-
     def get_worker(self, worker_id: str) -> Optional[ray.actor.ActorHandle]:
         """Get a worker actor handle by ID."""
         return self._workers.get(worker_id)

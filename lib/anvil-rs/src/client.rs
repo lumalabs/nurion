@@ -430,7 +430,12 @@ impl AnvilRustClient {
                     .iter()
                     .map(|m| RustMessage::from_claim_message(m, &source_q))
                     .collect();
-                Ok((messages, resp.source_queue, resp.source_partition, resp.upstream_drained))
+                Ok((
+                    messages,
+                    resp.source_queue,
+                    resp.source_partition,
+                    resp.upstream_drained,
+                ))
             })
         })
     }

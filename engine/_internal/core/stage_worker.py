@@ -911,9 +911,6 @@ class StageWorker:
 
         return puts
 
-    # _should_exit removed: workers now exit when broker returns
-    # upstream_drained=True in the claim response. No flag needed.
-
     async def _cleanup(self) -> None:
         if self._operator:
             try:
@@ -925,13 +922,6 @@ class StageWorker:
             self.queue_client.stop()
 
     # === Status and Control ===
-
-    def notify_safe_to_exit(self) -> None:
-        """Deprecated: kept for backward compat but no longer needed.
-
-        Workers now exit based on broker's upstream_drained flag.
-        """
-        pass  # no-op
 
     def get_status(self) -> Dict[str, Any]:
         import os

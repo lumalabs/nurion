@@ -26,7 +26,7 @@ import pyarrow as pa
 import pytest
 from dataclasses import dataclass
 from typing import List
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 from _internal.core.models import (
     DataQueueMessage,
