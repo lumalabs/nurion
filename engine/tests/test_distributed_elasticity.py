@@ -30,6 +30,7 @@ import logging
 import pytest
 import ray
 
+from _internal.core.stage_master import _StageState
 from _internal.runtime.ray_runner import RayJobRunner
 
 from tests.utils import (
@@ -127,7 +128,7 @@ class TestElasticScaling:
 
             # Scale up: spawn additional workers
             initial_count = len(master._workers) if master._workers else 0
-            if master._worker_manager and not master._finished:
+            if master._worker_manager and master._state != _StageState.FINISHED:
                 for _ in range(3):
                     try:
                         await master._worker_manager.spawn_worker(is_min_worker=False)
@@ -363,7 +364,7 @@ class TestElasticScaling:
                     break
 
                 # Scale up
-                if master and master._worker_manager and not master._finished:
+                if master and master._worker_manager and master._state != _StageState.FINISHED:
                     try:
                         await master._worker_manager.spawn_worker(is_min_worker=False)
                         spawns += 1
@@ -373,7 +374,7 @@ class TestElasticScaling:
                 await asyncio.sleep(0.2)
 
                 # Scale down (kill)
-                if not master._finished:
+                if master._state != _StageState.FINISHED:
                     try:
                         if await kill_random_worker(runner, stage_id="transform"):
                             kills += 1
