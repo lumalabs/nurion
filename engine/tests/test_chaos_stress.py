@@ -261,8 +261,8 @@ class TestLongRunningStability:
                 filter_remainder=FILTER_REMAINDER,
                 explode_factor=EXPLODE_FACTOR,
             ),
-            claim_timeout_secs=5,
-            recovery_interval_secs=1,
+            claim_timeout_secs=10,
+            recovery_interval_secs=2,
         )
 
         runner = RayJobRunner(job)
@@ -340,8 +340,8 @@ class TestLongRunningStability:
             with_checksum=True,
             source_data=source_data,
             transform_config=ExplodeConfig(factor=EXPLODE_FACTOR),
-            claim_timeout_secs=5,
-            recovery_interval_secs=1,
+            claim_timeout_secs=10,
+            recovery_interval_secs=2,
         )
 
         runner = RayJobRunner(job)

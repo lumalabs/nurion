@@ -332,7 +332,10 @@ class StageMaster:
 
                 # No-progress timeout: if no worker has completed successfully
                 # within the window, assume the stage is stuck and fail fast.
-                if get_config().stage_no_progress_timeout_s > 0 and self._last_progress_time is not None:
+                if (
+                    get_config().stage_no_progress_timeout_s > 0
+                    and self._last_progress_time is not None
+                ):
                     no_progress_s = time.monotonic() - self._last_progress_time
                     if no_progress_s > get_config().stage_no_progress_timeout_s:
                         self._failed = True
@@ -470,9 +473,7 @@ class StageMaster:
         except Exception as e:
             self.logger.debug(f"Failed to write worker state: {e}")
 
-    def _mark_finished_with_retry(
-        self, queue_client, max_retries: int | None = None
-    ) -> None:
+    def _mark_finished_with_retry(self, queue_client, max_retries: int | None = None) -> None:
         """Mark output group as finished with retries to prevent downstream hangs."""
         if max_retries is None:
             max_retries = get_config().stage_mark_finished_max_retries

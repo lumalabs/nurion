@@ -87,11 +87,25 @@ class AnvilBrokerManager:
         self.db_path = db_path
         self.port = port
         self.host = host
-        self.startup_timeout = startup_timeout if startup_timeout is not None else cfg.broker_startup_timeout_s
-        self.claim_timeout_secs = claim_timeout_secs if claim_timeout_secs is not None else cfg.broker_claim_timeout_s
-        self.recovery_interval_secs = recovery_interval_secs if recovery_interval_secs is not None else cfg.broker_recovery_interval_s
-        self.acked_retention_secs = acked_retention_secs if acked_retention_secs is not None else cfg.broker_acked_retention_s
-        self.gc_interval_secs = gc_interval_secs if gc_interval_secs is not None else cfg.broker_gc_interval_s
+        self.startup_timeout = (
+            startup_timeout if startup_timeout is not None else cfg.broker_startup_timeout_s
+        )
+        self.claim_timeout_secs = (
+            claim_timeout_secs if claim_timeout_secs is not None else cfg.broker_claim_timeout_s
+        )
+        self.recovery_interval_secs = (
+            recovery_interval_secs
+            if recovery_interval_secs is not None
+            else cfg.broker_recovery_interval_s
+        )
+        self.acked_retention_secs = (
+            acked_retention_secs
+            if acked_retention_secs is not None
+            else cfg.broker_acked_retention_s
+        )
+        self.gc_interval_secs = (
+            gc_interval_secs if gc_interval_secs is not None else cfg.broker_gc_interval_s
+        )
 
         self._broker: Optional[AnvilBroker] = None
         self._running = False
@@ -213,7 +227,9 @@ def _compute_heartbeat_interval(claim_timeout_secs: Optional[float]) -> Optional
     cfg = get_config()
     if claim_timeout_secs <= 0:
         return cfg.heartbeat_min_interval_s
-    return max(cfg.heartbeat_min_interval_s, min(cfg.heartbeat_max_interval_s, claim_timeout_secs / 2))
+    return max(
+        cfg.heartbeat_min_interval_s, min(cfg.heartbeat_max_interval_s, claim_timeout_secs / 2)
+    )
 
 
 class AnvilQueueClient:

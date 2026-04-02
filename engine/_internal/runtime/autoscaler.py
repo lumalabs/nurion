@@ -53,11 +53,17 @@ class StageAutoscaleConfig:
     """
 
     enabled: bool = True
-    check_interval_s: float = field(default_factory=lambda: get_config().autoscaler_check_interval_s)
+    check_interval_s: float = field(
+        default_factory=lambda: get_config().autoscaler_check_interval_s
+    )
 
     # Scaling thresholds
-    scale_up_lag_threshold: int = field(default_factory=lambda: get_config().autoscaler_scale_up_lag)
-    scale_down_lag_threshold: int = field(default_factory=lambda: get_config().autoscaler_scale_down_lag)
+    scale_up_lag_threshold: int = field(
+        default_factory=lambda: get_config().autoscaler_scale_up_lag
+    )
+    scale_down_lag_threshold: int = field(
+        default_factory=lambda: get_config().autoscaler_scale_down_lag
+    )
 
     # AIMD cooldowns: scale UP fast, scale DOWN slow.
     cooldown_up_s: float = field(default_factory=lambda: get_config().autoscaler_cooldown_up_s)
