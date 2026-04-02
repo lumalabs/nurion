@@ -107,6 +107,8 @@ class TestElasticScaling:
                 modulo=FILTER_MODULO,
                 remainder=FILTER_REMAINDER,
             ),
+            claim_timeout_secs=5,
+            recovery_interval_secs=1,
         )
 
         runner = RayJobRunner(job)
@@ -174,6 +176,8 @@ class TestElasticScaling:
             with_checksum=True,
             source_data=source_data,
             transform_config=ExplodeConfig(factor=EXPLODE_FACTOR),
+            claim_timeout_secs=5,
+            recovery_interval_secs=1,
         )
 
         runner = RayJobRunner(job)
@@ -263,6 +267,8 @@ class TestElasticScaling:
                 filter_remainder=FILTER_REMAINDER,
                 explode_factor=EXPLODE_FACTOR,
             ),
+            claim_timeout_secs=5,
+            recovery_interval_secs=1,
         )
 
         runner = RayJobRunner(job)
@@ -332,6 +338,8 @@ class TestElasticScaling:
                 modulo=FILTER_MODULO,
                 remainder=FILTER_REMAINDER,
             ),
+            claim_timeout_secs=5,
+            recovery_interval_secs=1,
         )
 
         runner = RayJobRunner(job)
@@ -422,6 +430,8 @@ class TestElasticScaling:
                 filter_remainder=FILTER_REMAINDER,
                 explode_factor=EXPLODE_FACTOR,
             ),
+            claim_timeout_secs=5,
+            recovery_interval_secs=1,
         )
 
         runner = RayJobRunner(job)
