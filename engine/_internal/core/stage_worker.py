@@ -267,7 +267,7 @@ class StageWorker:
 
         last_claimed_time = time.time()
 
-        while self._exit == _ExitSignal.RUNNING:
+        while self._exit != _ExitSignal.STOP:
             try:
                 records = self.queue_client.claim(
                     upstream_queue,
@@ -345,7 +345,7 @@ class StageWorker:
         # the broker deadlocks under high concurrency.
         last_claimed_time = time.time()
 
-        while self._exit == _ExitSignal.RUNNING:
+        while self._exit != _ExitSignal.STOP:
             try:
                 records, source_queue, _ = self.queue_client.claim_from_group(
                     group_name,

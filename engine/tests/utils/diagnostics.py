@@ -137,11 +137,10 @@ def _dump_broker_stats(runner: Any) -> None:
         client.start()
 
         print("\n--- Broker Queue Stats ---")
-        # Get all stage masters for their queue names
-        for stage_id, master_ref in runner._masters.items():
+        # _masters contains plain StageMaster objects (not Ray actors)
+        for stage_id, master in runner._masters.items():
             try:
-                # Master is a Ray actor, query it for queue info
-                output_group = ray.get(master_ref.get_output_group_name.remote())
+                output_group = master.get_output_group_name()
                 stats = client.get_group_stats(output_group)
                 partitions = stats.get("partitions", [])
                 total_pending = sum(p.get("pending_count", 0) for p in partitions)
