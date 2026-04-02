@@ -915,31 +915,8 @@ class StageWorker:
         return puts
 
     def _should_exit(self) -> bool:
-        """Check if this worker should exit.
-
-        DRAIN signal alone is not sufficient — we also verify with the broker
-        that the upstream queue is truly drained (pending=0, claimed=0).
-        This prevents a race where _poll_queue_completion notifies safe_to_exit
-        but a recovered message has since been re-queued.
-        """
-        if self._exit != _ExitSignal.DRAIN:
-            return False
-        # Double-check with broker: don't exit if there's still work
-        try:
-            if self.queue_client and self._runtime.upstream:
-                upstream = self._runtime.upstream
-                if upstream.is_group:
-                    result = self.queue_client.is_group_finished(upstream.name)
-                    if not result.get("safe_to_exit", False):
-                        return False
-                else:
-                    result = self.queue_client.is_queue_finished(upstream.name)
-                    if not result.get("safe_to_exit", False):
-                        return False
-        except Exception:
-            # Broker unavailable — don't exit, keep trying
-            return False
-        return True
+        """Check if this worker should exit (master signalled DRAIN)."""
+        return self._exit == _ExitSignal.DRAIN
 
     async def _cleanup(self) -> None:
         if self._operator:
