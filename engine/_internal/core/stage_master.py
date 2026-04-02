@@ -29,6 +29,7 @@ QueueGroup Model:
 from __future__ import annotations
 
 import asyncio
+import enum
 import time
 from typing import TYPE_CHECKING, Any, Dict, Optional, Protocol
 
@@ -68,6 +69,15 @@ __all__ = [
 ]
 
 
+class _StageState(enum.Enum):
+    """Stage lifecycle: INIT → RUNNING → FINISHED | FAILED."""
+
+    INIT = "init"
+    RUNNING = "running"
+    FINISHED = "finished"
+    FAILED = "failed"
+
+
 class StageMaster:
     """Orchestrates workers for a pipeline stage.
 
@@ -103,10 +113,8 @@ class StageMaster:
         self._output_group_name = f"{job_id}_{self.stage_id}_output"
         self._num_partitions: int = max(1, stage.operator_config.get_output_partition_count())
 
-        # State
-        self._running = False
-        self._finished = False
-        self._failed = False
+        # Lifecycle state
+        self._state = _StageState.INIT
         self._failure_message: Optional[str] = None
         self._start_time: Optional[float] = None
         self._last_progress_time: Optional[float] = None  # set when first worker completes
@@ -121,8 +129,6 @@ class StageMaster:
         self._source_manager: Optional[SourceManager] = (
             SourceManager(source, job_id, self.stage_id) if source else None
         )
-        # Expose _source for external checks (e.g., autoscaler)
-        self._source = source
 
         # Sink manager (SinkCommitter)
         sink_committer = stage.operator_config.create_sink_committer()
@@ -219,7 +225,7 @@ class StageMaster:
 
     async def start(self) -> None:
         """Start the stage master."""
-        if self._running:
+        if self._state == _StageState.RUNNING:
             return
 
         self.logger.info(f"Starting stage {self.stage_id}")
@@ -237,10 +243,10 @@ class StageMaster:
                 queue_client, self._output_group_name, broker_endpoint
             )
             self._write_stage_state(status="RUNNING")
-            self._running = True
+            self._state = _StageState.RUNNING
             return
 
-        self._running = True
+        self._state = _StageState.RUNNING
 
         # Ensure the payload store actor is ready before prepare() writes to it.
         # RaySplitPayloadStore is backed by a Ray actor; calling prepare() before
@@ -273,7 +279,7 @@ class StageMaster:
             self._source_manager.start_split_production(
                 queue_client,
                 backpressure_fn=self._check_backpressure,
-                running_fn=lambda: self._running,
+                running_fn=lambda: self._state == _StageState.RUNNING,
             )
 
         # When downstream of a shuffle, ensure enough initial workers to cover
@@ -301,14 +307,14 @@ class StageMaster:
 
     async def run(self) -> bool:
         """Run the stage until completion."""
-        if not self._running:
+        if self._state != _StageState.RUNNING:
             await self.start()
         queue_client = self._queue_client
         assert queue_client is not None
 
         # --- DirectProducer: immediate finish ---
         if self._source_manager and self._source_manager.is_direct_producer:
-            self._finished = True
+            self._state = _StageState.FINISHED
             try:
                 queue_client.mark_group_finished(self._output_group_name)
             except Exception as e:
@@ -322,7 +328,7 @@ class StageMaster:
         self._last_progress_time = time.monotonic()
 
         try:
-            while self._running and not self._finished:
+            while self._state == _StageState.RUNNING:
                 # Fail fast if the background split-production task has crashed
                 # (e.g., schema mismatch detected inside plan_splits).
                 if self._source_manager:
@@ -336,7 +342,7 @@ class StageMaster:
                 ):
                     no_progress_s = time.monotonic() - self._last_progress_time
                     if no_progress_s > get_config().stage_no_progress_timeout_s:
-                        self._failed = True
+                        self._state = _StageState.FAILED
                         self._failure_message = (
                             f"Stage {self.stage_id}: no progress for "
                             f"{no_progress_s:.0f}s (limit: {get_config().stage_no_progress_timeout_s:.0f}s)"
@@ -355,7 +361,7 @@ class StageMaster:
                             await asyncio.sleep(0.5)
                             continue
                     else:
-                        self._finished = True
+                        self._state = _StageState.FINISHED
                         break
 
                 completed, failed = await self._worker_manager.wait_for_completion(timeout=1.0)
@@ -382,7 +388,7 @@ class StageMaster:
                             failed_worker_ids=failed,
                         )
                         if result.should_give_up:
-                            self._failed = True
+                            self._state = _StageState.FAILED
                             self._failure_message = result.give_up_reason
                             self.logger.error(
                                 f"Stage {self.stage_id} giving up: {result.give_up_reason}"
@@ -392,11 +398,11 @@ class StageMaster:
                     self._last_progress_time = time.monotonic()
                     self._recovery_manager.record_success()
 
-                if self._failed:
+                if self._state == _StageState.FAILED:
                     break
 
             # --- Sink finalize ---
-            if self._sink_manager and not self._failed:
+            if self._sink_manager and self._state != _StageState.FAILED:
                 await self._sink_manager.finalize(queue_client)
 
             # Mark output queue(s) as finished (retry up to 3 times — failure
@@ -407,9 +413,11 @@ class StageMaster:
                 self.logger.error(f"Failed to mark finished: {mark_err}")
                 # Fall through to write state and raise original failure if any
 
-            self._write_stage_state(status="FAILED" if self._failed else "COMPLETED")
+            self._write_stage_state(
+                status="FAILED" if self._state == _StageState.FAILED else "COMPLETED"
+            )
 
-            if self._failed:
+            if self._state == _StageState.FAILED:
                 raise RuntimeError(self._failure_message)
 
             return True
@@ -419,7 +427,7 @@ class StageMaster:
 
     async def stop(self) -> None:
         """Stop the stage master."""
-        self._running = False
+        self._state = _StageState.INIT
 
         if self._source_manager:
             await self._source_manager.stop()
@@ -564,9 +572,9 @@ class StageMaster:
             stage_id=self.stage_id,
             worker_count=self._worker_manager.worker_count if self._worker_manager else 0,
             output_queue_size=output_size,
-            is_running=self._running,
-            is_finished=self._finished,
-            failed=self._failed,
+            is_running=self._state == _StageState.RUNNING,
+            is_finished=self._state == _StageState.FINISHED,
+            failed=self._state == _StageState.FAILED,
             failure_message=self._failure_message,
             backpressure_active=self._backpressure_provider.is_backpressure_active(self.stage_id)
             if self._backpressure_provider

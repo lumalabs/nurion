@@ -135,29 +135,27 @@ def _dump_broker_stats(runner: Any) -> None:
         broker_url = runner._shared_broker.get_broker_url()
         client = AnvilQueueClient(broker_url, worker_id="diagnostic")
         client.start()
-
-        print("\n--- Broker Queue Stats ---")
-        # _masters contains plain StageMaster objects (not Ray actors)
-        for stage_id, master in runner._masters.items():
-            try:
-                output_group = master.get_output_group_name()
-                stats = client.get_group_stats(output_group)
-                partitions = stats.get("partitions", [])
-                total_pending = sum(p.get("pending_count", 0) for p in partitions)
-                total_claimed = sum(p.get("claimed_count", 0) for p in partitions)
-                total_acked = sum(p.get("acked_count", 0) for p in partitions)
-                print(
-                    f"  {stage_id} output [{output_group}]: "
-                    f"pending={total_pending}, claimed={total_claimed}, "
-                    f"acked={total_acked}, partitions={len(partitions)}"
-                )
-                # Per-partition detail if any have non-zero pending/claimed
-                for p in partitions:
-                    if p.get("pending_count", 0) > 0 or p.get("claimed_count", 0) > 0:
-                        print(f"    partition {p.get('partition_id', '?')}: {p}")
-            except Exception as e:
-                print(f"  {stage_id}: failed to get stats: {e}")
-
-        client.stop()
+        try:
+            print("\n--- Broker Queue Stats ---")
+            for stage_id, master in runner._masters.items():
+                try:
+                    output_group = master.get_output_group_name()
+                    stats = client.get_group_stats(output_group)
+                    partitions = stats.get("partitions", [])
+                    total_pending = sum(p.get("pending_count", 0) for p in partitions)
+                    total_claimed = sum(p.get("claimed_count", 0) for p in partitions)
+                    total_acked = sum(p.get("acked_count", 0) for p in partitions)
+                    print(
+                        f"  {stage_id} output [{output_group}]: "
+                        f"pending={total_pending}, claimed={total_claimed}, "
+                        f"acked={total_acked}, partitions={len(partitions)}"
+                    )
+                    for p in partitions:
+                        if p.get("pending_count", 0) > 0 or p.get("claimed_count", 0) > 0:
+                            print(f"    partition {p.get('partition_id', '?')}: {p}")
+                except Exception as e:
+                    print(f"  {stage_id}: failed to get stats: {e}")
+        finally:
+            client.stop()
     except Exception as e:
         print(f"Broker stats unavailable: {e}")
