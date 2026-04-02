@@ -1,3 +1,17 @@
+# Copyright 2025 nurion team
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Centralized engine configuration.
 
 Every tunable constant lives here as a field on :class:`EngineConfig`.
@@ -29,6 +43,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, fields
+from typing import Any
 
 _ENV_PREFIX = "NURION_"
 
@@ -115,28 +130,24 @@ class EngineConfig:
         return result
 
 
+_TYPE_MAP: dict[str, type] = {
+    "float": float,
+    "int": int,
+    "str": str,
+}
+
+
 def _read_from_env() -> EngineConfig:
     """Build an EngineConfig by reading env vars, falling back to defaults."""
-    kwargs: dict[str, object] = {}
+    kwargs: dict[str, Any] = {}
     for f in fields(EngineConfig):
         env_key = _ENV_PREFIX + f.name.upper()
         raw = os.environ.get(env_key)
         if raw is not None:
-            kwargs[f.name] = f.type(raw) if isinstance(f.type, type) else _coerce(raw, f.type)
+            # f.type is a string (due to __future__.annotations), resolve it
+            converter = _TYPE_MAP.get(f.type, str) if isinstance(f.type, str) else f.type
+            kwargs[f.name] = converter(raw)
     return EngineConfig(**kwargs)
-
-
-def _coerce(raw: str, type_hint: str | type) -> object:
-    """Coerce a string to the type indicated by a type hint string."""
-    # Handle string annotations like 'float', 'int'
-    type_map = {"float": float, "int": int, "str": str, "bool": _str_to_bool}
-    type_name = type_hint if isinstance(type_hint, str) else type_hint.__name__
-    converter = type_map.get(type_name, str)
-    return converter(raw)
-
-
-def _str_to_bool(s: str) -> bool:
-    return s.lower() in ("1", "true", "yes")
 
 
 def get_config() -> EngineConfig:
