@@ -894,6 +894,7 @@ class TestStageWorkerNvmeIntegration:
         )
 
         worker = WorkerClass(runtime, MockStage(), mock_store)
+        worker._init_operator()
         worker.queue_client = anvil_backend.client
 
         # Push a message WITH payload_loc in metadata

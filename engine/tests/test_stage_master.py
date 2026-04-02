@@ -477,6 +477,7 @@ class TestStageWorkerPayloadCleanup:
         )
 
         worker = WorkerClass(runtime, MockStage(), mock_payload_store)
+        worker._init_operator()
         # Re-use the test backend's already-started client.
         worker.queue_client = anvil_backend.client
 
@@ -533,6 +534,7 @@ class TestStageWorkerPayloadCleanup:
         )
 
         worker = WorkerClass(runtime, MockStage(), mock_payload_store)
+        worker._init_operator()
         worker.queue_client = anvil_backend.client
 
         anvil_backend.client.create_queue("fail_fast_upstream")

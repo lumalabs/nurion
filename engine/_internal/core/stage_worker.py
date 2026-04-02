@@ -30,6 +30,7 @@ Source workers claim from planner queue (single queue, not QueueGroup).
 from __future__ import annotations
 
 import asyncio
+import enum
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, NamedTuple, Optional
@@ -126,9 +127,21 @@ class PayloadMissingError(RuntimeError):
         self.payload_key = payload_key
 
 
+class _ExitSignal(enum.Enum):
+    """Worker lifecycle state — transitions: RUNNING → DRAIN → STOP."""
+
+    RUNNING = "running"  # Normal operation
+    DRAIN = "drain"  # Finish current work, then exit (safe_to_exit)
+    STOP = "stop"  # Stop immediately (external kill)
+
+
 @ray.remote
 class StageWorker:
-    """Worker with claim-based processing model and optional merge."""
+    """Worker with claim-based processing model and optional merge.
+
+    State is minimal: ``_exit`` enum + lazy-init ``queue_client``/``_operator``.
+    All config comes from ``_runtime`` (frozen dataclass) and ``stage``.
+    """
 
     def __init__(
         self,
@@ -137,32 +150,46 @@ class StageWorker:
         payload_store: SplitPayloadStore,
     ):
         self._runtime = runtime
-        self._output = runtime.output  # shortcut for frequently accessed output routing
-
-        self.worker_id = runtime.worker_id
-        self.job_id = runtime.job_id
-        self.stage_id = runtime.stage_id
-
-        self._batch_size = runtime.batch_size
-        self._claim_timeout_secs = runtime.claim_timeout_secs
-        self._merge_upstream = stage.operator_config.get_merge_upstream()
-
         self.stage = stage
         self.payload_store = payload_store
+        self.logger = create_ray_logger(f"Worker-{stage.stage_id}-{runtime.worker_id}")
+
+        # Lazy-init in run()
         self.queue_client: Optional[AnvilQueueClient] = None
-
-        self.logger = create_ray_logger(f"Worker-{self.stage_id}-{self.worker_id}")
-
         self._operator: Optional[Operator] = None
-        self._init_operator()
 
-        self._running = False
-        self._safe_to_exit = False
+        # Single exit signal — replaces _running + _safe_to_exit
+        self._exit = _ExitSignal.RUNNING
+
+    # --- Properties (replace redundant field copies) ---
+
+    @property
+    def worker_id(self) -> str:
+        return self._runtime.worker_id
+
+    @property
+    def job_id(self) -> str:
+        return self._runtime.job_id
+
+    @property
+    def stage_id(self) -> str:
+        return self._runtime.stage_id
+
+    @property
+    def _output(self) -> OutputRouting:
+        return self._runtime.output
 
     @property
     def _upstream_name(self) -> Optional[str]:
-        """Upstream queue/group name, or None if not set."""
         return self._runtime.upstream.name if self._runtime.upstream else None
+
+    @property
+    def _batch_size(self) -> int:
+        return self._runtime.batch_size
+
+    @property
+    def _merge_upstream(self) -> int:
+        return self.stage.operator_config.get_merge_upstream()
 
     def _init_operator(self) -> None:
         runtime = OperatorRuntime(
@@ -177,13 +204,13 @@ class StageWorker:
     def _create_queue_client(self) -> AnvilQueueClient:
         if not self._runtime.broker_endpoint:
             raise RuntimeError("broker_endpoint is required")
-        broker_url = f"{self._runtime.broker_endpoint.host}:{self._runtime.broker_endpoint.port}"
+        ep = self._runtime.broker_endpoint
         from _internal.queue.anvil import _compute_heartbeat_interval
 
         client = AnvilQueueClient(
-            broker_url,
+            f"{ep.host}:{ep.port}",
             worker_id=self.worker_id,
-            heartbeat_interval_secs=_compute_heartbeat_interval(self._claim_timeout_secs),
+            heartbeat_interval_secs=_compute_heartbeat_interval(self._runtime.claim_timeout_secs),
         )
         client.start()
         return client
@@ -193,8 +220,8 @@ class StageWorker:
     # =========================================================================
 
     async def run(self) -> Dict[str, Any]:
-        """Main entry point."""
-        self._running = True
+        """Main entry point.  Lazy-inits operator and queue client."""
+        self._exit = _ExitSignal.RUNNING
         self.logger.info(f"Worker {self.worker_id} starting")
 
         if not self._runtime.broker_endpoint or not self._runtime.upstream:
@@ -203,6 +230,7 @@ class StageWorker:
             )
 
         try:
+            self._init_operator()
             self.queue_client = self._create_queue_client()
             await self._run_claim_loop()
             return {"worker_id": self.worker_id}
@@ -210,7 +238,7 @@ class StageWorker:
             self.logger.error(f"Worker {self.worker_id} failed: {e}")
             raise
         finally:
-            self._running = False
+            self._exit = _ExitSignal.STOP
             await self._cleanup()
 
     async def _run_claim_loop(self) -> None:
@@ -239,7 +267,7 @@ class StageWorker:
 
         last_claimed_time = time.time()
 
-        while self._running:
+        while self._exit == _ExitSignal.RUNNING:
             try:
                 records = self.queue_client.claim(
                     upstream_queue,
@@ -317,7 +345,7 @@ class StageWorker:
         # the broker deadlocks under high concurrency.
         last_claimed_time = time.time()
 
-        while self._running:
+        while self._exit == _ExitSignal.RUNNING:
             try:
                 records, source_queue, _ = self.queue_client.claim_from_group(
                     group_name,
@@ -887,7 +915,31 @@ class StageWorker:
         return puts
 
     def _should_exit(self) -> bool:
-        return self._safe_to_exit
+        """Check if this worker should exit.
+
+        DRAIN signal alone is not sufficient — we also verify with the broker
+        that the upstream queue is truly drained (pending=0, claimed=0).
+        This prevents a race where _poll_queue_completion notifies safe_to_exit
+        but a recovered message has since been re-queued.
+        """
+        if self._exit != _ExitSignal.DRAIN:
+            return False
+        # Double-check with broker: don't exit if there's still work
+        try:
+            if self.queue_client and self._runtime.upstream:
+                upstream = self._runtime.upstream
+                if upstream.is_group:
+                    result = self.queue_client.is_group_finished(upstream.name)
+                    if not result.get("safe_to_exit", False):
+                        return False
+                else:
+                    result = self.queue_client.is_queue_finished(upstream.name)
+                    if not result.get("safe_to_exit", False):
+                        return False
+        except Exception:
+            # Broker unavailable — don't exit, keep trying
+            return False
+        return True
 
     async def _cleanup(self) -> None:
         if self._operator:
@@ -902,7 +954,7 @@ class StageWorker:
     # === Status and Control ===
 
     def notify_safe_to_exit(self) -> None:
-        self._safe_to_exit = True
+        self._exit = _ExitSignal.DRAIN
 
     def get_status(self) -> Dict[str, Any]:
         import os
@@ -911,12 +963,11 @@ class StageWorker:
             "worker_id": self.worker_id,
             "stage_id": self.stage_id,
             "pid": os.getpid(),
-            "running": self._running,
-            "safe_to_exit": self._safe_to_exit,
+            "exit_signal": self._exit.value,
         }
 
     def stop(self) -> None:
-        self._running = False
+        self._exit = _ExitSignal.STOP
 
     def invoke_operator(self, method_name: str, *args, **kwargs) -> Any:
         from _internal.core.operator import is_master_callable
