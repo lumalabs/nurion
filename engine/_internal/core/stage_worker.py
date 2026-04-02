@@ -30,7 +30,6 @@ Source workers claim from planner queue (single queue, not QueueGroup).
 from __future__ import annotations
 
 import asyncio
-import enum
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, NamedTuple, Optional
@@ -127,19 +126,15 @@ class PayloadMissingError(RuntimeError):
         self.payload_key = payload_key
 
 
-class _ExitSignal(enum.Enum):
-    """Worker lifecycle state — transitions: RUNNING → DRAIN → STOP."""
-
-    RUNNING = "running"  # Normal operation
-    DRAIN = "drain"  # Finish current work, then exit (safe_to_exit)
-    STOP = "stop"  # Stop immediately (external kill)
-
-
 @ray.remote
 class StageWorker:
     """Worker with claim-based processing model and optional merge.
 
-    State is minimal: ``_exit`` enum + lazy-init ``queue_client``/``_operator``.
+    Exit logic: worker exits when broker returns ``upstream_drained=True``
+    alongside an empty claim.  No master notification needed — broker is
+    the single source of truth for queue completion.
+
+    State is minimal: ``_stopped`` bool + lazy-init ``queue_client``/``_operator``.
     All config comes from ``_runtime`` (frozen dataclass) and ``stage``.
     """
 
@@ -158,8 +153,8 @@ class StageWorker:
         self.queue_client: Optional[AnvilQueueClient] = None
         self._operator: Optional[Operator] = None
 
-        # Single exit signal — replaces _running + _safe_to_exit
-        self._exit = _ExitSignal.RUNNING
+        # External stop signal (master kill). Normal exit is via broker drained flag.
+        self._stopped = False
 
     # --- Properties (replace redundant field copies) ---
 
@@ -221,7 +216,7 @@ class StageWorker:
 
     async def run(self) -> Dict[str, Any]:
         """Main entry point.  Lazy-inits operator and queue client."""
-        self._exit = _ExitSignal.RUNNING
+        self._stopped = False
         self.logger.info(f"Worker {self.worker_id} starting")
 
         if not self._runtime.broker_endpoint or not self._runtime.upstream:
@@ -238,7 +233,7 @@ class StageWorker:
             self.logger.error(f"Worker {self.worker_id} failed: {e}")
             raise
         finally:
-            self._exit = _ExitSignal.STOP
+            self._stopped = True
             await self._cleanup()
 
     async def _run_claim_loop(self) -> None:
@@ -267,9 +262,9 @@ class StageWorker:
 
         last_claimed_time = time.time()
 
-        while self._exit != _ExitSignal.STOP:
+        while not self._stopped:
             try:
-                records = self.queue_client.claim(
+                records, drained = self.queue_client.claim(
                     upstream_queue,
                     batch_size=self._batch_size,
                     timeout_ms=get_config().worker_claim_timeout_ms,
@@ -278,12 +273,13 @@ class StageWorker:
                 if records:
                     last_claimed_time = time.time()
                     pending.extend(records)
+                elif drained:
+                    # Broker confirms: queue finished + empty. Flush and exit.
+                    if pending:
+                        await self._process_and_ack(pending)
+                        pending.clear()
+                    break
                 else:
-                    if self._should_exit():
-                        if pending:
-                            await self._process_and_ack(pending)
-                            pending.clear()
-                        break
                     idle_s = time.time() - last_claimed_time
                     if (
                         get_config().worker_idle_timeout_s > 0
@@ -345,9 +341,9 @@ class StageWorker:
         # the broker deadlocks under high concurrency.
         last_claimed_time = time.time()
 
-        while self._exit != _ExitSignal.STOP:
+        while not self._stopped:
             try:
-                records, source_queue, _ = self.queue_client.claim_from_group(
+                records, source_queue, _, drained = self.queue_client.claim_from_group(
                     group_name,
                     batch_size=self._batch_size,
                     timeout_ms=get_config().worker_claim_timeout_ms,
@@ -366,14 +362,15 @@ class StageWorker:
                         pending.clear()
                     current_source_queue = source_queue
                     pending.extend(records)
+                elif drained:
+                    # Broker confirms: group finished + all partitions empty.
+                    if pending and current_source_queue:
+                        await self._process_and_ack(
+                            pending, upstream_queue_override=current_source_queue
+                        )
+                        pending.clear()
+                    break
                 else:
-                    if self._should_exit():
-                        if pending and current_source_queue:
-                            await self._process_and_ack(
-                                pending, upstream_queue_override=current_source_queue
-                            )
-                            pending.clear()
-                        break
                     # Idle timeout: broker may be deadlocked
                     idle_s = time.time() - last_claimed_time
                     if (
@@ -914,9 +911,8 @@ class StageWorker:
 
         return puts
 
-    def _should_exit(self) -> bool:
-        """Check if this worker should exit (master signalled DRAIN)."""
-        return self._exit == _ExitSignal.DRAIN
+    # _should_exit removed: workers now exit when broker returns
+    # upstream_drained=True in the claim response. No flag needed.
 
     async def _cleanup(self) -> None:
         if self._operator:
@@ -931,7 +927,11 @@ class StageWorker:
     # === Status and Control ===
 
     def notify_safe_to_exit(self) -> None:
-        self._exit = _ExitSignal.DRAIN
+        """Deprecated: kept for backward compat but no longer needed.
+
+        Workers now exit based on broker's upstream_drained flag.
+        """
+        pass  # no-op
 
     def get_status(self) -> Dict[str, Any]:
         import os
@@ -940,11 +940,11 @@ class StageWorker:
             "worker_id": self.worker_id,
             "stage_id": self.stage_id,
             "pid": os.getpid(),
-            "exit_signal": self._exit.value,
+            "stopped": self._stopped,
         }
 
     def stop(self) -> None:
-        self._exit = _ExitSignal.STOP
+        self._stopped = True
 
     def invoke_operator(self, method_name: str, *args, **kwargs) -> Any:
         from _internal.core.operator import is_master_callable

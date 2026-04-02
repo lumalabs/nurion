@@ -83,9 +83,6 @@ class WorkerManager:
         self._worker_slots: Dict[str, int] = {}
         self._free_slots: List[int] = []
 
-        # Exit tracking
-        self._safe_to_exit = False
-
     @property
     def workers(self) -> Dict[str, ray.actor.ActorHandle]:
         """Get current workers (read-only view)."""
@@ -113,11 +110,6 @@ class WorkerManager:
         Raises:
             RuntimeError: If is_min_worker=True and worker cannot start
         """
-        # No point spawning if upstream is already drained
-        if self._safe_to_exit and not is_min_worker:
-            self._logger.debug("Skipping spawn: upstream already drained")
-            return None
-
         worker_id = await self._create_worker()
 
         if not is_min_worker:
@@ -373,44 +365,12 @@ class WorkerManager:
                 self._free_slots.append(slot)
 
     async def notify_worker_safe_to_exit(self, worker_id: str) -> None:
-        """Notify a specific worker that it's safe to exit.
-
-        Used for newly spawned recovery workers when the queue was already
-        drained before this worker spawned.
-        """
-        if not self._safe_to_exit:
-            return
-
-        worker = self._workers.get(worker_id)
-        if worker is None:
-            return
-
-        try:
-            worker.notify_safe_to_exit.remote()
-            self._logger.debug(f"Notified recovered worker {worker_id}: safe to exit")
-        except Exception as e:
-            self._logger.warning(f"Failed to notify {worker_id} safe to exit: {e}")
-
-    def clear_safe_to_exit(self) -> None:
-        """Reset safe_to_exit flag.
-
-        Called by master when recovered messages need processing — newly
-        spawned workers must not exit immediately.
-        """
-        self._safe_to_exit = False
+        """No-op. Workers now exit based on broker's upstream_drained flag."""
+        pass
 
     async def notify_safe_to_exit(self) -> None:
-        """Notify all workers that it's safe to exit.
-
-        Called by master when queue is confirmed drained (finished + empty).
-        """
-        self._safe_to_exit = True
-        for worker_id, worker in self._workers.items():
-            try:
-                worker.notify_safe_to_exit.remote()
-                self._logger.debug(f"Notified worker {worker_id}: safe to exit")
-            except Exception as e:
-                self._logger.warning(f"Failed to notify worker {worker_id} safe to exit: {e}")
+        """No-op. Workers now exit based on broker's upstream_drained flag."""
+        pass
 
     def get_worker(self, worker_id: str) -> Optional[ray.actor.ActorHandle]:
         """Get a worker actor handle by ID."""

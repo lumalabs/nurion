@@ -41,7 +41,7 @@ Example:
     # On Worker
     client = AnvilQueueClient("master-host:50051", worker_id="worker-1")
     client.start()
-    messages = client.claim("my-queue", batch_size=10)
+    messages, drained = client.claim("my-queue", batch_size=10)
     client.ack(
         "my-queue",
         [m.msg_id for m in messages],
@@ -308,10 +308,17 @@ class AnvilQueueClient:
             raise
 
     # Consumer
-    def claim(self, queue: str, batch_size: int = 1, timeout_ms: int = 5000) -> List[AnvilRecord]:
+    def claim(
+        self, queue: str, batch_size: int = 1, timeout_ms: int = 5000
+    ) -> tuple[list[AnvilRecord], bool]:
+        """Claim messages from a queue.
+
+        Returns (records, upstream_drained). upstream_drained is True when
+        records is empty AND the queue is finished + fully drained.
+        """
         client = self._check()
-        messages = client.claim(queue, batch_size, timeout_ms)
-        return [AnvilRecord.from_message(m) for m in messages]
+        messages, drained = client.claim(queue, batch_size, timeout_ms)
+        return [AnvilRecord.from_message(m) for m in messages], drained
 
     def ack(
         self,
@@ -471,10 +478,15 @@ class AnvilQueueClient:
         assigned_partitions: Optional[List[int]] = None,
         allow_steal: bool = False,
         steal_pending_threshold: int = 0,
-    ) -> "tuple[List[AnvilRecord], str, int]":
-        """Claim from a partition group (broker picks partition)."""
+    ) -> "tuple[list[AnvilRecord], str, int, bool]":
+        """Claim from a partition group (broker picks partition).
+
+        Returns (records, source_queue, source_partition, upstream_drained).
+        upstream_drained is True when records is empty AND the group is
+        finished + fully drained.
+        """
         client = self._check()
-        messages, source_queue, source_partition = client.claim_from_group(
+        messages, source_queue, source_partition, drained = client.claim_from_group(
             group_name,
             batch_size=batch_size,
             timeout_ms=timeout_ms,
@@ -486,6 +498,7 @@ class AnvilQueueClient:
             [AnvilRecord.from_message(m) for m in messages],
             source_queue,
             source_partition,
+            drained,
         )
 
     def is_group_finished(self, group_name: str) -> Dict:

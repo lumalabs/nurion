@@ -908,7 +908,7 @@ class TestStageWorkerNvmeIntegration:
         anvil_backend.client.create_queue("hint_upstream")
         anvil_backend.client.push("hint_upstream", msg.to_bytes())
 
-        records = anvil_backend.client.claim("hint_upstream", batch_size=1, timeout_ms=1000)
+        records, _ = anvil_backend.client.claim("hint_upstream", batch_size=1, timeout_ms=1000)
         assert len(records) == 1
 
         await worker._process_and_ack(records)

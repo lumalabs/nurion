@@ -273,7 +273,6 @@ class StageMaster:
         if self._source_manager is not None and not self._source_manager.is_direct_producer:
             self._source_manager.start_split_production(
                 queue_client,
-                self._worker_manager,
                 backpressure_fn=self._check_backpressure,
                 running_fn=lambda: self._running,
             )
@@ -352,20 +351,10 @@ class StageMaster:
                             f"Stage {self.stage_id}: no workers but queue has "
                             f"unprocessed messages, spawning worker"
                         )
-                        # Clear safe_to_exit so the new worker doesn't
-                        # immediately exit — there's recovered work to do.
-                        self._worker_manager.clear_safe_to_exit()
                         worker_id = await self._worker_manager.spawn_worker(is_min_worker=False)
                         if worker_id is None:
                             await asyncio.sleep(0.5)
                             continue
-                        # Restart completion polling so we re-check after
-                        # the recovered messages are processed.
-                        if self._upstream_finished and self.upstream and self._queue_client:
-                            asyncio.create_task(
-                                self._poll_queue_completion(),
-                                name=f"poll_completion_retry_{self.stage_id}",
-                            )
                     else:
                         self._finished = True
                         break
@@ -389,28 +378,12 @@ class StageMaster:
                             f"not recovering {len(failed)} idle workers"
                         )
                     else:
-                        # Clear safe_to_exit so recovery can spawn workers.
-                        # Without this, spawn_worker() skips when _safe_to_exit
-                        # is True (worker_manager.py:117), silently losing data.
-                        self._worker_manager.clear_safe_to_exit()
                         self._recovery_manager.record_failures(
                             len(failed), self._worker_manager.worker_count
                         )
                         result = await self._recovery_manager.recover_failed_workers(
                             failed_worker_ids=failed,
                         )
-                        # Restart completion polling so recovered workers
-                        # get notified when their work is done.
-                        if (
-                            self._upstream_finished
-                            and self.upstream
-                            and self._queue_client
-                            and result.spawned_count > 0
-                        ):
-                            asyncio.create_task(
-                                self._poll_queue_completion(),
-                                name=f"poll_completion_recovery_{self.stage_id}",
-                            )
                         if result.should_give_up:
                             self._failed = True
                             self._failure_message = result.give_up_reason
@@ -550,45 +523,6 @@ class StageMaster:
         """Notify this stage that all upstream stages have finished."""
         self._upstream_finished = True
         self.logger.info(f"Stage {self.stage_id} notified: upstream finished")
-
-        if self.upstream and self._queue_client:
-            asyncio.create_task(
-                self._poll_queue_completion(),
-                name=f"poll_completion_{self.stage_id}",
-            )
-
-    async def _poll_queue_completion(self) -> None:
-        """Poll upstream queue until it's safe for workers to exit."""
-        if not self._queue_client or not self.upstream:
-            return
-
-        cfg = get_config()
-        poll_interval = cfg.stage_completion_poll_interval_s
-        max_consecutive_errors = cfg.stage_completion_max_errors
-        consecutive_errors = 0
-
-        while self._running:
-            try:
-                if self.upstream.is_group:
-                    result = self._queue_client.is_group_finished(self.upstream.name)
-                else:
-                    result = self._queue_client.is_queue_finished(self.upstream.name)
-
-                consecutive_errors = 0
-                if result.get("safe_to_exit", False):
-                    self.logger.debug(
-                        f"Stage {self.stage_id} upstream queue(s) drained, notifying workers"
-                    )
-                    if self._worker_manager:
-                        await self._worker_manager.notify_safe_to_exit()
-                    return
-            except Exception as e:
-                consecutive_errors += 1
-                if consecutive_errors >= max_consecutive_errors:
-                    raise RuntimeError(f"Failed to poll upstream queue completion: {e}") from e
-                self.logger.debug(f"Error polling queue completion: {e}")
-
-            await asyncio.sleep(poll_interval)
 
     def get_queue_client(self) -> Optional[AnvilQueueClient]:
         return self._queue_client
