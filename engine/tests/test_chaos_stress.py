@@ -151,7 +151,9 @@ class TestStressScenarios:
             sink_data = get_sink_records(self.collector_name)
 
             if len(sink_data) != expected_count:
-                expected_ids = {i for i in range(NUM_RECORDS) if i % FILTER_MODULO == FILTER_REMAINDER}
+                expected_ids = {
+                    i for i in range(NUM_RECORDS) if i % FILTER_MODULO == FILTER_REMAINDER
+                }
                 dump_data_loss_diagnostics(
                     test_name="test_many_small_batches_stress",
                     sink_data=sink_data,

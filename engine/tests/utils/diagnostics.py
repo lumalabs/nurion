@@ -77,9 +77,9 @@ def dump_data_loss_diagnostics(
     actual_count = len(sink_data)
     delta = expected_count - actual_count
 
-    print(f"\n{'='*70}")
+    print(f"\n{'=' * 70}")
     print(f"DIAGNOSTIC: {test_name}")
-    print(f"{'='*70}")
+    print(f"{'=' * 70}")
     print(f"Expected: {expected_count}, Got: {actual_count}, Delta: {delta}")
 
     # --- Missing IDs ---
@@ -107,7 +107,9 @@ def dump_data_loss_diagnostics(
     if missing_source_ids and batch_size > 0:
         affected_batches = sorted({mid // batch_size for mid in missing_source_ids})
         print(f"Affected batches (split indices): {affected_batches}")
-        print(f"Batch ranges: {[(b * batch_size, (b+1) * batch_size - 1) for b in affected_batches]}")
+        print(
+            f"Batch ranges: {[(b * batch_size, (b + 1) * batch_size - 1) for b in affected_batches]}"
+        )
 
     # --- Collector dedup stats ---
     try:
@@ -122,7 +124,7 @@ def dump_data_loss_diagnostics(
     if runner and hasattr(runner, "_shared_broker") and runner._shared_broker:
         _dump_broker_stats(runner)
 
-    print(f"{'='*70}\n")
+    print(f"{'=' * 70}\n")
 
 
 def _dump_broker_stats(runner: Any) -> None:
