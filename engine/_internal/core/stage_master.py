@@ -352,10 +352,20 @@ class StageMaster:
                             f"Stage {self.stage_id}: no workers but queue has "
                             f"unprocessed messages, spawning worker"
                         )
+                        # Clear safe_to_exit so the new worker doesn't
+                        # immediately exit — there's recovered work to do.
+                        self._worker_manager.clear_safe_to_exit()
                         worker_id = await self._worker_manager.spawn_worker(is_min_worker=False)
                         if worker_id is None:
                             await asyncio.sleep(0.5)
                             continue
+                        # Restart completion polling so we re-check after
+                        # the recovered messages are processed.
+                        if self._upstream_finished and self.upstream and self._queue_client:
+                            asyncio.create_task(
+                                self._poll_queue_completion(),
+                                name=f"poll_completion_retry_{self.stage_id}",
+                            )
                     else:
                         self._finished = True
                         break

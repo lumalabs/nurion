@@ -391,6 +391,14 @@ class WorkerManager:
         except Exception as e:
             self._logger.warning(f"Failed to notify {worker_id} safe to exit: {e}")
 
+    def clear_safe_to_exit(self) -> None:
+        """Reset safe_to_exit flag.
+
+        Called by master when recovered messages need processing — newly
+        spawned workers must not exit immediately.
+        """
+        self._safe_to_exit = False
+
     async def notify_safe_to_exit(self) -> None:
         """Notify all workers that it's safe to exit.
 
