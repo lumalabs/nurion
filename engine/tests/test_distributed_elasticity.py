@@ -202,12 +202,26 @@ class TestElasticScaling:
             logger.info(f"Killed {kills} workers")
 
             await asyncio.wait_for(run_task, timeout=60)
+
+            sink_data = get_sink_records(self.collector_name)
+            if len(sink_data) != expected_count:
+                from tests.utils.diagnostics import dump_data_loss_diagnostics
+
+                expected_keys = {(i, c) for i in range(NUM_RECORDS) for c in range(EXPLODE_FACTOR)}
+                dump_data_loss_diagnostics(
+                    test_name="test_scale_down_worker_failures",
+                    sink_data=sink_data,
+                    expected_count=expected_count,
+                    collector_name=self.collector_name,
+                    runner=runner,
+                    batch_size=50,
+                    expected_ids=expected_keys,
+                    composite_key_fields=["id", "copy_idx"],
+                )
         finally:
             await runner.stop()
 
         assert kills > 0, "No workers were killed - test invalid"
-
-        sink_data = get_sink_records(self.collector_name)
 
         # Exactly-once: correct count and no duplicates
         assert validator.verify_count(sink_data, expected_count), (
