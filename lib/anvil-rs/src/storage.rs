@@ -465,9 +465,11 @@ impl AnvilStorage {
         let c = self.load_or_init_counters(queue).await?;
         let count = messages.len() as u64;
 
-        // Reserve sequence range atomically
+        // Reserve sequence range atomically (push_seq is pre-committed —
+        // gaps from failed writes are harmless, claim_seq skips missing keys)
         let base_seq = c.push_seq.fetch_add(count, Ordering::Relaxed);
-        let new_total_pushed = c.total_pushed.fetch_add(count, Ordering::Relaxed) + count;
+        // Read current total_pushed (don't update yet — wait for commit)
+        let cur_total_pushed = c.total_pushed.load(Ordering::Relaxed);
 
         let mut batch = WriteBatch::new();
         for (i, msg) in messages.iter().enumerate() {
@@ -476,8 +478,16 @@ impl AnvilStorage {
             batch.put(Self::pending_key(queue, seq), msg.msg_id.as_bytes());
         }
         // Persist counters
-        Self::persist_push_counters(&mut batch, queue, base_seq + count, new_total_pushed);
+        Self::persist_push_counters(
+            &mut batch,
+            queue,
+            base_seq + count,
+            cur_total_pushed + count,
+        );
         self.db.write(batch).await?;
+
+        // Now safe to update in-memory counter (DB is consistent)
+        c.total_pushed.fetch_add(count, Ordering::Relaxed);
         Ok(())
     }
 
@@ -537,8 +547,8 @@ impl AnvilStorage {
         }
 
         let actual_count = claimed_items.len() as u64;
-        let new_total_claimed =
-            c.total_claimed.fetch_add(actual_count, Ordering::Relaxed) + actual_count;
+        // Read current total_claimed (don't update yet — wait for commit)
+        let cur_total_claimed = c.total_claimed.load(Ordering::Relaxed);
 
         let mut batch = WriteBatch::new();
         let mut result = Vec::new();
@@ -556,9 +566,12 @@ impl AnvilStorage {
         batch.put(Self::seq_claim_key(queue), end.to_le_bytes());
         batch.put(
             Self::cnt_total_claimed_key(queue),
-            new_total_claimed.to_le_bytes(),
+            (cur_total_claimed + actual_count).to_le_bytes(),
         );
         self.db.write(batch).await?;
+
+        // Now safe to update in-memory counter (DB is consistent)
+        c.total_claimed.fetch_add(actual_count, Ordering::Relaxed);
 
         Ok(result)
     }
@@ -611,6 +624,9 @@ impl AnvilStorage {
         }
 
         let mut batch = WriteBatch::new();
+        let mut has_downstream_push = false;
+        let mut downstream_push_count: u64 = 0;
+        let mut downstream_queue_name = String::new();
 
         // 1. Validate claims + move messages from claimed to acked
         if !msg_ids.is_empty() {
@@ -624,9 +640,9 @@ impl AnvilStorage {
             .await?;
 
             let c = self.load_or_init_counters(queue).await?;
-            let new_total_unclaimed =
-                c.total_unclaimed.fetch_add(ack_count, Ordering::Relaxed) + ack_count;
-            let new_total_acked = c.total_acked.fetch_add(ack_count, Ordering::Relaxed) + ack_count;
+            // Read current values (don't update yet — wait for commit)
+            let cur_unclaimed = c.total_unclaimed.load(Ordering::Relaxed);
+            let cur_acked = c.total_acked.load(Ordering::Relaxed);
 
             for msg_id in msg_ids {
                 batch.delete(Self::claimed_key(queue, msg_id));
@@ -634,11 +650,11 @@ impl AnvilStorage {
             }
             batch.put(
                 Self::cnt_total_unclaimed_key(queue),
-                new_total_unclaimed.to_le_bytes(),
+                (cur_unclaimed + ack_count).to_le_bytes(),
             );
             batch.put(
                 Self::cnt_total_acked_key(queue),
-                new_total_acked.to_le_bytes(),
+                (cur_acked + ack_count).to_le_bytes(),
             );
         }
 
@@ -649,8 +665,10 @@ impl AnvilStorage {
             if !messages.is_empty() {
                 let dc = self.load_or_init_counters(downstream_queue).await?;
                 let count = messages.len() as u64;
+                // push_seq is pre-committed (sequence reservation, gaps are harmless)
                 let base_seq = dc.push_seq.fetch_add(count, Ordering::Relaxed);
-                let new_dp = dc.total_pushed.fetch_add(count, Ordering::Relaxed) + count;
+                // Read current total_pushed (don't update yet — wait for commit)
+                let cur_dp = dc.total_pushed.load(Ordering::Relaxed);
 
                 for (i, msg) in messages.iter().enumerate() {
                     batch.put(
@@ -662,7 +680,15 @@ impl AnvilStorage {
                         msg.msg_id.as_bytes(),
                     );
                 }
-                Self::persist_push_counters(&mut batch, downstream_queue, base_seq + count, new_dp);
+                Self::persist_push_counters(
+                    &mut batch,
+                    downstream_queue,
+                    base_seq + count,
+                    cur_dp + count,
+                );
+                has_downstream_push = true;
+                downstream_push_count = count;
+                downstream_queue_name = downstream_queue.to_string();
             }
         }
 
@@ -680,7 +706,20 @@ impl AnvilStorage {
             }
         }
 
+        // 4. Commit — ONLY update in-memory counters AFTER successful write
         self.db.write(batch).await?;
+
+        // Now safe to update atomic counters (DB is consistent)
+        if !msg_ids.is_empty() {
+            let c = self.load_or_init_counters(queue).await?;
+            c.total_unclaimed.fetch_add(ack_count, Ordering::Relaxed);
+            c.total_acked.fetch_add(ack_count, Ordering::Relaxed);
+        }
+        if has_downstream_push {
+            let dc = self.load_or_init_counters(&downstream_queue_name).await?;
+            dc.total_pushed
+                .fetch_add(downstream_push_count, Ordering::Relaxed);
+        }
         Ok(())
     }
 
@@ -897,9 +936,11 @@ impl AnvilStorage {
         let c = self.load_or_init_counters(queue).await?;
         let nack_count = msg_ids.len() as u64;
 
-        // Reserve new pending sequences at the tail
+        // Reserve new pending sequences at the tail (push_seq is pre-committed —
+        // gaps from failed writes are harmless, claim_seq skips missing keys)
         let base_seq = c.push_seq.fetch_add(nack_count, Ordering::Relaxed);
-        let new_unclaimed = c.total_unclaimed.fetch_add(nack_count, Ordering::Relaxed) + nack_count;
+        // Read current total_unclaimed (don't update yet — wait for commit)
+        let cur_unclaimed = c.total_unclaimed.load(Ordering::Relaxed);
 
         let mut batch = WriteBatch::new();
         for (i, msg_id) in msg_ids.iter().enumerate() {
@@ -915,7 +956,7 @@ impl AnvilStorage {
         );
         batch.put(
             Self::cnt_total_unclaimed_key(queue),
-            new_unclaimed.to_le_bytes(),
+            (cur_unclaimed + nack_count).to_le_bytes(),
         );
 
         // State updates
@@ -937,6 +978,9 @@ impl AnvilStorage {
         }
 
         self.db.write(batch).await?;
+
+        // Now safe to update in-memory counter (DB is consistent)
+        c.total_unclaimed.fetch_add(nack_count, Ordering::Relaxed);
         Ok(())
     }
 
