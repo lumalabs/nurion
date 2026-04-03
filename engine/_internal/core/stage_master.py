@@ -202,14 +202,24 @@ class StageMaster:
         )
 
     def _has_unprocessed_messages(self) -> bool:
-        """Check if upstream queue(s) still have unprocessed messages."""
+        """Check if upstream queue(s) still have pending or claimed messages.
+
+        Uses raw message counts (not ``all_drained``) because the master
+        needs to know "is there actual work?" — regardless of whether
+        upstream has called ``mark_finished`` yet.  The ``finished`` flag
+        is for worker exit decisions (via broker ``upstream_drained``),
+        not for the master's spawn/finish logic.
+        """
         if not self._queue_client or not self.upstream:
             return False
 
         try:
             if self.upstream.is_group:
                 result = self._queue_client.is_group_finished(self.upstream.name)
-                return not result.get("all_drained", False)
+                for p in result.get("partitions", []):
+                    if p.get("pending_count", 0) > 0 or p.get("claimed_count", 0) > 0:
+                        return True
+                return False
 
             stats = self._queue_client.get_stats(self.upstream.name)
             pending = stats.get("pending_count", 0)
