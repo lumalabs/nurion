@@ -1403,7 +1403,7 @@ impl AnvilStorage {
         let mut all_new_msg_ids = Vec::new();
         let mut batch = WriteBatch::new();
 
-        // 1. Validate claims and ack upstream
+        // 1. Validate claims (before any mutations)
         if !upstream_msg_ids.is_empty() {
             if upstream_claim_tokens.len() != upstream_msg_ids.len() {
                 return Err(Box::new(SlateError::invalid(
@@ -1419,12 +1419,23 @@ impl AnvilStorage {
                 expected_worker_id,
             )
             .await?;
+        }
 
+        // 2. Build WriteBatch (ack upstream + push downstream + state)
+        // Reserve sequence ranges for downstream pushes (needed for pending keys).
+        // Use a pre-allocated Vec to track what counters need updating AFTER commit.
+        struct PendingCounterUpdate {
+            queue: String,
+            push_count: u64,
+        }
+        let mut pending_push_updates: Vec<PendingCounterUpdate> = Vec::new();
+
+        // 2a. Ack upstream keys
+        if !upstream_msg_ids.is_empty() {
             let uc = self.load_or_init_counters(upstream_queue).await?;
-            let new_total_unclaimed =
-                uc.total_unclaimed.fetch_add(ack_count, Ordering::Relaxed) + ack_count;
-            let new_total_acked =
-                uc.total_acked.fetch_add(ack_count, Ordering::Relaxed) + ack_count;
+            // Read current values (don't update yet — wait for commit)
+            let cur_unclaimed = uc.total_unclaimed.load(Ordering::Relaxed);
+            let cur_acked = uc.total_acked.load(Ordering::Relaxed);
 
             for msg_id in upstream_msg_ids {
                 batch.delete(Self::claimed_key(upstream_queue, msg_id));
@@ -1432,15 +1443,15 @@ impl AnvilStorage {
             }
             batch.put(
                 Self::cnt_total_unclaimed_key(upstream_queue),
-                new_total_unclaimed.to_le_bytes(),
+                (cur_unclaimed + ack_count).to_le_bytes(),
             );
             batch.put(
                 Self::cnt_total_acked_key(upstream_queue),
-                new_total_acked.to_le_bytes(),
+                (cur_acked + ack_count).to_le_bytes(),
             );
         }
 
-        // 2. Push to each partition queue
+        // 2b. Push to downstream partition queues
         for (pid, messages) in partition_payloads {
             if messages.is_empty() {
                 continue;
@@ -1449,8 +1460,11 @@ impl AnvilStorage {
             let dc = self.load_or_init_counters(partition_queue).await?;
             let msg_count = messages.len() as u64;
 
+            // Reserve sequence range atomically (must be unique across concurrent calls).
+            // push_seq is incremented now to prevent collisions; if the write fails,
+            // this leaves a gap in the sequence — harmless (claim_seq skips missing keys).
             let base_seq = dc.push_seq.fetch_add(msg_count, Ordering::Relaxed);
-            let new_dp = dc.total_pushed.fetch_add(msg_count, Ordering::Relaxed) + msg_count;
+            let cur_total_pushed = dc.total_pushed.load(Ordering::Relaxed);
 
             for (i, msg) in messages.iter().enumerate() {
                 let seq = base_seq + i as u64;
@@ -1465,10 +1479,19 @@ impl AnvilStorage {
                 all_new_msg_ids.push(msg.msg_id.clone());
             }
 
-            Self::persist_push_counters(&mut batch, partition_queue, base_seq + msg_count, new_dp);
+            Self::persist_push_counters(
+                &mut batch,
+                partition_queue,
+                base_seq + msg_count,
+                cur_total_pushed + msg_count,
+            );
+            pending_push_updates.push(PendingCounterUpdate {
+                queue: partition_queue.clone(),
+                push_count: msg_count,
+            });
         }
 
-        // 3. State updates
+        // 2c. State updates
         if let Some(namespace) = state_namespace {
             if let Some(puts) = state_puts {
                 for (key, value) in puts {
@@ -1482,7 +1505,23 @@ impl AnvilStorage {
             }
         }
 
+        // 3. Commit — ONLY update in-memory counters AFTER successful write
         self.db.write(batch).await?;
+
+        // Now safe to update atomic counters (DB is consistent)
+        if !upstream_msg_ids.is_empty() {
+            let uc = self.load_or_init_counters(upstream_queue).await?;
+            uc.total_unclaimed.fetch_add(ack_count, Ordering::Relaxed);
+            uc.total_acked.fetch_add(ack_count, Ordering::Relaxed);
+        }
+        // push_seq was already incremented (sequence reservation).
+        // Only total_pushed needs post-commit update.
+        for update in &pending_push_updates {
+            let dc = self.load_or_init_counters(&update.queue).await?;
+            dc.total_pushed
+                .fetch_add(update.push_count, Ordering::Relaxed);
+        }
+
         Ok(all_new_msg_ids)
     }
 
