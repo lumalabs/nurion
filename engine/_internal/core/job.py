@@ -77,6 +77,7 @@ class JobConfig:
     claim_timeout_secs: float = 60.0  # Default: 60s before reclaiming from dead workers
     recovery_interval_secs: float = 10.0  # Default: check every 10s for expired claims
     ray_init_kwargs: Dict[str, Any] = field(default_factory=dict)
+    autoscale_enabled: bool = False
     webui: WebUIConfig = field(default_factory=WebUIConfig)
     payload_store_uri: str = "ray://"
     payload_store_options: Dict[str, Any] = field(default_factory=dict)

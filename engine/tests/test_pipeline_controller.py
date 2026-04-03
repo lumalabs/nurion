@@ -171,6 +171,7 @@ class TestScaling:
         ctrl = make_controller(
             stage_configs=configs,
             stats=stats,
+            scaling_enabled=True,
             scale_up_threshold=100,
             scale_down_threshold=10,
         )
@@ -211,9 +212,31 @@ class TestScaling:
             ),
         }
         ctrl = make_controller(
-            stage_configs=configs, stats=stats, scale_down_threshold=10
+            stage_configs=configs, stats=stats, scaling_enabled=True, scale_down_threshold=10
         )
         ctrl._tick({"s0": master})
+        assert "s0" not in ctrl._last_scale_down
+
+    def test_no_scaling_when_disabled(self):
+        """Scaling is opt-in — disabled by default."""
+        master = MockStageMaster(stage_id="s0", worker_count=4, max_workers=8)
+        stats = {
+            "input_q": QueueStats(pending_count=9999),
+            "output_q": QueueStats(),
+        }
+        configs = {
+            "s0": StageQueueConfig(
+                stage_id="s0",
+                input=QueueRef.group("input_q"),
+                output=QueueRef.group("output_q"),
+            ),
+        }
+        ctrl = make_controller(
+            stage_configs=configs, stats=stats,
+            # scaling_enabled defaults to False
+        )
+        ctrl._tick({"s0": master})
+        assert "s0" not in ctrl._last_scale_up
         assert "s0" not in ctrl._last_scale_down
 
     def test_skip_source_stages(self):
@@ -226,7 +249,7 @@ class TestScaling:
                 output=QueueRef.group("output_q"),
             ),
         }
-        ctrl = make_controller(stage_configs=configs, stats=stats)
+        ctrl = make_controller(stage_configs=configs, stats=stats, scaling_enabled=True)
         ctrl._tick({"s0": master})
         assert "s0" not in ctrl._last_scale_up
 

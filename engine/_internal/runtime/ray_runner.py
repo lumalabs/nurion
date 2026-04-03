@@ -529,7 +529,7 @@ class RayJobRunner:
             self._start_controller()
 
             # Eager fill: scale stages up to available capacity immediately
-            if self._controller:
+            if self._controller and self.job.config.autoscale_enabled:
                 await self._controller.eager_fill(self._masters)
 
             # Give asyncio tasks a chance to start executing
@@ -646,10 +646,9 @@ class RayJobRunner:
         if not self._queue_stats_client:
             return
 
-        controller_config = ControllerConfig()
-        # If autoscale_config is None, the controller still runs for flow
-        # control and liveness detection, but scaling decisions are skipped
-        # because no stages will exceed min/max thresholds without it.
+        controller_config = ControllerConfig(
+            scaling_enabled=self.job.config.autoscale_enabled,
+        )
 
         self._controller = PipelineController(
             config=controller_config,

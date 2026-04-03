@@ -52,6 +52,9 @@ class ControllerConfig:
         default_factory=lambda: get_config().autoscaler_check_interval_s
     )
 
+    # Scaling: disabled by default (opt-in via JobConfig or configure())
+    scaling_enabled: bool = False
+
     # Scaling thresholds (input-lag based; Phase 2 will switch to ratio-based)
     scale_up_threshold: int = field(
         default_factory=lambda: get_config().autoscaler_scale_up_lag
@@ -212,6 +215,8 @@ class PipelineController:
         saturated: bool,
     ) -> None:
         """Scale based on input demand, constrained by output saturation."""
+        if not self._config.scaling_enabled:
+            return  # Scaling is opt-in
         if m.is_source:
             return  # Source stages have their own rate control
 

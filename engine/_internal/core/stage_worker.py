@@ -414,13 +414,13 @@ class StageWorker:
                 # Best-effort nack pending records so they return to the queue
                 # immediately instead of waiting for claim_timeout_secs.
                 if pending and current_source_queue:
-                    nack_ids = [r.msg_id for r in pending]
-                    nack_tokens = [r.claim_token for r in pending if r.claim_token]
-                    if len(nack_ids) == len(nack_tokens):
+                    # Filter to records with valid claim tokens
+                    nackable = [(r.msg_id, r.claim_token) for r in pending if r.claim_token]
+                    if nackable:
                         try:
                             self._nack_all(
-                                nack_ids,
-                                nack_tokens,
+                                [mid for mid, _ in nackable],
+                                [tok for _, tok in nackable],
                                 reason="worker_error",
                                 upstream_queue_override=current_source_queue,
                             )
