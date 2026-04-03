@@ -414,15 +414,18 @@ class StageWorker:
                 # Best-effort nack pending records so they return to the queue
                 # immediately instead of waiting for claim_timeout_secs.
                 if pending and current_source_queue:
-                    try:
-                        self._nack_all(
-                            [r.msg_id for r in pending],
-                            [r.claim_token for r in pending],
-                            reason="worker_error",
-                            upstream_queue_override=current_source_queue,
-                        )
-                    except Exception:
-                        pass  # Fall back to broker timeout recovery
+                    nack_ids = [r.msg_id for r in pending]
+                    nack_tokens = [r.claim_token for r in pending if r.claim_token]
+                    if len(nack_ids) == len(nack_tokens):
+                        try:
+                            self._nack_all(
+                                nack_ids,
+                                nack_tokens,
+                                reason="worker_error",
+                                upstream_queue_override=current_source_queue,
+                            )
+                        except Exception:
+                            pass  # Fall back to broker timeout recovery
                 pending.clear()
                 current_source_queue = None
                 await asyncio.sleep(get_config().worker_error_sleep_s)
