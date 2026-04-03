@@ -325,6 +325,10 @@ class TestLongRunningStability:
             sink_data = get_sink_records(self.collector_name)
 
             if len(sink_data) != expected_count:
+                filtered_ids = {
+                    i for i in range(NUM_RECORDS) if i % FILTER_MODULO == FILTER_REMAINDER
+                }
+                expected_keys = {(i, c) for i in filtered_ids for c in range(EXPLODE_FACTOR)}
                 dump_data_loss_diagnostics(
                     test_name="test_long_running_stability",
                     sink_data=sink_data,
@@ -332,6 +336,8 @@ class TestLongRunningStability:
                     collector_name=self.collector_name,
                     runner=runner,
                     batch_size=100,
+                    expected_ids=expected_keys,
+                    composite_key_fields=["id", "copy_idx"],
                 )
         finally:
             await runner.stop()
