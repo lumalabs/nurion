@@ -54,8 +54,7 @@ from _internal.core.nvme_payload_store import (
     parse_nvme_uri,
 )
 from _internal.queue import AnvilBrokerManager
-from _internal.runtime.autoscaler import SimpleAutoscaler
-from _internal.runtime.backpressure import JobBackpressureController
+from _internal.runtime.pipeline_controller import PipelineController, ControllerConfig
 from _internal.runtime.queue_stats import QueueRef, QueueStatsClient, StageQueueConfig
 from _internal.utils.logging import create_ray_logger
 from _internal.webui.state.writer import AnvilStateWriter
@@ -167,9 +166,9 @@ class RayJobRunner:
         self._masters: Dict[str, StageMaster] = {}
         self._master_tasks: Dict[str, asyncio.Task] = {}
 
-        # Autoscaler (configured in run())
-        self._autoscaler: Optional[SimpleAutoscaler] = None
-        self._autoscale_task: Optional[asyncio.Task] = None
+        # Unified pipeline controller (scaling + flow control + liveness)
+        self._controller: Optional[PipelineController] = None
+        self._controller_task: Optional[asyncio.Task] = None
 
         # WebUI
         self._webui: Optional["JobWebUI"] = None
@@ -182,7 +181,6 @@ class RayJobRunner:
         self._shared_broker: Optional[AnvilBrokerManager] = None
         self._broker_endpoint: Optional[QueueEndpoint] = None
         self._queue_stats_client: Optional[QueueStatsClient] = None
-        self._backpressure_controller: Optional[JobBackpressureController] = None
         self._stage_queue_configs: Dict[str, StageQueueConfig] = {}
         self._stage_bounds: Dict[str, int] = {}
 
@@ -346,17 +344,9 @@ class RayJobRunner:
             self._masters[stage_id] = master
             self.logger.info(f"Created {type(master).__name__} for stage {stage_id}")
 
-        # Build queue config map and attach job-level backpressure controller
+        # Build queue config map for the unified pipeline controller
         self._stage_queue_configs = self._build_stage_queue_configs()
         self._queue_stats_client = self._create_queue_stats_client()
-        if self._queue_stats_client:
-            self._backpressure_controller = JobBackpressureController(
-                queue_stats=self._queue_stats_client,
-                stage_configs=self._stage_queue_configs,
-                dag_edges=self.job.dag_edges,
-            )
-            for master in self._masters.values():
-                master.set_backpressure_provider(self._backpressure_controller)
 
         # Initialize WebUI if enabled
         if self.job.config.webui.enabled:
@@ -370,10 +360,8 @@ class RayJobRunner:
         for stage_id, master in self._masters.items():
             cfg = StageQueueConfig(
                 stage_id=stage_id,
-                input=master.get_backpressure_input(),
-                output=master.get_backpressure_output(),
-                backpressure_threshold_lag=master.stage.backpressure_threshold_lag,
-                backpressure_threshold_queue_size=master.stage.backpressure_threshold_queue_size,
+                input=master.get_input_ref(),
+                output=master.get_output_ref(),
             )
             configs[stage_id] = cfg
         return configs
@@ -537,13 +525,12 @@ class RayJobRunner:
                     self._master_tasks[stage_id] = task
             self.logger.info(f"Created {len(self._master_tasks)} master run tasks")
 
-            # Start autoscaler if configured
-            self._start_autoscaler()
+            # Start pipeline controller (scaling + flow control + liveness)
+            self._start_controller()
 
-            # Eager fill: scale stages up to available capacity immediately,
-            # without waiting for the first autoscaler tick.
-            if self._autoscaler:
-                await self._autoscaler.eager_fill(self._masters)
+            # Eager fill: scale stages up to available capacity immediately
+            if self._controller:
+                await self._controller.eager_fill(self._masters)
 
             # Give asyncio tasks a chance to start executing
             await asyncio.sleep(0)
@@ -598,8 +585,8 @@ class RayJobRunner:
         """Stop the pipeline."""
         self._running = False
 
-        # Stop autoscaler
-        await self._stop_autoscaler()
+        # Stop controller
+        await self._stop_controller()
 
         # Cancel all running tasks
         for stage_id, task in list(self._master_tasks.items()):
@@ -645,7 +632,6 @@ class RayJobRunner:
         if self._queue_stats_client:
             self._queue_stats_client.stop()
             self._queue_stats_client = None
-            self._backpressure_controller = None
 
         # Stop shared broker (after all stages are done)
         await self._stop_shared_broker()
@@ -655,36 +641,41 @@ class RayJobRunner:
 
         self.logger.info("Pipeline stopped")
 
-    def _start_autoscaler(self) -> None:
-        """Start the autoscaler if configured."""
-        autoscale_config = self.job.config.autoscale_config
-        if autoscale_config is None:
+    def _start_controller(self) -> None:
+        """Start the pipeline controller if queue stats are available."""
+        if not self._queue_stats_client:
             return
 
-        self._autoscaler = SimpleAutoscaler(
-            autoscale_config,
+        controller_config = ControllerConfig()
+        # If autoscale_config is None, the controller still runs for flow
+        # control and liveness detection, but scaling decisions are skipped
+        # because no stages will exceed min/max thresholds without it.
+
+        self._controller = PipelineController(
+            config=controller_config,
             queue_stats_client=self._queue_stats_client,
             stage_queue_configs=self._stage_queue_configs,
+            dag_edges=self.job.dag_edges,
         )
-        self._autoscale_task = asyncio.create_task(
-            self._autoscaler.run_loop(self._masters),
-            name="autoscaler",
+        self._controller_task = asyncio.create_task(
+            self._controller.run_loop(self._masters),
+            name="pipeline_controller",
         )
-        self.logger.info("Autoscaler started")
+        self.logger.info("PipelineController started")
 
-    async def _stop_autoscaler(self) -> None:
-        """Stop the autoscaler."""
-        if self._autoscale_task and not self._autoscale_task.done():
-            self._autoscale_task.cancel()
+    async def _stop_controller(self) -> None:
+        """Stop the pipeline controller."""
+        if self._controller_task and not self._controller_task.done():
+            self._controller_task.cancel()
             try:
-                await self._autoscale_task
+                await self._controller_task
             except asyncio.CancelledError:
                 pass
-            self._autoscale_task = None
+            self._controller_task = None
 
-        if self._autoscaler:
-            self._autoscaler.stop()
-            self._autoscaler = None
+        if self._controller:
+            self._controller.stop()
+            self._controller = None
 
     def get_status(self) -> JobStatus:
         """Get current pipeline status."""
