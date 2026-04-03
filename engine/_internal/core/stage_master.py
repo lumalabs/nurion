@@ -410,6 +410,23 @@ class StageMaster:
             if self._sink_manager and self._state != _StageState.FAILED:
                 await self._sink_manager.finalize(queue_client)
 
+            # Verify output queue is empty before marking finished.
+            # If there are still pending/claimed messages in our output,
+            # marking finished is premature — downstream might miss them.
+            try:
+                out_result = queue_client.is_group_finished(self._output_group_name)
+                for p in out_result.get("partitions", []):
+                    out_pending = p.get("pending_count", 0)
+                    out_claimed = p.get("claimed_count", 0)
+                    if out_pending > 0 or out_claimed > 0:
+                        self.logger.warning(
+                            f"Stage {self.stage_id}: output group has "
+                            f"pending={out_pending} claimed={out_claimed} "
+                            f"at mark_finished time — downstream may lose data!"
+                        )
+            except Exception:
+                pass
+
             # Mark output queue(s) as finished (retry up to 3 times — failure
             # would leave downstream waiting forever)
             try:
