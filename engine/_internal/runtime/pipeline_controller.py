@@ -26,9 +26,7 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Dict, List, Optional
-
-import ray
+from typing import TYPE_CHECKING, Dict, List
 
 from _internal.config import get_config
 from _internal.runtime.queue_stats import QueueStatsClient, StageQueueConfig
@@ -352,6 +350,8 @@ class PipelineController:
         reserved_gpu: float = 0.0,
     ) -> int:
         """How many additional workers can the cluster support right now?"""
+        import ray
+
         try:
             available = ray.available_resources()
         except Exception:

@@ -22,8 +22,6 @@ unified in PipelineController (replaces SimpleAutoscaler + BackpressureControlle
 import time
 from unittest.mock import MagicMock
 
-import pytest
-
 from _internal.core.models import QueueStats
 from _internal.runtime.pipeline_controller import (
     PipelineController,

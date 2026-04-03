@@ -75,7 +75,7 @@ def upload(version: str, wheels: list[Path]) -> None:
         "aws", "s3", "cp", str(DIST_DIR) + "/", dest,
         "--recursive", "--exclude", "*", "--include", "*.whl",
     ])
-    print(f"\nDone. Install with:")
+    print("\nDone. Install with:")
     print(f"  pip install nurion-engine --find-links {dest}")
 
 
