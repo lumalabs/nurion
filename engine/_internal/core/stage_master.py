@@ -373,27 +373,22 @@ class StageMaster:
                     self._write_worker_state(wid, "FAILED")
 
                 if failed:
-                    # Skip recovery when queue is fully drained — worker failures
-                    # are expected (idle timeout as safety valve).
-                    if not self._has_unprocessed_messages():
-                        self.logger.info(
-                            f"Stage {self.stage_id}: queue drained, "
-                            f"not recovering {len(failed)} workers"
+                    # With broker-driven exit, workers exit cleanly via
+                    # upstream_drained=True (completed). Only crashes produce
+                    # failures — always recover.
+                    self._recovery_manager.record_failures(
+                        len(failed), self._worker_manager.worker_count
+                    )
+                    result = await self._recovery_manager.recover_failed_workers(
+                        failed_worker_ids=failed,
+                    )
+                    if result.should_give_up:
+                        self._state = _StageState.FAILED
+                        self._failure_message = result.give_up_reason
+                        self.logger.error(
+                            f"Stage {self.stage_id} giving up: {result.give_up_reason}"
                         )
-                    else:
-                        self._recovery_manager.record_failures(
-                            len(failed), self._worker_manager.worker_count
-                        )
-                        result = await self._recovery_manager.recover_failed_workers(
-                            failed_worker_ids=failed,
-                        )
-                        if result.should_give_up:
-                            self._state = _StageState.FAILED
-                            self._failure_message = result.give_up_reason
-                            self.logger.error(
-                                f"Stage {self.stage_id} giving up: {result.give_up_reason}"
-                            )
-                            break
+                        break
                 if completed:
                     self._last_progress_time = time.monotonic()
                     self._recovery_manager.record_success()
