@@ -183,9 +183,7 @@ class TestScaling:
         assert "s0" in ctrl._last_scale_up
 
     def test_no_scale_up_when_output_saturated(self):
-        ctrl, master = self._make_setup(
-            input_pending=200, output_pending=90, max_pending=100
-        )
+        ctrl, master = self._make_setup(input_pending=200, output_pending=90, max_pending=100)
         ctrl._tick({"s0": master})
         assert "s0" not in ctrl._last_scale_up  # Should NOT scale up
 
@@ -195,9 +193,7 @@ class TestScaling:
         assert "s0" in ctrl._last_scale_down
 
     def test_no_scale_down_below_min(self):
-        master = MockStageMaster(
-            stage_id="s0", worker_count=1, min_workers=1, max_workers=8
-        )
+        master = MockStageMaster(stage_id="s0", worker_count=1, min_workers=1, max_workers=8)
         stats = {
             "input_q": QueueStats(pending_count=0),
             "output_q": QueueStats(),
@@ -230,7 +226,8 @@ class TestScaling:
             ),
         }
         ctrl = make_controller(
-            stage_configs=configs, stats=stats,
+            stage_configs=configs,
+            stats=stats,
             # scaling_enabled defaults to False
         )
         ctrl._tick({"s0": master})
@@ -259,9 +256,7 @@ class TestScaling:
 
 class TestFlowControl:
     def test_source_paused_when_output_saturated(self):
-        master = MockStageMaster(
-            stage_id="src", is_source=True, max_pending_total=100
-        )
+        master = MockStageMaster(stage_id="src", is_source=True, max_pending_total=100)
         stats = {
             "input_q": QueueStats(),
             "output_q": QueueStats(pending_count=90),
@@ -278,9 +273,7 @@ class TestFlowControl:
         assert master._source_paused is True
 
     def test_source_resumed_when_output_drains(self):
-        master = MockStageMaster(
-            stage_id="src", is_source=True, max_pending_total=100
-        )
+        master = MockStageMaster(stage_id="src", is_source=True, max_pending_total=100)
         master._source_paused = True
         stats = {
             "input_q": QueueStats(),
@@ -343,9 +336,7 @@ class TestLiveness:
                 stage_id="s0", input=QueueRef.group("in"), output=QueueRef.group("out")
             ),
         }
-        ctrl = make_controller(
-            stage_configs=configs, stats=stats, liveness_timeout_s=10
-        )
+        ctrl = make_controller(stage_configs=configs, stats=stats, liveness_timeout_s=10)
         ctrl._tick({"s0": master})
         assert not master._failed
 
@@ -362,18 +353,14 @@ class TestLiveness:
                 stage_id="s0", input=QueueRef.group("in"), output=QueueRef.group("out")
             ),
         }
-        ctrl = make_controller(
-            stage_configs=configs, stats=stats, liveness_timeout_s=600
-        )
+        ctrl = make_controller(stage_configs=configs, stats=stats, liveness_timeout_s=600)
         ctrl._tick({"s0": master})
         assert master._failed
         assert "No progress" in master._fail_reason
 
     def test_no_liveness_failure_when_backpressured(self):
         """P0 bug fix: backpressure should NOT trigger liveness failure."""
-        master = MockStageMaster(
-            stage_id="s0", worker_count=2, max_pending_total=100
-        )
+        master = MockStageMaster(stage_id="s0", worker_count=2, max_pending_total=100)
         master._last_completion_time = time.monotonic() - 700  # Old
         stats = {
             "in": QueueStats(pending_count=100),
@@ -384,9 +371,7 @@ class TestLiveness:
                 stage_id="s0", input=QueueRef.group("in"), output=QueueRef.group("out")
             ),
         }
-        ctrl = make_controller(
-            stage_configs=configs, stats=stats, liveness_timeout_s=600
-        )
+        ctrl = make_controller(stage_configs=configs, stats=stats, liveness_timeout_s=600)
         ctrl._tick({"s0": master})
         assert not master._failed  # P0: NOT stuck — just backpressured
 
@@ -399,9 +384,7 @@ class TestLiveness:
                 stage_id="s0", input=QueueRef.group("in"), output=QueueRef.group("out")
             ),
         }
-        ctrl = make_controller(
-            stage_configs=configs, stats=stats, liveness_timeout_s=600
-        )
+        ctrl = make_controller(stage_configs=configs, stats=stats, liveness_timeout_s=600)
         ctrl._tick({"s0": master})
         assert not master._failed  # No workers → not stuck (master will spawn)
 
@@ -414,27 +397,42 @@ class TestLiveness:
 class TestOutputSaturation:
     def test_unbounded_never_saturated(self):
         m = StageMetrics(
-            stage_id="s0", worker_count=1, min_workers=1, max_workers=1,
-            is_source=False, is_finished=False,
-            output_pending=99999, output_max_pending=0,
+            stage_id="s0",
+            worker_count=1,
+            min_workers=1,
+            max_workers=1,
+            is_source=False,
+            is_finished=False,
+            output_pending=99999,
+            output_max_pending=0,
         )
         ctrl = make_controller()
         assert not ctrl._is_output_saturated(m)
 
     def test_bounded_below_threshold(self):
         m = StageMetrics(
-            stage_id="s0", worker_count=1, min_workers=1, max_workers=1,
-            is_source=False, is_finished=False,
-            output_pending=70, output_max_pending=100,
+            stage_id="s0",
+            worker_count=1,
+            min_workers=1,
+            max_workers=1,
+            is_source=False,
+            is_finished=False,
+            output_pending=70,
+            output_max_pending=100,
         )
         ctrl = make_controller()
         assert not ctrl._is_output_saturated(m)
 
     def test_bounded_above_threshold(self):
         m = StageMetrics(
-            stage_id="s0", worker_count=1, min_workers=1, max_workers=1,
-            is_source=False, is_finished=False,
-            output_pending=85, output_max_pending=100,
+            stage_id="s0",
+            worker_count=1,
+            min_workers=1,
+            max_workers=1,
+            is_source=False,
+            is_finished=False,
+            output_pending=85,
+            output_max_pending=100,
         )
         ctrl = make_controller()
         assert ctrl._is_output_saturated(m)

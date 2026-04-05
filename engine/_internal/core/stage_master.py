@@ -158,9 +158,7 @@ class StageMaster:
 
         total_bound = self.runtime.max_pending_total
         per_partition = (
-            max(math.ceil(total_bound / max(self._num_partitions, 1)), 1)
-            if total_bound > 0
-            else 0
+            max(math.ceil(total_bound / max(self._num_partitions, 1)), 1) if total_bound > 0 else 0
         )
         self._queue_client.create_queue_group(
             self._output_group_name,

@@ -46,17 +46,13 @@ class ControllerConfig:
     """
 
     # Tick
-    tick_interval_s: float = field(
-        default_factory=lambda: get_config().autoscaler_check_interval_s
-    )
+    tick_interval_s: float = field(default_factory=lambda: get_config().autoscaler_check_interval_s)
 
     # Scaling: disabled by default (opt-in via JobConfig or configure())
     scaling_enabled: bool = False
 
     # Scaling thresholds (input-lag based; Phase 2 will switch to ratio-based)
-    scale_up_threshold: int = field(
-        default_factory=lambda: get_config().autoscaler_scale_up_lag
-    )
+    scale_up_threshold: int = field(default_factory=lambda: get_config().autoscaler_scale_up_lag)
     scale_down_threshold: int = field(
         default_factory=lambda: get_config().autoscaler_scale_down_lag
     )
@@ -168,7 +164,8 @@ class PipelineController:
             if headroom <= 0:
                 continue
             spawnable = self._get_spawnable_count(
-                master.stage, headroom,
+                master.stage,
+                headroom,
                 reserved_cpu=allocated_cpu,
                 reserved_gpu=allocated_gpu,
             )
@@ -378,8 +375,7 @@ class PipelineController:
             added = await master.scale_up(step)
             if added > 0:
                 self.logger.info(
-                    f"Scaled UP {stage_id}: +{added} "
-                    f"(now {len(master._workers)} workers)"
+                    f"Scaled UP {stage_id}: +{added} (now {len(master._workers)} workers)"
                 )
         except Exception as e:
             self.logger.error(f"Failed to scale up {stage_id}: {e}")
@@ -389,8 +385,7 @@ class PipelineController:
             removed = await master.scale_down(count)
             if removed > 0:
                 self.logger.info(
-                    f"Scaled DOWN {stage_id}: -{removed} "
-                    f"(now {len(master._workers)} workers)"
+                    f"Scaled DOWN {stage_id}: -{removed} (now {len(master._workers)} workers)"
                 )
         except Exception as e:
             self.logger.error(f"Failed to scale down {stage_id}: {e}")

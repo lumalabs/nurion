@@ -642,12 +642,24 @@ class RayJobRunner:
         self.logger.info("Pipeline stopped")
 
     def _start_controller(self) -> None:
-        """Start the pipeline controller if queue stats are available."""
+        """Start the pipeline controller if needed.
+
+        The controller provides: scaling (opt-in), flow control, and liveness
+        detection.  It is only started when there is something to control —
+        bounded queues (flow control / liveness) or autoscaling enabled.
+        Without bounded queues, backpressure can't occur and the controller's
+        periodic stats queries would be pure overhead on the broker.
+        """
         if not self._queue_stats_client:
             return
 
+        has_bounded_queues = any(v > 0 for v in self._stage_bounds.values())
+        needs_scaling = self.job.config.autoscale_enabled
+        if not has_bounded_queues and not needs_scaling:
+            return
+
         controller_config = ControllerConfig(
-            scaling_enabled=self.job.config.autoscale_enabled,
+            scaling_enabled=needs_scaling,
         )
 
         self._controller = PipelineController(
