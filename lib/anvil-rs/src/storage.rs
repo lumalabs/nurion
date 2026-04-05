@@ -1095,15 +1095,40 @@ impl AnvilStorage {
         // Group expired by queue
         let mut expired_by_queue: HashMap<String, Vec<ClaimInfo>> = HashMap::new();
         for (queue, msg_id, claim_info) in all_claimed {
-            if let Some(leases) = active_leases {
+            let lease_alive = if let Some(leases) = active_leases {
                 if let Some(last_seen) = leases.get(&claim_info.lease_id) {
                     if now - *last_seen <= timeout_secs {
-                        continue;
+                        true
+                    } else {
+                        false // Lease exists but heartbeat expired
                     }
+                } else {
+                    // Lease not in active set — worker is dead
+                    false
                 }
+            } else {
+                false
+            };
+
+            if lease_alive {
+                continue;
             }
 
-            if now - claim_info.claimed_at > timeout_secs {
+            // Dead lease: recover immediately regardless of claim age.
+            // The old code also checked `now - claimed_at > timeout_secs` for dead
+            // leases, creating a window where the message was stuck even though the
+            // worker was definitely gone.  The timeout check only matters for LIVE
+            // leases (detecting slow-but-alive workers).
+            if !lease_alive {
+                tracing::info!(
+                    "Recovering dead-lease claim: queue={}, msg_id={}, worker={}, lease={}",
+                    queue, msg_id, claim_info.worker_id, claim_info.lease_id
+                );
+                let mut info = claim_info.clone();
+                info.msg_id = msg_id;
+                expired_by_queue.entry(queue).or_default().push(info);
+            } else if now - claim_info.claimed_at > timeout_secs {
+                // Live lease but claim_timeout exceeded — worker is stuck
                 let mut info = claim_info.clone();
                 info.msg_id = msg_id;
                 expired_by_queue.entry(queue).or_default().push(info);
