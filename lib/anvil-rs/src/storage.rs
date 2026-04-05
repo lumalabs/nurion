@@ -1122,7 +1122,10 @@ impl AnvilStorage {
             if !lease_alive {
                 tracing::info!(
                     "Recovering dead-lease claim: queue={}, msg_id={}, worker={}, lease={}",
-                    queue, msg_id, claim_info.worker_id, claim_info.lease_id
+                    queue,
+                    msg_id,
+                    claim_info.worker_id,
+                    claim_info.lease_id
                 );
                 let mut info = claim_info.clone();
                 info.msg_id = msg_id;
