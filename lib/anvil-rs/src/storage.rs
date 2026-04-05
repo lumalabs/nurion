@@ -1111,31 +1111,30 @@ impl AnvilStorage {
             };
 
             if lease_alive {
+                // Live lease — only recover if claim_timeout exceeded (stuck worker)
+                if now - claim_info.claimed_at > timeout_secs {
+                    let mut info = claim_info.clone();
+                    info.msg_id = msg_id;
+                    expired_by_queue.entry(queue).or_default().push(info);
+                }
                 continue;
             }
 
             // Dead lease: recover immediately regardless of claim age.
             // The old code also checked `now - claimed_at > timeout_secs` for dead
             // leases, creating a window where the message was stuck even though the
-            // worker was definitely gone.  The timeout check only matters for LIVE
-            // leases (detecting slow-but-alive workers).
-            if !lease_alive {
-                tracing::info!(
-                    "Recovering dead-lease claim: queue={}, msg_id={}, worker={}, lease={}",
-                    queue,
-                    msg_id,
-                    claim_info.worker_id,
-                    claim_info.lease_id
-                );
-                let mut info = claim_info.clone();
-                info.msg_id = msg_id;
-                expired_by_queue.entry(queue).or_default().push(info);
-            } else if now - claim_info.claimed_at > timeout_secs {
-                // Live lease but claim_timeout exceeded — worker is stuck
-                let mut info = claim_info.clone();
-                info.msg_id = msg_id;
-                expired_by_queue.entry(queue).or_default().push(info);
-            }
+            // worker was definitely gone.  Waiting serves no purpose when the worker
+            // is confirmed dead.
+            tracing::info!(
+                "Recovering dead-lease claim: queue={}, msg_id={}, worker={}, lease={}",
+                queue,
+                msg_id,
+                claim_info.worker_id,
+                claim_info.lease_id
+            );
+            let mut info = claim_info.clone();
+            info.msg_id = msg_id;
+            expired_by_queue.entry(queue).or_default().push(info);
         }
 
         let mut total = 0;

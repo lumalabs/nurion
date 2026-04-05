@@ -51,6 +51,9 @@ class ControllerConfig:
     # Scaling: disabled by default (opt-in via JobConfig or configure())
     scaling_enabled: bool = False
 
+    # Flow control: requires bounded queues to be meaningful
+    flow_control_enabled: bool = False
+
     # Scaling thresholds (input-lag based; Phase 2 will switch to ratio-based)
     scale_up_threshold: int = field(default_factory=lambda: get_config().autoscaler_scale_up_lag)
     scale_down_threshold: int = field(
@@ -62,10 +65,10 @@ class ControllerConfig:
     cooldown_down_s: float = field(default_factory=lambda: get_config().autoscaler_cooldown_down_s)
     max_scale_step: int = field(default_factory=lambda: get_config().autoscaler_max_scale_step)
 
-    # Output saturation ratio — used by all three decisions
+    # Output saturation ratio — used by scaling and flow control
     output_saturation_ratio: float = 0.8
 
-    # Liveness
+    # Liveness (0 = disabled)
     liveness_timeout_s: float = field(
         default_factory=lambda: get_config().stage_no_progress_timeout_s
     )
@@ -99,6 +102,11 @@ class PipelineController:
     flow-control decisions from a consistent snapshot.  Three concerns —
     scaling, source flow control, and liveness — are evaluated together so
     they cannot contradict each other.
+
+    The controller always runs for liveness detection.  Scaling and flow
+    control are opt-in (require bounded queues or explicit autoscale_enabled).
+    When only liveness is active, no broker stats queries are made — liveness
+    uses only the master's completion-age timer.
     """
 
     def __init__(
@@ -114,6 +122,8 @@ class PipelineController:
         self._dag_edges = dag_edges
         self.logger = create_ray_logger("PipelineController")
 
+        self._needs_stats = config.scaling_enabled or config.flow_control_enabled
+
         # AIMD cooldown tracking
         self._last_scale_up: Dict[str, float] = {}
         self._last_scale_down: Dict[str, float] = {}
@@ -127,13 +137,18 @@ class PipelineController:
     async def run_loop(self, masters: Dict[str, "StageMaster"]) -> None:
         """Main control loop — runs until cancelled."""
         self._running = True
-        self.logger.info(f"PipelineController started (interval={self._config.tick_interval_s}s)")
+        self.logger.info(
+            f"PipelineController started (interval={self._config.tick_interval_s}s, "
+            f"scaling={self._config.scaling_enabled}, "
+            f"flow_control={self._config.flow_control_enabled}, "
+            f"liveness_timeout={self._config.liveness_timeout_s}s)"
+        )
 
         try:
             while self._running:
                 await asyncio.sleep(self._config.tick_interval_s)
                 try:
-                    self._tick(masters)
+                    await self._tick(masters)
                 except Exception as e:
                     self.logger.error(f"Controller tick error: {e}")
         except asyncio.CancelledError:
@@ -182,27 +197,36 @@ class PipelineController:
     # Per-tick evaluation
     # -----------------------------------------------------------------
 
-    def _tick(self, masters: Dict[str, "StageMaster"]) -> None:
+    async def _tick(self, masters: Dict[str, "StageMaster"]) -> None:
         """Single tick: collect stats, evaluate all stages."""
-        snapshot = self._collect_metrics(masters)
+        # Only query broker stats when scaling or flow control is active.
+        # Liveness detection uses only the master's completion-age timer.
+        snapshot = self._collect_metrics(masters) if self._needs_stats else None
 
-        for stage_id, m in snapshot.items():
-            master = masters.get(stage_id)
-            if not master or m.is_finished:
+        for stage_id, master in masters.items():
+            cfg = self._stage_queue_configs.get(stage_id)
+            if not cfg:
                 continue
 
-            saturated = self._is_output_saturated(m)
+            m = snapshot.get(stage_id) if snapshot else None
+            is_finished = master._state.value in ("finished", "failed")
+            if is_finished:
+                continue
 
-            # 1. Scaling
-            self._evaluate_scaling(stage_id, m, master, saturated)
+            saturated = self._is_output_saturated(m) if m else False
 
-            # 2. Source flow control
-            self._evaluate_flow_control(stage_id, m, master, snapshot, saturated)
+            # 1. Scaling (requires stats)
+            if m and self._config.scaling_enabled:
+                await self._evaluate_scaling(stage_id, m, master, saturated)
 
-            # 3. Liveness
+            # 2. Source flow control (requires stats)
+            if m and self._config.flow_control_enabled:
+                self._evaluate_flow_control(stage_id, m, master, snapshot or {}, saturated)
+
+            # 3. Liveness (uses completion age from master, optionally stats)
             self._evaluate_liveness(stage_id, m, master, saturated)
 
-    def _evaluate_scaling(
+    async def _evaluate_scaling(
         self,
         stage_id: str,
         m: StageMetrics,
@@ -210,8 +234,6 @@ class PipelineController:
         saturated: bool,
     ) -> None:
         """Scale based on input demand, constrained by output saturation."""
-        if not self._config.scaling_enabled:
-            return  # Scaling is opt-in
         if m.is_source:
             return  # Source stages have their own rate control
 
@@ -227,8 +249,15 @@ class PipelineController:
             step = min(cfg.max_scale_step, m.max_workers - m.worker_count)
             step = min(step, self._get_spawnable_count(master.stage, step))
             if step > 0:
-                self._fire_and_forget(self._do_scale_up(stage_id, master, step))
-                self._last_scale_up[stage_id] = now
+                try:
+                    added = await master.scale_up(step)
+                    if added > 0:
+                        self._last_scale_up[stage_id] = now
+                        self.logger.info(
+                            f"Scaled UP {stage_id}: +{added} (now {len(master._workers)} workers)"
+                        )
+                except Exception as e:
+                    self.logger.error(f"Failed to scale up {stage_id}: {e}")
 
         # Scale DOWN: input is drained AND no claimed work
         elif m.input_pending < cfg.scale_down_threshold:
@@ -238,8 +267,15 @@ class PipelineController:
                 return  # Workers still processing
             if now - self._last_scale_down.get(stage_id, 0) < cfg.cooldown_down_s:
                 return
-            self._fire_and_forget(self._do_scale_down(stage_id, master, 1))
-            self._last_scale_down[stage_id] = now
+            try:
+                removed = await master.scale_down(1)
+                if removed > 0:
+                    self._last_scale_down[stage_id] = now
+                    self.logger.info(
+                        f"Scaled DOWN {stage_id}: -{removed} (now {len(master._workers)} workers)"
+                    )
+            except Exception as e:
+                self.logger.error(f"Failed to scale down {stage_id}: {e}")
 
     def _evaluate_flow_control(
         self,
@@ -267,15 +303,31 @@ class PipelineController:
     def _evaluate_liveness(
         self,
         stage_id: str,
-        m: StageMetrics,
+        m: "StageMetrics | None",
         master: "StageMaster",
         saturated: bool,
     ) -> None:
-        """Detect truly stuck stages (not backpressure)."""
-        if m.worker_count == 0 or m.input_pending == 0:
-            return  # No workers or no work — not stuck
+        """Detect truly stuck stages (not backpressure).
 
-        if m.seconds_since_last_completion <= self._config.liveness_timeout_s:
+        Liveness works without broker stats — it only needs the master's
+        completion-age timer.  When stats are available, output saturation
+        is used to suppress false positives (backpressure ≠ stuck).
+        """
+        if self._config.liveness_timeout_s <= 0:
+            return  # Liveness disabled
+
+        worker_count = m.worker_count if m else len(master._workers)
+        if worker_count == 0:
+            return  # No workers — master handles this (spawn or finish)
+
+        # Check if there's any work at all (pending OR claimed)
+        if m:
+            if m.input_pending == 0 and m.input_claimed == 0:
+                return  # No work in the system
+        # Without stats, skip the "no work" check — rely on timeout alone
+
+        completion_age = master.report_completion_age()
+        if completion_age <= self._config.liveness_timeout_s:
             return  # Recent progress — healthy
 
         # No progress for a while. Is it real or just backpressure?
@@ -284,11 +336,9 @@ class PipelineController:
             master.reset_progress_timer()
             return
 
-        # Genuine stuck: has work, has workers, output not full, no progress
+        # Genuine stuck: has workers, no completions, output not full
         master.fail(
-            f"No progress for {m.seconds_since_last_completion:.0f}s "
-            f"(input_pending={m.input_pending}, workers={m.worker_count}, "
-            f"output not saturated)"
+            f"No progress for {completion_age:.0f}s (workers={worker_count}, output not saturated)"
         )
 
     # -----------------------------------------------------------------
@@ -325,16 +375,10 @@ class PipelineController:
     # Helpers
     # -----------------------------------------------------------------
 
-    @staticmethod
-    def _fire_and_forget(coro) -> None:
-        """Schedule a coroutine if an event loop is running, else skip."""
-        try:
-            asyncio.create_task(coro)
-        except RuntimeError:
-            pass  # No running event loop (e.g., in unit tests)
-
-    def _is_output_saturated(self, m: StageMetrics) -> bool:
+    def _is_output_saturated(self, m: "StageMetrics | None") -> bool:
         """Output queue is near capacity → workers are likely QueueFull-blocked."""
+        if m is None:
+            return False
         if m.output_max_pending <= 0:
             return False  # Unbounded queue never saturates
         return m.output_pending >= m.output_max_pending * self._config.output_saturation_ratio
@@ -369,23 +413,3 @@ class PipelineController:
             return max_needed
 
         return min(count, max_needed)
-
-    async def _do_scale_up(self, stage_id: str, master: "StageMaster", step: int) -> None:
-        try:
-            added = await master.scale_up(step)
-            if added > 0:
-                self.logger.info(
-                    f"Scaled UP {stage_id}: +{added} (now {len(master._workers)} workers)"
-                )
-        except Exception as e:
-            self.logger.error(f"Failed to scale up {stage_id}: {e}")
-
-    async def _do_scale_down(self, stage_id: str, master: "StageMaster", count: int) -> None:
-        try:
-            removed = await master.scale_down(count)
-            if removed > 0:
-                self.logger.info(
-                    f"Scaled DOWN {stage_id}: -{removed} (now {len(master._workers)} workers)"
-                )
-        except Exception as e:
-            self.logger.error(f"Failed to scale down {stage_id}: {e}")

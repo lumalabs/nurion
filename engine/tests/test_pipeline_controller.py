@@ -116,6 +116,9 @@ def make_controller(
     dag_edges: dict[str, list[str]] | None = None,
     **config_overrides,
 ) -> PipelineController:
+    # Enable flow_control when stats are provided so _tick collects metrics
+    if stats and "flow_control_enabled" not in config_overrides:
+        config_overrides["flow_control_enabled"] = True
     cfg = ControllerConfig(**config_overrides)
     stats_client = FakeQueueStatsClient(stats or {})
     return PipelineController(
@@ -175,24 +178,23 @@ class TestScaling:
         )
         return ctrl, master
 
-    def test_scale_up_on_high_input(self):
+    async def test_scale_up_on_high_input(self):
         ctrl, master = self._make_setup(input_pending=200)
-        ctrl._tick({"s0": master})
-        # Should have triggered a scale_up task
-        assert len(master._workers) == 2  # scale_up is async task, check via cooldown
+        await ctrl._tick({"s0": master})
+        assert len(master._workers) > 2  # scale_up executed synchronously via await
         assert "s0" in ctrl._last_scale_up
 
-    def test_no_scale_up_when_output_saturated(self):
+    async def test_no_scale_up_when_output_saturated(self):
         ctrl, master = self._make_setup(input_pending=200, output_pending=90, max_pending=100)
-        ctrl._tick({"s0": master})
+        await ctrl._tick({"s0": master})
         assert "s0" not in ctrl._last_scale_up  # Should NOT scale up
 
-    def test_scale_down_on_low_input(self):
+    async def test_scale_down_on_low_input(self):
         ctrl, master = self._make_setup(input_pending=5)
-        ctrl._tick({"s0": master})
+        await ctrl._tick({"s0": master})
         assert "s0" in ctrl._last_scale_down
 
-    def test_no_scale_down_below_min(self):
+    async def test_no_scale_down_below_min(self):
         master = MockStageMaster(stage_id="s0", worker_count=1, min_workers=1, max_workers=8)
         stats = {
             "input_q": QueueStats(pending_count=0),
@@ -208,10 +210,10 @@ class TestScaling:
         ctrl = make_controller(
             stage_configs=configs, stats=stats, scaling_enabled=True, scale_down_threshold=10
         )
-        ctrl._tick({"s0": master})
+        await ctrl._tick({"s0": master})
         assert "s0" not in ctrl._last_scale_down
 
-    def test_no_scaling_when_disabled(self):
+    async def test_no_scaling_when_disabled(self):
         """Scaling is opt-in — disabled by default."""
         master = MockStageMaster(stage_id="s0", worker_count=4, max_workers=8)
         stats = {
@@ -230,11 +232,11 @@ class TestScaling:
             stats=stats,
             # scaling_enabled defaults to False
         )
-        ctrl._tick({"s0": master})
+        await ctrl._tick({"s0": master})
         assert "s0" not in ctrl._last_scale_up
         assert "s0" not in ctrl._last_scale_down
 
-    def test_skip_source_stages(self):
+    async def test_skip_source_stages(self):
         master = MockStageMaster(stage_id="s0", is_source=True)
         stats = {"input_q": QueueStats(pending_count=9999), "output_q": QueueStats()}
         configs = {
@@ -245,7 +247,7 @@ class TestScaling:
             ),
         }
         ctrl = make_controller(stage_configs=configs, stats=stats, scaling_enabled=True)
-        ctrl._tick({"s0": master})
+        await ctrl._tick({"s0": master})
         assert "s0" not in ctrl._last_scale_up
 
 
@@ -255,7 +257,7 @@ class TestScaling:
 
 
 class TestFlowControl:
-    def test_source_paused_when_output_saturated(self):
+    async def test_source_paused_when_output_saturated(self):
         master = MockStageMaster(stage_id="src", is_source=True, max_pending_total=100)
         stats = {
             "input_q": QueueStats(),
@@ -269,10 +271,10 @@ class TestFlowControl:
             ),
         }
         ctrl = make_controller(stage_configs=configs, stats=stats)
-        ctrl._tick({"src": master})
+        await ctrl._tick({"src": master})
         assert master._source_paused is True
 
-    def test_source_resumed_when_output_drains(self):
+    async def test_source_resumed_when_output_drains(self):
         master = MockStageMaster(stage_id="src", is_source=True, max_pending_total=100)
         master._source_paused = True
         stats = {
@@ -287,10 +289,10 @@ class TestFlowControl:
             ),
         }
         ctrl = make_controller(stage_configs=configs, stats=stats)
-        ctrl._tick({"src": master})
+        await ctrl._tick({"src": master})
         assert master._source_paused is False
 
-    def test_source_paused_by_downstream_saturation(self):
+    async def test_source_paused_by_downstream_saturation(self):
         src = MockStageMaster(stage_id="src", is_source=True, max_pending_total=0)
         transform = MockStageMaster(stage_id="t1", max_pending_total=100)
 
@@ -317,7 +319,7 @@ class TestFlowControl:
             stats=stats,
             dag_edges={"src": ["t1"]},
         )
-        ctrl._tick({"src": src, "t1": transform})
+        await ctrl._tick({"src": src, "t1": transform})
         assert src._source_paused is True  # Paused because downstream (t1) output is full
 
 
@@ -327,7 +329,7 @@ class TestFlowControl:
 
 
 class TestLiveness:
-    def test_no_liveness_failure_when_making_progress(self):
+    async def test_no_liveness_failure_when_making_progress(self):
         master = MockStageMaster(stage_id="s0", worker_count=2)
         master._last_completion_time = time.monotonic()  # Just completed
         stats = {"in": QueueStats(pending_count=100), "out": QueueStats()}
@@ -337,10 +339,10 @@ class TestLiveness:
             ),
         }
         ctrl = make_controller(stage_configs=configs, stats=stats, liveness_timeout_s=10)
-        ctrl._tick({"s0": master})
+        await ctrl._tick({"s0": master})
         assert not master._failed
 
-    def test_liveness_failure_when_stuck(self):
+    async def test_liveness_failure_when_stuck(self):
         master = MockStageMaster(stage_id="s0", worker_count=2, max_pending_total=100)
         # Simulate old completion time (exceeded timeout)
         master._last_completion_time = time.monotonic() - 700
@@ -354,11 +356,11 @@ class TestLiveness:
             ),
         }
         ctrl = make_controller(stage_configs=configs, stats=stats, liveness_timeout_s=600)
-        ctrl._tick({"s0": master})
+        await ctrl._tick({"s0": master})
         assert master._failed
         assert "No progress" in master._fail_reason
 
-    def test_no_liveness_failure_when_backpressured(self):
+    async def test_no_liveness_failure_when_backpressured(self):
         """P0 bug fix: backpressure should NOT trigger liveness failure."""
         master = MockStageMaster(stage_id="s0", worker_count=2, max_pending_total=100)
         master._last_completion_time = time.monotonic() - 700  # Old
@@ -372,10 +374,10 @@ class TestLiveness:
             ),
         }
         ctrl = make_controller(stage_configs=configs, stats=stats, liveness_timeout_s=600)
-        ctrl._tick({"s0": master})
+        await ctrl._tick({"s0": master})
         assert not master._failed  # P0: NOT stuck — just backpressured
 
-    def test_no_liveness_failure_when_unbounded_and_no_workers(self):
+    async def test_no_liveness_failure_when_unbounded_and_no_workers(self):
         master = MockStageMaster(stage_id="s0", worker_count=0)
         master._last_completion_time = time.monotonic() - 700
         stats = {"in": QueueStats(pending_count=100), "out": QueueStats()}
@@ -385,7 +387,7 @@ class TestLiveness:
             ),
         }
         ctrl = make_controller(stage_configs=configs, stats=stats, liveness_timeout_s=600)
-        ctrl._tick({"s0": master})
+        await ctrl._tick({"s0": master})
         assert not master._failed  # No workers → not stuck (master will spawn)
 
 
