@@ -2353,4 +2353,243 @@ mod tests {
         let pending = meta.push_seq.saturating_sub(meta.claim_seq);
         assert_eq!(pending, 7, "7 messages pending (5 unclaimed + 2 nacked)");
     }
+
+    // =========================================================================
+    // Concurrency tests — guard against the publish-commit race documented
+    // in docs/lessons/anvil-publish-commit-race.md.
+    //
+    // Invariant: every message that has been push_messages'd (or
+    // nack_messages_unchecked'd back to pending) must be claimable at some
+    // point after the writer returns. The race arises because push_seq is
+    // bumped via fetch_add *before* the WriteBatch containing the
+    // pending_key commits; a concurrent claimer can observe the new
+    // push_seq, CAS claim_seq past the reserved range, read an empty
+    // pending_key, and silently skip — orphaning the msg forever.
+    // =========================================================================
+
+    /// Concurrency invariant: every msg passed to `push_messages` must
+    /// eventually be claimable. A naive expectation, broken by the
+    /// publish-commit race in `push_messages` itself: `push_seq` is
+    /// bumped via `fetch_add` *before* the WriteBatch (with the
+    /// `pending_key` entries) commits to the DB, so a claimer that reads
+    /// the new `push_seq`, CASs `claim_seq` past the reserved range, and
+    /// then reads `pending_key(seq)` finds it empty — and silently
+    /// skips. The msg is now orphaned; `claim_seq` will never visit
+    /// that seq again.
+    ///
+    /// Run locally and you'll see numbers like "claimed 1472 of 1600
+    /// pushed" — ~8% loss with 8 pushers × 8 claimers. Marked
+    /// `#[ignore]` so the default `cargo test` suite stays green; run
+    /// with `cargo test -- --ignored push_claim` to exercise. Flip to
+    /// no-ignore once the publish-commit race is fixed (see
+    /// docs/lessons/anvil-publish-commit-race.md).
+    #[tokio::test]
+    #[ignore]
+    async fn test_concurrent_push_claim_accounts_for_every_message() {
+        let storage = Arc::new(create_temp_storage().await);
+        let queue = "concurrent-push-claim";
+        storage.create_queue(queue, 0).await.unwrap();
+
+        const PUSHERS: usize = 8;
+        const CLAIMERS: usize = 8;
+        const PER_PUSHER: u64 = 200;
+        const TOTAL: u64 = (PUSHERS as u64) * PER_PUSHER;
+
+        let claimed_ids: Arc<tokio::sync::Mutex<std::collections::HashSet<String>>> =
+            Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new()));
+
+        // Pushers
+        let mut push_handles = Vec::new();
+        for p in 0..PUSHERS {
+            let storage = storage.clone();
+            push_handles.push(tokio::spawn(async move {
+                let msgs: Vec<Message> = (0..PER_PUSHER)
+                    .map(|i| {
+                        Message::new(
+                            queue.to_string(),
+                            format!("p{p}-msg{i}").into_bytes(),
+                        )
+                    })
+                    .collect();
+                // Chunk a bit so we interleave with claimers rather than one big batch.
+                for chunk in msgs.chunks(16) {
+                    storage.push_messages(queue, chunk).await.unwrap();
+                    tokio::task::yield_now().await;
+                }
+            }));
+        }
+
+        // Claimers — keep draining + acking until they've seen all TOTAL msgs.
+        let mut claim_handles = Vec::new();
+        for w in 0..CLAIMERS {
+            let storage = storage.clone();
+            let claimed_ids = claimed_ids.clone();
+            let worker_id = format!("claimer-{w}");
+            let lease_id = format!("claimer-{w}-lease");
+            claim_handles.push(tokio::spawn(async move {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                while std::time::Instant::now() < deadline {
+                    let batch = storage
+                        .claim_messages(queue, 32, &worker_id, &lease_id)
+                        .await
+                        .unwrap();
+                    if batch.is_empty() {
+                        let seen = claimed_ids.lock().await.len() as u64;
+                        if seen >= TOTAL {
+                            break;
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                        continue;
+                    }
+                    let (msg_ids, claim_tokens) = split_claims(&batch);
+                    {
+                        let mut s = claimed_ids.lock().await;
+                        for id in &msg_ids {
+                            s.insert(id.clone());
+                        }
+                    }
+                    storage
+                        .ack_messages(queue, &msg_ids, &claim_tokens, &worker_id, &lease_id)
+                        .await
+                        .unwrap();
+                }
+            }));
+        }
+
+        for h in push_handles {
+            h.await.unwrap();
+        }
+        for h in claim_handles {
+            h.await.unwrap();
+        }
+
+        let seen = claimed_ids.lock().await.len() as u64;
+        assert_eq!(
+            seen, TOTAL,
+            "concurrent push/claim lost messages: claimed {seen} of {TOTAL} pushed"
+        );
+
+        let meta = storage.get_queue_stats(queue).await.unwrap();
+        assert_eq!(meta.total_pushed, TOTAL, "counter: total_pushed");
+        assert_eq!(meta.total_acked, TOTAL, "counter: total_acked");
+    }
+
+    /// Reproducer for the publish-commit race. Pre-push N msgs, claim them
+    /// as a "dead worker" (no ack), then concurrently run
+    /// nack_messages_unchecked (which is what `recover_expired_claims`
+    /// calls for each expired claim) against many active claimers. Any msg
+    /// that ends up in `pending_key(seq)` *after* a claimer has CAS'd
+    /// `claim_seq` past `seq` is orphaned — no claim will ever read it.
+    ///
+    /// Under the current code this race fires occasionally: CI runs of the
+    /// chaos/stability/distributed tests lose 1–5% of msgs. Inside a
+    /// single-process unit test the race window is even narrower, so this
+    /// test runs TRIALS iterations and asserts zero loss across the full
+    /// run. Expect an occasional failure on CI today; a fix for the race
+    /// (per-queue mutex around push/nack counter-advance + batch commit,
+    /// or committed-watermark split) should make it reliably green.
+    ///
+    /// Marked `#[ignore]` so `cargo test` stays green until the fix lands;
+    /// run with `cargo test -- --ignored nack_claim_race` to exercise.
+    #[tokio::test]
+    #[ignore]
+    async fn test_nack_claim_race_no_orphaned_messages() {
+        const TRIALS: usize = 20;
+        const PER_TRIAL: u64 = 200;
+        const CLAIMERS: usize = 16;
+
+        let mut total_loss: u64 = 0;
+        let mut trials_with_loss = 0usize;
+        for trial in 0..TRIALS {
+            let loss = run_nack_claim_trial(PER_TRIAL, CLAIMERS).await;
+            if loss > 0 {
+                eprintln!(
+                    "trial {trial}: {loss} / {PER_TRIAL} messages orphaned by push-commit race"
+                );
+                trials_with_loss += 1;
+            }
+            total_loss += loss;
+        }
+
+        assert_eq!(
+            total_loss, 0,
+            "publish-commit race: {total_loss} messages orphaned across \
+             {trials_with_loss}/{TRIALS} trials (expected 0 once the race is fixed; \
+             see docs/lessons/anvil-publish-commit-race.md)",
+        );
+    }
+
+    async fn run_nack_claim_trial(n: u64, claimers: usize) -> u64 {
+        let storage = Arc::new(create_temp_storage().await);
+        let queue = "nack-claim-race";
+        storage.create_queue(queue, 0).await.unwrap();
+
+        // Push N, claim all as a dead worker (no ack).
+        let messages: Vec<Message> = (0..n)
+            .map(|i| Message::new(queue.to_string(), format!("msg{i}").into_bytes()))
+            .collect();
+        storage.push_messages(queue, &messages).await.unwrap();
+
+        let dead = storage
+            .claim_messages(queue, n as usize, "dead", "dead-lease")
+            .await
+            .unwrap();
+        assert_eq!(dead.len(), n as usize, "failed to claim all upfront");
+        let dead_ids: Vec<String> = dead.iter().map(|c| c.message.msg_id.clone()).collect();
+        let dead_set: std::collections::HashSet<String> = dead_ids.iter().cloned().collect();
+
+        // Use a barrier so nack + claimers start near-simultaneously.
+        let barrier = Arc::new(tokio::sync::Barrier::new(claimers + 1));
+        let claimed: Arc<tokio::sync::Mutex<std::collections::HashSet<String>>> =
+            Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new()));
+
+        let mut handles = Vec::new();
+        for w in 0..claimers {
+            let storage = storage.clone();
+            let barrier = barrier.clone();
+            let claimed = claimed.clone();
+            let worker_id = format!("claimer-{w}");
+            let lease_id = format!("claimer-{w}-lease");
+            handles.push(tokio::spawn(async move {
+                barrier.wait().await;
+                let deadline =
+                    std::time::Instant::now() + std::time::Duration::from_millis(500);
+                while std::time::Instant::now() < deadline {
+                    let batch = storage
+                        .claim_messages(queue, 16, &worker_id, &lease_id)
+                        .await
+                        .unwrap();
+                    if !batch.is_empty() {
+                        let mut s = claimed.lock().await;
+                        for c in &batch {
+                            s.insert(c.message.msg_id.clone());
+                        }
+                    }
+                    tokio::task::yield_now().await;
+                }
+            }));
+        }
+
+        // Reclaim task: nack all the dead worker's claimed msgs unchecked,
+        // exactly as recover_expired_claims would.
+        let reclaim = {
+            let storage = storage.clone();
+            let barrier = barrier.clone();
+            tokio::spawn(async move {
+                barrier.wait().await;
+                storage
+                    .nack_messages_unchecked(queue, &dead_ids)
+                    .await
+                    .unwrap();
+            })
+        };
+
+        reclaim.await.unwrap();
+        for h in handles {
+            h.await.unwrap();
+        }
+
+        let claimed_set = claimed.lock().await;
+        dead_set.difference(&claimed_set).count() as u64
+    }
 }
