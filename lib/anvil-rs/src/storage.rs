@@ -325,10 +325,7 @@ impl AnvilStorage {
         }
         // Advance `push_seq` through the contiguous-done prefix.
         loop {
-            let next = log
-                .iter()
-                .next()
-                .map(|(&k, e)| (k, e.count, e.done));
+            let next = log.iter().next().map(|(&k, e)| (k, e.count, e.done));
             match next {
                 Some((k, count, true)) => {
                     let cur = c.push_seq.load(Ordering::Acquire);
@@ -659,7 +656,11 @@ impl AnvilStorage {
                 tracing::warn!(
                     "claim: pending_key missing (publish-commit race, orphaned msg): \
                      queue={}, seq={}, claim_seq=[{},{}), push_seq_seen={}",
-                    queue, seq, start, end, end
+                    queue,
+                    seq,
+                    start,
+                    end,
+                    end
                 );
             }
         }
@@ -746,17 +747,15 @@ impl AnvilStorage {
         // downstream queue's seq range (same invariant as push_messages /
         // nack_messages_internal). Reserve up front; commit after db.write
         // below, regardless of success.
-        let downstream_reservation: Option<(Arc<QueueCounters>, u64)> = match (
-            opts.downstream_queue,
-            opts.downstream_messages,
-        ) {
-            (Some(dq), Some(msgs)) if !msgs.is_empty() => {
-                let dc = self.load_or_init_counters(dq).await?;
-                let base = Self::reserve_push_range(&dc, msgs.len() as u64).await;
-                Some((dc, base))
-            }
-            _ => None,
-        };
+        let downstream_reservation: Option<(Arc<QueueCounters>, u64)> =
+            match (opts.downstream_queue, opts.downstream_messages) {
+                (Some(dq), Some(msgs)) if !msgs.is_empty() => {
+                    let dc = self.load_or_init_counters(dq).await?;
+                    let base = Self::reserve_push_range(&dc, msgs.len() as u64).await;
+                    Some((dc, base))
+                }
+                _ => None,
+            };
 
         let mut batch = WriteBatch::new();
 
@@ -2541,12 +2540,7 @@ mod tests {
             let storage = storage.clone();
             push_handles.push(tokio::spawn(async move {
                 let msgs: Vec<Message> = (0..PER_PUSHER)
-                    .map(|i| {
-                        Message::new(
-                            queue.to_string(),
-                            format!("p{p}-msg{i}").into_bytes(),
-                        )
-                    })
+                    .map(|i| Message::new(queue.to_string(), format!("p{p}-msg{i}").into_bytes()))
                     .collect();
                 // Chunk a bit so we interleave with claimers rather than one big batch.
                 for chunk in msgs.chunks(16) {
@@ -2677,8 +2671,7 @@ mod tests {
             let lease_id = format!("claimer-{w}-lease");
             handles.push(tokio::spawn(async move {
                 barrier.wait().await;
-                let deadline =
-                    std::time::Instant::now() + std::time::Duration::from_millis(500);
+                let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
                 while std::time::Instant::now() < deadline {
                     let batch = storage
                         .claim_messages(queue, 16, &worker_id, &lease_id)
