@@ -528,8 +528,23 @@ impl AnvilStorage {
                         ClaimInfo::new(msg_id.clone(), worker_id.to_string(), lease_id.to_string());
                     claimed_items.push((pending_key, msg_id, msg, claim_info));
                 }
+            } else {
+                // pending_key missing — the push/nack race: some writer bumped
+                // push_seq via fetch_add but hasn't yet committed its WriteBatch,
+                // and our CAS advanced claim_seq past that range. Once the writer
+                // commits, nobody will ever read pending_key(seq) because claim_seq
+                // is already past seq. The message is orphaned.
+                //
+                // See docs/lessons/anvil-publish-commit-race.md for the full
+                // analysis and proposed fix. Log as a warning so CI test flakes
+                // can be attributed to this race directly instead of being
+                // written off as "flaky chaos tests".
+                tracing::warn!(
+                    "claim: pending_key missing (publish-commit race, orphaned msg): \
+                     queue={}, seq={}, claim_seq=[{},{}), push_seq_seen={}",
+                    queue, seq, start, end, end
+                );
             }
-            // If pending key is missing (gap from crashed push), skip silently
         }
 
         if claimed_items.is_empty() {
