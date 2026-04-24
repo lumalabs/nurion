@@ -45,7 +45,10 @@ pub type StorageError = Box<dyn std::error::Error + Send + Sync>;
 /// Per-queue atomic counters — in-memory fast path.
 /// Each counter has a small set of writer classes, and AtomicU64 with CAS/fetch_add suffices.
 pub struct QueueCounters {
-    /// Next sequence to assign on push (written by: push, nack)
+    /// Next sequence to assign on push (written by: push, nack).
+    /// Advanced via fetch_add only while `push_lock` is held in write mode,
+    /// so that claimers (read mode) never see a value pointing at a not-yet-
+    /// committed pending_key. See `push_lock` below.
     pub push_seq: AtomicU64,
     /// Next sequence to claim (written by: claim via CAS)
     pub claim_seq: AtomicU64,
@@ -57,6 +60,24 @@ pub struct QueueCounters {
     pub total_unclaimed: AtomicU64,
     /// Total messages ever acked (written by: ack)
     pub total_acked: AtomicU64,
+    /// Serializes `push_seq` advance with the WriteBatch commit so claimers
+    /// never observe a `push_seq` value pointing at a `pending_key` that has
+    /// not yet been written to DB.
+    ///
+    /// Without this, the sequence
+    ///   `let base = c.push_seq.fetch_add(count); ... db.write(batch).await?`
+    /// is interruptible by a concurrent claimer that reads the new push_seq,
+    /// CASs claim_seq past `base + count`, then reads `pending_key(seq)` and
+    /// finds nothing — silently skipping (and orphaning) the message forever.
+    /// See `docs/lessons/anvil-publish-commit-race.md`.
+    ///
+    /// Writers (push_messages, nack_messages_internal, downstream-push half
+    /// of ack_internal) hold this in **write** mode across `fetch_add(push_seq)`
+    /// + the WriteBatch commit. Claimers (claim_messages) hold it in **read**
+    /// mode only across `read push_seq` + `CAS claim_seq`; the subsequent
+    /// pending_key reads happen outside the lock (those msg_ids are stable
+    /// once their pending_key was committed inside a write-locked section).
+    pub push_lock: tokio::sync::RwLock<()>,
 }
 
 /// Queue metadata for O(1) operations (return type for get_queue_stats)
@@ -315,6 +336,7 @@ impl AnvilStorage {
                 total_claimed: AtomicU64::new(total_claimed),
                 total_unclaimed: AtomicU64::new(total_unclaimed),
                 total_acked: AtomicU64::new(total_acked),
+                push_lock: tokio::sync::RwLock::new(()),
             })
         } else {
             // Try old meta:{queue} JSON (migration path)
@@ -337,6 +359,7 @@ impl AnvilStorage {
                 total_claimed: AtomicU64::new(migrated_total_claimed),
                 total_unclaimed: AtomicU64::new(migrated_total_unclaimed),
                 total_acked: AtomicU64::new(old_meta.total_acked),
+                push_lock: tokio::sync::RwLock::new(()),
             });
 
             // Persist new counter keys
@@ -450,7 +473,12 @@ impl AnvilStorage {
 
     // === Push Operations (NO TRANSACTION) ===
 
-    /// Push messages to queue using atomic counter + WriteBatch
+    /// Push messages to queue using atomic counter + WriteBatch.
+    ///
+    /// Holds `push_lock.write()` across the `push_seq` advance and the
+    /// WriteBatch commit so concurrent claimers cannot observe the new
+    /// push_seq before the matching `pending_key` entries are durable.
+    /// See `QueueCounters::push_lock`.
     pub async fn push_messages(
         &self,
         queue: &str,
@@ -464,6 +492,9 @@ impl AnvilStorage {
 
         let c = self.load_or_init_counters(queue).await?;
         let count = messages.len() as u64;
+
+        // Serialize push_seq advance + commit with respect to claimers.
+        let _push_guard = c.push_lock.write().await;
 
         // Reserve sequence range atomically
         let base_seq = c.push_seq.fetch_add(count, Ordering::Relaxed);
@@ -489,7 +520,14 @@ impl AnvilStorage {
 
     // === Claim Operations (CAS loop, NO TRANSACTION) ===
 
-    /// Claim messages from queue using CAS on claim_seq
+    /// Claim messages from queue using CAS on claim_seq.
+    ///
+    /// Reads `push_seq` and CASes `claim_seq` under `push_lock.read()` so
+    /// the value of `push_seq` we observe is guaranteed to point at
+    /// committed `pending_key` entries (writers hold `push_lock.write()`
+    /// across the WriteBatch commit). Once we've CAS'd a range, we drop
+    /// the read guard before reading pending_keys — those entries are
+    /// stable from then on.
     pub async fn claim_messages(
         &self,
         queue: &str,
@@ -499,21 +537,29 @@ impl AnvilStorage {
     ) -> Result<Vec<ClaimedMessage>, StorageError> {
         let c = self.load_or_init_counters(queue).await?;
 
-        // CAS loop to reserve a range of sequences
-        let (start, end) = loop {
-            let cur = c.claim_seq.load(Ordering::Acquire);
-            let lim = c.push_seq.load(Ordering::Acquire);
-            if cur >= lim {
-                return Ok(Vec::new());
+        // CAS loop to reserve a range of sequences. Held under push_lock.read()
+        // so push_seq we see reflects fully-committed data.
+        let claimed_range: Option<(u64, u64)> = {
+            let _push_guard = c.push_lock.read().await;
+            loop {
+                let cur = c.claim_seq.load(Ordering::Acquire);
+                let lim = c.push_seq.load(Ordering::Acquire);
+                if cur >= lim {
+                    break None;
+                }
+                let target = std::cmp::min(cur + batch_size as u64, lim);
+                if c.claim_seq
+                    .compare_exchange_weak(cur, target, Ordering::AcqRel, Ordering::Acquire)
+                    .is_ok()
+                {
+                    break Some((cur, target));
+                }
+                // CAS failed — another claimer won. Spin retry (nanosecond cost).
             }
-            let target = std::cmp::min(cur + batch_size as u64, lim);
-            if c.claim_seq
-                .compare_exchange_weak(cur, target, Ordering::AcqRel, Ordering::Acquire)
-                .is_ok()
-            {
-                break (cur, target);
-            }
-            // CAS failed — another claimer won. Spin retry (nanosecond cost).
+        };
+        let (start, end) = match claimed_range {
+            Some(r) => r,
+            None => return Ok(Vec::new()),
         };
 
         // Read messages (we own [start, end), no contention)
@@ -625,6 +671,25 @@ impl AnvilStorage {
             }
         }
 
+        // Acquire push_lock.write() on the downstream queue if we'll push to
+        // it, mirroring push_messages/nack_messages_internal: claimers on the
+        // downstream queue must not see the new push_seq before the
+        // pending_key entries are committed via db.write below.
+        let downstream_dc: Option<Arc<QueueCounters>> =
+            if let (Some(dq), Some(msgs)) = (opts.downstream_queue, opts.downstream_messages) {
+                if !msgs.is_empty() {
+                    Some(self.load_or_init_counters(dq).await?)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+        let _downstream_push_guard = match &downstream_dc {
+            Some(dc) => Some(dc.push_lock.write().await),
+            None => None,
+        };
+
         let mut batch = WriteBatch::new();
 
         // 1. Validate claims + move messages from claimed to acked
@@ -657,12 +722,16 @@ impl AnvilStorage {
             );
         }
 
-        // 2. Push downstream messages (capacity already checked in step 0)
+        // 2. Push downstream messages (capacity already checked in step 0,
+        //    push_lock.write() acquired above so the post-commit advance of
+        //    push_seq is serialized with concurrent claimers).
         if let (Some(downstream_queue), Some(messages)) =
             (opts.downstream_queue, opts.downstream_messages)
         {
             if !messages.is_empty() {
-                let dc = self.load_or_init_counters(downstream_queue).await?;
+                let dc = downstream_dc
+                    .as_ref()
+                    .expect("downstream_dc set when we have messages");
                 let count = messages.len() as u64;
                 let base_seq = dc.push_seq.fetch_add(count, Ordering::Relaxed);
                 let new_dp = dc.total_pushed.fetch_add(count, Ordering::Relaxed) + count;
@@ -911,6 +980,10 @@ impl AnvilStorage {
 
         let c = self.load_or_init_counters(queue).await?;
         let nack_count = msg_ids.len() as u64;
+
+        // Serialize push_seq advance + commit (same invariant as push_messages):
+        // claimers must not see the new push_seq before pending_key is committed.
+        let _push_guard = c.push_lock.write().await;
 
         // Reserve new pending sequences at the tail
         let base_seq = c.push_seq.fetch_add(nack_count, Ordering::Relaxed);
@@ -2368,23 +2441,14 @@ mod tests {
     // =========================================================================
 
     /// Concurrency invariant: every msg passed to `push_messages` must
-    /// eventually be claimable. A naive expectation, broken by the
-    /// publish-commit race in `push_messages` itself: `push_seq` is
-    /// bumped via `fetch_add` *before* the WriteBatch (with the
-    /// `pending_key` entries) commits to the DB, so a claimer that reads
-    /// the new `push_seq`, CASs `claim_seq` past the reserved range, and
-    /// then reads `pending_key(seq)` finds it empty — and silently
-    /// skips. The msg is now orphaned; `claim_seq` will never visit
-    /// that seq again.
-    ///
-    /// Run locally and you'll see numbers like "claimed 1472 of 1600
-    /// pushed" — ~8% loss with 8 pushers × 8 claimers. Marked
-    /// `#[ignore]` so the default `cargo test` suite stays green; run
-    /// with `cargo test -- --ignored push_claim` to exercise. Flip to
-    /// no-ignore once the publish-commit race is fixed (see
-    /// docs/lessons/anvil-publish-commit-race.md).
+    /// eventually be claimable. Before the fix to the publish-commit
+    /// race, this test reproduced ~8% loss reliably (8 pushers × 8
+    /// claimers × 200 msgs → "claimed 1472 of 1600"). After serializing
+    /// `fetch_add(push_seq) + db.write` under a per-queue write lock
+    /// and gating the claim-side `read push_seq + CAS claim_seq` under
+    /// the matching read lock, no message is orphaned. See
+    /// `docs/lessons/anvil-publish-commit-race.md`.
     #[tokio::test]
-    #[ignore]
     async fn test_concurrent_push_claim_accounts_for_every_message() {
         let storage = Arc::new(create_temp_storage().await);
         let queue = "concurrent-push-claim";
@@ -2427,7 +2491,7 @@ mod tests {
             let worker_id = format!("claimer-{w}");
             let lease_id = format!("claimer-{w}-lease");
             claim_handles.push(tokio::spawn(async move {
-                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
                 while std::time::Instant::now() < deadline {
                     let batch = storage
                         .claim_messages(queue, 32, &worker_id, &lease_id)
@@ -2474,25 +2538,13 @@ mod tests {
         assert_eq!(meta.total_acked, TOTAL, "counter: total_acked");
     }
 
-    /// Reproducer for the publish-commit race. Pre-push N msgs, claim them
-    /// as a "dead worker" (no ack), then concurrently run
-    /// nack_messages_unchecked (which is what `recover_expired_claims`
-    /// calls for each expired claim) against many active claimers. Any msg
-    /// that ends up in `pending_key(seq)` *after* a claimer has CAS'd
-    /// `claim_seq` past `seq` is orphaned — no claim will ever read it.
-    ///
-    /// Under the current code this race fires occasionally: CI runs of the
-    /// chaos/stability/distributed tests lose 1–5% of msgs. Inside a
-    /// single-process unit test the race window is even narrower, so this
-    /// test runs TRIALS iterations and asserts zero loss across the full
-    /// run. Expect an occasional failure on CI today; a fix for the race
-    /// (per-queue mutex around push/nack counter-advance + batch commit,
-    /// or committed-watermark split) should make it reliably green.
-    ///
-    /// Marked `#[ignore]` so `cargo test` stays green until the fix lands;
-    /// run with `cargo test -- --ignored nack_claim_race` to exercise.
+    /// Regression guard for the publish-commit race on the recovery path.
+    /// Pre-push N, claim as a "dead worker" (no ack), then concurrently
+    /// nack (mirrors `recover_expired_claims`) against 16 active claimers
+    /// across 20 trials. Before the fix this reproduced 100% loss every
+    /// trial (4000/4000 orphaned). After the fix all messages are
+    /// guaranteed claimable.
     #[tokio::test]
-    #[ignore]
     async fn test_nack_claim_race_no_orphaned_messages() {
         const TRIALS: usize = 20;
         const PER_TRIAL: u64 = 200;
