@@ -240,36 +240,34 @@ private[spark] class PythonWorkerFactory(
    */
   private[spark] def createSimpleWorker(
       blockingMode: Boolean): (PythonWorker, Option[ProcessHandle]) = {
-    try {
-      // Build the env the Ray actor should run under. RayDP does NOT use UNIX domain sockets
-      // (the worker process is managed by Ray, not by us, so the sock-dir contract is moot).
-      val workerEnv = new java.util.HashMap[String, String]
-      workerEnv.putAll(envVars.asJava)
-      workerEnv.put("PYTHONPATH", pythonPath)
-      workerEnv.put("PYTHONUNBUFFERED", "YES")
-      workerEnv.put("PYTHON_WORKER_FACTORY_SECRET", authHelper.secret)
-      if (Utils.preferIPv6) {
-        workerEnv.put("SPARK_PREFER_IPV6", "True")
-      }
-      logInfo(s"worker python path ${pythonPath}")
+    // Build the env the Ray actor should run under. RayDP does NOT use UNIX domain sockets
+    // (the worker process is managed by Ray, not by us, so the sock-dir contract is moot).
+    val workerEnv = new java.util.HashMap[String, String]
+    workerEnv.putAll(envVars.asJava)
+    workerEnv.put("PYTHONPATH", pythonPath)
+    workerEnv.put("PYTHONUNBUFFERED", "YES")
+    workerEnv.put("PYTHON_WORKER_FACTORY_SECRET", authHelper.secret)
+    if (Utils.preferIPv6) {
+      workerEnv.put("SPARK_PREFER_IPV6", "True")
+    }
+    logInfo(s"worker python path ${pythonPath}")
 
-      try {
-        self.synchronized {
-          val handle = RayPythonWorkerUtils.create(SparkEnv.get.executorId, workerEnv)
-          val port = RayPythonWorkerUtils.getPort(handle)
-          RayPythonWorkerUtils.start(handle)
-          val (socketChannel, pid) = createSocket(port)
-          if (!blockingMode) {
-            socketChannel.configureBlocking(false)
-          }
-          val worker = PythonWorker(socketChannel)
-          simpleWorkers.put(worker, handle)
-          (worker.refresh(), ProcessHandle.of(pid).toScala)
+    try {
+      self.synchronized {
+        val handle = RayPythonWorkerUtils.create(SparkEnv.get.executorId, workerEnv)
+        val port = RayPythonWorkerUtils.getPort(handle)
+        RayPythonWorkerUtils.start(handle)
+        val (socketChannel, pid) = createSocket(port)
+        if (!blockingMode) {
+          socketChannel.configureBlocking(false)
         }
-      } catch {
-        case e: Exception =>
-          throw new SparkException("Python worker failed to connect back.", e)
+        val worker = PythonWorker(socketChannel)
+        simpleWorkers.put(worker, handle)
+        (worker.refresh(), ProcessHandle.of(pid).toScala)
       }
+    } catch {
+      case e: Exception =>
+        throw new SparkException("Python worker failed to connect back.", e)
     }
   }
 
@@ -444,7 +442,10 @@ private[spark] class PythonWorkerFactory(
         daemonSockPath = null
       } else {
         // RayDP patch: simple workers are Ray Python actors; kill them via Ray.
+        // Drain the map so subsequent isWorkerStopped() calls report true and so
+        // the WeakHashMap entries don't linger past their corresponding actors.
         simpleWorkers.values.foreach(h => h.kill())
+        simpleWorkers.clear()
       }
     }
   }
@@ -467,8 +468,9 @@ private[spark] class PythonWorkerFactory(
           }
         }
       } else {
-        // RayDP patch: ask Ray to kill the backing Python actor.
-        simpleWorkers.get(worker).foreach(h => h.kill())
+        // RayDP patch: ask Ray to kill the backing Python actor. Drop the map
+        // entry up front so isWorkerStopped() reflects the kill immediately.
+        simpleWorkers.remove(worker).foreach(h => h.kill())
       }
     }
     worker.stop()
@@ -490,11 +492,17 @@ private[spark] class PythonWorkerFactory(
         idleWorkers.enqueue(worker)
       }
     } else {
+      // RayDP non-daemon: each simple worker is backed by a Ray Python actor.
+      // Pooling would require re-authenticating to the same actor, which the
+      // current RayDP handshake does not support cleanly, so we tear the actor
+      // down on release. `stopWorker` kills the actor, removes the bookkeeping
+      // entry, and closes the socket — without this, the PyActorHandle value
+      // outlived its WeakHashMap key and leaked.
       try {
-        worker.stop()
+        stopWorker(worker)
       } catch {
         case e: Exception =>
-          logWarning("Failed to close worker", e)
+          logWarning("Failed to stop simple worker", e)
       }
     }
   }

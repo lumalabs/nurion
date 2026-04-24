@@ -229,21 +229,27 @@ def code_search_path() -> list[str]:
 def code_search_jars() -> list[str]:
     """Return JAR paths to add to the JVM classpath.
 
-    Wheel JARs carry a ``_<scala_binary>-`` suffix in their finalName. We only
-    pick up the jars matching pyspark's Scala binary so a mismatched shim (e.g.,
-    a 2.13 jar accidentally co-located with a 2.12 pyspark) never gets loaded.
-    Spark's own jars under ``$SPARK_HOME/jars`` are never filtered.
+    RayDP's own shaded jars carry a ``_<scala_binary>-`` suffix in their
+    finalName (e.g. ``raydp_2.13-1.7.0-SNAPSHOT.jar``). We keep only those
+    matching pyspark's Scala binary so a mismatched shim never gets loaded.
+    Third-party jars staged under the same directory (``java/thirdparty/*.jar``)
+    are plain Java artifacts without a ``_<scala>-`` token; pass them through
+    unfiltered. Spark's own jars under ``$SPARK_HOME/jars`` are never filtered.
     """
     scala_bin = _pyspark_scala_binary()
-    suffix_re = re.compile(rf"_{re.escape(scala_bin)}-[^/\\]+\.jar$")
+    active_suffix_re = re.compile(rf"_{re.escape(scala_bin)}-[^/\\]+\.jar$")
+    any_scala_suffix_re = re.compile(r"_2\.(?:12|13)-[^/\\]+\.jar$")
 
     paths = code_search_path()
     jars: list[str] = []
     if paths:
         raydp_cp, *rest = paths
         for p in glob.glob(os.path.join(raydp_cp, "*.jar")):
-            if suffix_re.search(p):
-                jars.append(p)
+            if active_suffix_re.search(p):
+                jars.append(p)  # raydp jar matching active Scala binary
+            elif not any_scala_suffix_re.search(p):
+                jars.append(p)  # no Scala suffix at all (thirdparty, pure Java)
+            # else: a raydp jar for the other Scala binary; drop it.
         for path in rest:
             jars.extend(glob.glob(os.path.join(path, "*.jar")))
     return jars
