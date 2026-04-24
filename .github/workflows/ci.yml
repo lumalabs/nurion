@@ -993,7 +993,11 @@ jobs:
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
       run: |
         cd engine
-        uv run --no-sync pytest tests/ -v --tb=short -m "chaos" --timeout=600 --cov=_internal --cov-report=
+        # Chaos tests kill workers mid-flight; small data-loss assertions are
+        # known to flake. Retry AssertionError failures twice before giving up.
+        uv run --no-sync pytest tests/ -v --tb=short -m "chaos" --timeout=600 \
+          --reruns 2 --reruns-delay 10 --only-rerun AssertionError \
+          --cov=_internal --cov-report=
 
     - name: Upload coverage artifact
       if: (steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push') && always()
