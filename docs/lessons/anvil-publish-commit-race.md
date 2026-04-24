@@ -112,50 +112,71 @@ drift on error, but that's a separate counter-corruption bug — see the
 comment at `storage.rs:601-604`). The "gap" the skip exists for is
 actually the publish–commit race described above, not a crash.
 
-## Candidate fixes
+## Fix that landed: lock-free committed watermark
 
-Ranked by scope.
+Two atomics + a tiny mutex, no serialization between writers, claimers
+stay lock-free.
 
-1. **Commit-then-advance (medium scope, preferred).** Reorder push/nack
-   so the persistent `seq_push_key` counter in the WriteBatch is the
-   source of truth, and the in-memory atomic is only advanced **after**
-   `db.write` returns. Readers (claim) use a separate "committed
-   watermark" — e.g. reserve the range in a second atomic
-   (`push_seq_reserved`) but have claimers bound their work by a new
-   `push_seq_committed` atomic that is bumped post-commit. Handles
-   out-of-order commits by advancing committed only when reserved ≥
-   committed contiguously; for the common single-reclaim case it's a
-   simple `fetch_add` after `db.write`.
+- `push_seq_alloc` (new): the **reservation** cursor. Writers fetch_add
+  this to allocate a unique seq range. NOT visible to claimers.
+- `push_seq` (existing field, repurposed): the **committed watermark**.
+  Only advanced *after* `db.write` returns. Claimers use this as their
+  upper bound — anything `< push_seq` is guaranteed to have its
+  `pending_key` durable.
+- `push_commit_log: Mutex<BTreeMap<base_seq, PushReservation>>` —
+  in-flight reservations with a `done` flag. Held only briefly to
+  flip the flag and walk the contiguous-committed prefix; never held
+  across `db.write`.
 
-2. **Per-queue lock (smallest scope).** Wrap
-   `push_messages`/`nack_messages_internal` with a per-queue async
-   mutex; `claim_messages` takes the lock only for the
-   `push_seq`-read + CAS path (not for DB reads). Adds contention but
-   removes the race entirely. Most surgical, least design change.
+Writer flow (`push_messages` / `nack_messages_internal` / the
+downstream-push branch of `ack_internal` all share this pattern via
+two helpers):
 
-3. **Retry-on-gap in claim (tactical).** If `pending_key(seq)` is
-   missing, roll back `claim_seq` and retry after a brief sleep. The
-   "roll back a CAS'd value" bit is brittle — you have to use
-   `fetch_min` semantics or a tombstone list. Not recommended: papers
-   over the bug without fixing the invariant.
+```rust
+let base_seq = reserve_push_range(&c, count).await;  // fetch_add + insert into log
+// build batch with pending_keys at [base_seq, base_seq + count)
+let result = self.db.write(batch).await;             // no per-queue lock held
+commit_push_reservation(&c, base_seq).await;          // flip done, advance watermark
+result?
+```
 
-4. **Move counter into WriteBatch only (largest scope).** Delete the
-   in-memory atomic entirely; use only the persisted `seq_push_key`
-   and serialize advance through a single-writer task. Simplest mental
-   model, biggest rewrite.
+`commit_push_reservation` walks the front of the BTreeMap and advances
+`push_seq` through every contiguous done entry. Out-of-order commits
+just wait at the gap until earlier reservations land. Failure runs the
+same path so the watermark never stalls behind a failed batch (the
+`pending_key` range is empty; claimers warn-and-skip that range, but
+every later push is unaffected).
 
-Recommendation: start with (2) as a targeted fix, then evaluate (1) if
-the lock contention shows up in bench numbers. Either one makes the
-"skip silently" comment go away, because the invariant becomes: *a
-claimer that observes `push_seq ≥ X` is guaranteed to see `pending_key`
-for every seq in `[0, X)`*.
+Claimers stay lock-free:
 
-## Interim: make the race visible in CI
+```rust
+let cur = c.claim_seq.load(Acquire);
+let lim = c.push_seq.load(Acquire);   // post-commit watermark — durable invariant
+// CAS claim_seq cur → target
+// Read pending_key(seq) — guaranteed in DB now
+```
 
-Replace the silent skip with a tracing warning that logs
-`queue=… seq=… claim_seq=… push_seq=…`. This turns the next CI flake
-into direct evidence (and locally into an early-warning signal during
-chaos tests).
+Persisted `seq_push_key` switched from `base_seq + count` to
+`push_seq_alloc.load()`. The alloc cursor is monotonic in memory, so
+out-of-order DB commits no longer roll the persisted watermark
+backward (a latent secondary bug under the original design).
+
+Also evaluated and rejected:
+
+- **Per-queue RwLock around `fetch_add` + `db.write`.** Correct, but
+  serializes all writers on a queue and stalls claimers during
+  commits. Tried it (commit `1b18c7f`), throughput dropped enough that
+  the concurrency test had to be given a 30-second deadline. Rolled
+  back in favor of the watermark.
+- **Retry-on-gap in claim.** Rolling back a CAS'd `claim_seq` is
+  brittle and just papers over the invariant violation.
+- **Move counter into the WriteBatch only.** Biggest rewrite, smallest
+  payoff over the watermark.
+
+The "publish-commit race, orphaned msg" `tracing::warn!` in
+`claim_messages` stays as a regression detector: under the watermark
+design it should never fire on the happy path. If it does, the new
+code has a bug.
 
 ## Related code / commits
 
