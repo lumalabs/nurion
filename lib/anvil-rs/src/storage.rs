@@ -31,7 +31,7 @@
 // with CAS loops instead of SlateDB SerializableSnapshot transactions.
 // This eliminates transaction conflicts at high concurrency.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -45,11 +45,32 @@ pub type StorageError = Box<dyn std::error::Error + Send + Sync>;
 /// Per-queue atomic counters — in-memory fast path.
 /// Each counter has a small set of writer classes, and AtomicU64 with CAS/fetch_add suffices.
 pub struct QueueCounters {
-    /// Next sequence to assign on push (written by: push, nack).
-    /// Advanced via fetch_add only while `push_lock` is held in write mode,
-    /// so that claimers (read mode) never see a value pointing at a not-yet-
-    /// committed pending_key. See `push_lock` below.
+    /// **Visible** push watermark — read by claimers as the upper bound of
+    /// claimable seqs. Only advanced *after* a writer's `db.write(batch)`
+    /// returns, so any seq < `push_seq` is guaranteed to have its
+    /// `pending_key` durable.
+    ///
+    /// Concurrent writers are tracked through `push_commit_log` so that
+    /// out-of-order commits don't roll the watermark backward; the
+    /// watermark only moves through the contiguous-committed prefix of
+    /// the reservations in flight. See `commit_push_reservation`.
     pub push_seq: AtomicU64,
+    /// **Reservation** cursor — fetch_add'd by writers (push, nack, ack's
+    /// downstream-push branch) to allocate a unique seq range. NOT visible
+    /// to claimers; reads of this for stats/persistence are fine, but
+    /// nothing reads it to decide what's claimable.
+    pub push_seq_alloc: AtomicU64,
+    /// In-flight push reservations keyed by their `base_seq`. Each entry's
+    /// `done` flag flips to `true` when the writer's batch.write returns
+    /// (success or failure both flip; on failure, the pending_key for
+    /// that range will simply be missing and claimers will warn-and-skip,
+    /// localizing the loss without blocking the watermark).
+    ///
+    /// The committer (`commit_push_reservation`) walks the log from the
+    /// front, advancing `push_seq` through contiguous done entries.
+    /// Mutex is held only briefly — never across `db.write` — so writers
+    /// proceed in parallel up to and through their batch commit.
+    pub push_commit_log: tokio::sync::Mutex<BTreeMap<u64, PushReservation>>,
     /// Next sequence to claim (written by: claim via CAS)
     pub claim_seq: AtomicU64,
     /// Total messages ever pushed (written by: push)
@@ -60,24 +81,12 @@ pub struct QueueCounters {
     pub total_unclaimed: AtomicU64,
     /// Total messages ever acked (written by: ack)
     pub total_acked: AtomicU64,
-    /// Serializes `push_seq` advance with the WriteBatch commit so claimers
-    /// never observe a `push_seq` value pointing at a `pending_key` that has
-    /// not yet been written to DB.
-    ///
-    /// Without this, the sequence
-    ///   `let base = c.push_seq.fetch_add(count); ... db.write(batch).await?`
-    /// is interruptible by a concurrent claimer that reads the new push_seq,
-    /// CASs claim_seq past `base + count`, then reads `pending_key(seq)` and
-    /// finds nothing — silently skipping (and orphaning) the message forever.
-    /// See `docs/lessons/anvil-publish-commit-race.md`.
-    ///
-    /// Writers (push_messages, nack_messages_internal, downstream-push half
-    /// of ack_internal) hold this in **write** mode across `fetch_add(push_seq)`
-    /// + the WriteBatch commit. Claimers (claim_messages) hold it in **read**
-    /// mode only across `read push_seq` + `CAS claim_seq`; the subsequent
-    /// pending_key reads happen outside the lock (those msg_ids are stable
-    /// once their pending_key was committed inside a write-locked section).
-    pub push_lock: tokio::sync::RwLock<()>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct PushReservation {
+    pub count: u64,
+    pub done: bool,
 }
 
 /// Queue metadata for O(1) operations (return type for get_queue_stats)
@@ -281,6 +290,63 @@ impl AnvilStorage {
         );
     }
 
+    /// Reserve a contiguous push range and register a pending entry in the
+    /// queue's commit log. Returns `base_seq` of the reservation. The
+    /// caller is expected to call `commit_push_reservation` exactly once
+    /// after `db.write` returns (success or failure).
+    ///
+    /// This is the entry-point used by all push-side writers
+    /// (`push_messages`, `nack_messages_internal`, the downstream-push
+    /// branch of `ack_internal`) so they share a single bookkeeping path.
+    /// Holds `push_commit_log.lock()` only briefly — never across
+    /// `db.write` — so writers run their commits in parallel.
+    async fn reserve_push_range(c: &QueueCounters, count: u64) -> u64 {
+        let base_seq = c.push_seq_alloc.fetch_add(count, Ordering::Relaxed);
+        let mut log = c.push_commit_log.lock().await;
+        log.insert(base_seq, PushReservation { count, done: false });
+        base_seq
+    }
+
+    /// Mark the reservation at `base_seq` as committed and advance the
+    /// claimer-visible `push_seq` watermark through every contiguous done
+    /// reservation at the front of the log. Out-of-order commits are fine
+    /// — the watermark just waits at the gap until earlier reservations
+    /// flip to `done`.
+    ///
+    /// Called on both success and failure of `db.write`. On failure,
+    /// `pending_key(seq)` will be missing for that range; claimers fall
+    /// into the warn-and-skip path (`storage.rs` claim_messages branch).
+    /// That localizes the loss to the failed batch instead of stalling
+    /// the watermark and starving the queue.
+    async fn commit_push_reservation(c: &QueueCounters, base_seq: u64) {
+        let mut log = c.push_commit_log.lock().await;
+        if let Some(entry) = log.get_mut(&base_seq) {
+            entry.done = true;
+        }
+        // Advance `push_seq` through the contiguous-done prefix.
+        loop {
+            let next = log
+                .iter()
+                .next()
+                .map(|(&k, e)| (k, e.count, e.done));
+            match next {
+                Some((k, count, true)) => {
+                    let cur = c.push_seq.load(Ordering::Acquire);
+                    if k == cur {
+                        c.push_seq.store(k + count, Ordering::Release);
+                        log.remove(&k);
+                    } else {
+                        // Reservation start doesn't match the watermark —
+                        // it must be ahead of an earlier still-pending
+                        // reservation. Wait for that one to complete.
+                        break;
+                    }
+                }
+                _ => break,
+            }
+        }
+    }
+
     /// Load or initialize counters for a queue.
     /// 1. Check DashMap (fast path)
     /// 2. If missing, try to load from new counter keys
@@ -331,12 +397,13 @@ impl AnvilStorage {
 
             Arc::new(QueueCounters {
                 push_seq: AtomicU64::new(push_seq),
+                push_seq_alloc: AtomicU64::new(push_seq),
+                push_commit_log: tokio::sync::Mutex::new(BTreeMap::new()),
                 claim_seq: AtomicU64::new(claim_seq),
                 total_pushed: AtomicU64::new(total_pushed),
                 total_claimed: AtomicU64::new(total_claimed),
                 total_unclaimed: AtomicU64::new(total_unclaimed),
                 total_acked: AtomicU64::new(total_acked),
-                push_lock: tokio::sync::RwLock::new(()),
             })
         } else {
             // Try old meta:{queue} JSON (migration path)
@@ -354,12 +421,13 @@ impl AnvilStorage {
 
             let c = Arc::new(QueueCounters {
                 push_seq: AtomicU64::new(old_meta.push_seq),
+                push_seq_alloc: AtomicU64::new(old_meta.push_seq),
+                push_commit_log: tokio::sync::Mutex::new(BTreeMap::new()),
                 claim_seq: AtomicU64::new(old_meta.claim_seq),
                 total_pushed: AtomicU64::new(old_meta.total_pushed),
                 total_claimed: AtomicU64::new(migrated_total_claimed),
                 total_unclaimed: AtomicU64::new(migrated_total_unclaimed),
                 total_acked: AtomicU64::new(old_meta.total_acked),
-                push_lock: tokio::sync::RwLock::new(()),
             });
 
             // Persist new counter keys
@@ -473,12 +541,15 @@ impl AnvilStorage {
 
     // === Push Operations (NO TRANSACTION) ===
 
-    /// Push messages to queue using atomic counter + WriteBatch.
+    /// Push messages to queue.
     ///
-    /// Holds `push_lock.write()` across the `push_seq` advance and the
-    /// WriteBatch commit so concurrent claimers cannot observe the new
-    /// push_seq before the matching `pending_key` entries are durable.
-    /// See `QueueCounters::push_lock`.
+    /// Reserves a unique seq range via `reserve_push_range` (briefly
+    /// touches the per-queue commit log mutex), runs `db.write` without
+    /// holding any per-queue lock, and finally calls
+    /// `commit_push_reservation` to advance the claimer-visible
+    /// `push_seq` watermark through the contiguous-committed prefix.
+    /// Concurrent pushers / nacks proceed fully in parallel through their
+    /// `db.write`s.
     pub async fn push_messages(
         &self,
         queue: &str,
@@ -493,11 +564,10 @@ impl AnvilStorage {
         let c = self.load_or_init_counters(queue).await?;
         let count = messages.len() as u64;
 
-        // Serialize push_seq advance + commit with respect to claimers.
-        let _push_guard = c.push_lock.write().await;
-
-        // Reserve sequence range atomically
-        let base_seq = c.push_seq.fetch_add(count, Ordering::Relaxed);
+        // Reserve seq range + register pending commit. push_seq does NOT
+        // advance yet — claimers can't see this range until the watermark
+        // catches up after our commit.
+        let base_seq = Self::reserve_push_range(&c, count).await;
         let new_total_pushed = c.total_pushed.fetch_add(count, Ordering::Relaxed) + count;
 
         let mut batch = WriteBatch::new();
@@ -506,9 +576,19 @@ impl AnvilStorage {
             batch.put(Self::msg_key(queue, &msg.msg_id), &serde_json::to_vec(msg)?);
             batch.put(Self::pending_key(queue, seq), msg.msg_id.as_bytes());
         }
-        // Persist counters
-        Self::persist_push_counters(&mut batch, queue, base_seq + count, new_total_pushed);
-        self.db.write(batch).await?;
+        // Persist alloc cursor (monotonic across out-of-order commits) so
+        // restart recovers all committed pending_keys.
+        let new_alloc = c.push_seq_alloc.load(Ordering::Acquire);
+        Self::persist_push_counters(&mut batch, queue, new_alloc, new_total_pushed);
+
+        let result = self.db.write(batch).await;
+
+        // Mark the reservation done and advance the watermark, regardless
+        // of success — on failure the pending_key range is empty and any
+        // claimer reading it will warn-and-skip without losing live data.
+        Self::commit_push_reservation(&c, base_seq).await;
+
+        result?;
         Ok(())
     }
 
@@ -522,12 +602,11 @@ impl AnvilStorage {
 
     /// Claim messages from queue using CAS on claim_seq.
     ///
-    /// Reads `push_seq` and CASes `claim_seq` under `push_lock.read()` so
-    /// the value of `push_seq` we observe is guaranteed to point at
-    /// committed `pending_key` entries (writers hold `push_lock.write()`
-    /// across the WriteBatch commit). Once we've CAS'd a range, we drop
-    /// the read guard before reading pending_keys — those entries are
-    /// stable from then on.
+    /// Lock-free against writers: `push_seq` is the post-commit watermark
+    /// (advanced by `commit_push_reservation` only after `db.write`
+    /// returns), so any seq we observe below it is guaranteed to have a
+    /// durable `pending_key`. CAS loop on `claim_seq` plus an Acquire
+    /// load on `push_seq` is all we need.
     pub async fn claim_messages(
         &self,
         queue: &str,
@@ -537,29 +616,21 @@ impl AnvilStorage {
     ) -> Result<Vec<ClaimedMessage>, StorageError> {
         let c = self.load_or_init_counters(queue).await?;
 
-        // CAS loop to reserve a range of sequences. Held under push_lock.read()
-        // so push_seq we see reflects fully-committed data.
-        let claimed_range: Option<(u64, u64)> = {
-            let _push_guard = c.push_lock.read().await;
-            loop {
-                let cur = c.claim_seq.load(Ordering::Acquire);
-                let lim = c.push_seq.load(Ordering::Acquire);
-                if cur >= lim {
-                    break None;
-                }
-                let target = std::cmp::min(cur + batch_size as u64, lim);
-                if c.claim_seq
-                    .compare_exchange_weak(cur, target, Ordering::AcqRel, Ordering::Acquire)
-                    .is_ok()
-                {
-                    break Some((cur, target));
-                }
-                // CAS failed — another claimer won. Spin retry (nanosecond cost).
+        // CAS loop to reserve a range of sequences.
+        let (start, end) = loop {
+            let cur = c.claim_seq.load(Ordering::Acquire);
+            let lim = c.push_seq.load(Ordering::Acquire);
+            if cur >= lim {
+                return Ok(Vec::new());
             }
-        };
-        let (start, end) = match claimed_range {
-            Some(r) => r,
-            None => return Ok(Vec::new()),
+            let target = std::cmp::min(cur + batch_size as u64, lim);
+            if c.claim_seq
+                .compare_exchange_weak(cur, target, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                break (cur, target);
+            }
+            // CAS failed — another claimer won. Spin retry (nanosecond cost).
         };
 
         // Read messages (we own [start, end), no contention)
@@ -671,23 +742,20 @@ impl AnvilStorage {
             }
         }
 
-        // Acquire push_lock.write() on the downstream queue if we'll push to
-        // it, mirroring push_messages/nack_messages_internal: claimers on the
-        // downstream queue must not see the new push_seq before the
-        // pending_key entries are committed via db.write below.
-        let downstream_dc: Option<Arc<QueueCounters>> =
-            if let (Some(dq), Some(msgs)) = (opts.downstream_queue, opts.downstream_messages) {
-                if !msgs.is_empty() {
-                    Some(self.load_or_init_counters(dq).await?)
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-        let _downstream_push_guard = match &downstream_dc {
-            Some(dc) => Some(dc.push_lock.write().await),
-            None => None,
+        // For the downstream-push branch we need a reservation on the
+        // downstream queue's seq range (same invariant as push_messages /
+        // nack_messages_internal). Reserve up front; commit after db.write
+        // below, regardless of success.
+        let downstream_reservation: Option<(Arc<QueueCounters>, u64)> = match (
+            opts.downstream_queue,
+            opts.downstream_messages,
+        ) {
+            (Some(dq), Some(msgs)) if !msgs.is_empty() => {
+                let dc = self.load_or_init_counters(dq).await?;
+                let base = Self::reserve_push_range(&dc, msgs.len() as u64).await;
+                Some((dc, base))
+            }
+            _ => None,
         };
 
         let mut batch = WriteBatch::new();
@@ -722,18 +790,16 @@ impl AnvilStorage {
             );
         }
 
-        // 2. Push downstream messages (capacity already checked in step 0,
-        //    push_lock.write() acquired above so the post-commit advance of
-        //    push_seq is serialized with concurrent claimers).
+        // 2. Push downstream messages (capacity checked in step 0,
+        //    seq range reserved via downstream_reservation above).
         if let (Some(downstream_queue), Some(messages)) =
             (opts.downstream_queue, opts.downstream_messages)
         {
             if !messages.is_empty() {
-                let dc = downstream_dc
+                let (dc, base_seq) = downstream_reservation
                     .as_ref()
-                    .expect("downstream_dc set when we have messages");
+                    .expect("downstream_reservation set when we have messages");
                 let count = messages.len() as u64;
-                let base_seq = dc.push_seq.fetch_add(count, Ordering::Relaxed);
                 let new_dp = dc.total_pushed.fetch_add(count, Ordering::Relaxed) + count;
 
                 for (i, msg) in messages.iter().enumerate() {
@@ -746,7 +812,8 @@ impl AnvilStorage {
                         msg.msg_id.as_bytes(),
                     );
                 }
-                Self::persist_push_counters(&mut batch, downstream_queue, base_seq + count, new_dp);
+                let new_alloc = dc.push_seq_alloc.load(Ordering::Acquire);
+                Self::persist_push_counters(&mut batch, downstream_queue, new_alloc, new_dp);
             }
         }
 
@@ -764,7 +831,14 @@ impl AnvilStorage {
             }
         }
 
-        self.db.write(batch).await?;
+        let result = self.db.write(batch).await;
+        // Commit any downstream-push reservation regardless of outcome —
+        // mirrors push_messages / nack_messages_internal so the watermark
+        // never stalls behind a failed write.
+        if let Some((dc, base_seq)) = &downstream_reservation {
+            Self::commit_push_reservation(dc, *base_seq).await;
+        }
+        result?;
         Ok(())
     }
 
@@ -981,12 +1055,9 @@ impl AnvilStorage {
         let c = self.load_or_init_counters(queue).await?;
         let nack_count = msg_ids.len() as u64;
 
-        // Serialize push_seq advance + commit (same invariant as push_messages):
-        // claimers must not see the new push_seq before pending_key is committed.
-        let _push_guard = c.push_lock.write().await;
-
-        // Reserve new pending sequences at the tail
-        let base_seq = c.push_seq.fetch_add(nack_count, Ordering::Relaxed);
+        // Reserve seq range at the tail and register the pending commit.
+        // Watermark stays put until commit_push_reservation runs below.
+        let base_seq = Self::reserve_push_range(&c, nack_count).await;
         let new_unclaimed = c.total_unclaimed.fetch_add(nack_count, Ordering::Relaxed) + nack_count;
 
         let mut batch = WriteBatch::new();
@@ -997,10 +1068,10 @@ impl AnvilStorage {
                 msg_id.as_bytes(),
             );
         }
-        batch.put(
-            Self::seq_push_key(queue),
-            (base_seq + nack_count).to_le_bytes(),
-        );
+        // Persist alloc cursor so a recovery from disk picks up everything
+        // committed (regardless of out-of-order commits).
+        let new_alloc = c.push_seq_alloc.load(Ordering::Acquire);
+        batch.put(Self::seq_push_key(queue), new_alloc.to_le_bytes());
         batch.put(
             Self::cnt_total_unclaimed_key(queue),
             new_unclaimed.to_le_bytes(),
@@ -1024,7 +1095,9 @@ impl AnvilStorage {
             }
         }
 
-        self.db.write(batch).await?;
+        let result = self.db.write(batch).await;
+        Self::commit_push_reservation(&c, base_seq).await;
+        result?;
         Ok(())
     }
 
@@ -2491,7 +2564,7 @@ mod tests {
             let worker_id = format!("claimer-{w}");
             let lease_id = format!("claimer-{w}-lease");
             claim_handles.push(tokio::spawn(async move {
-                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
                 while std::time::Instant::now() < deadline {
                     let batch = storage
                         .claim_messages(queue, 32, &worker_id, &lease_id)
