@@ -2714,4 +2714,319 @@ mod tests {
         let claimed_set = claimed.lock().await;
         dead_set.difference(&claimed_set).count() as u64
     }
+
+    /// Concurrent ack_and_forward: 1:1 transform stage. K workers each
+    /// claim from upstream and atomically ack-upstream + push-downstream.
+    /// Exercises the *third* push-side write path (ack_internal's
+    /// downstream-push branch) which has the same publish-commit invariant
+    /// as push_messages and nack_messages_internal.
+    ///
+    /// Invariant: every msg pushed to upstream lands in downstream exactly
+    /// once. With the watermark fix, downstream claimers must observe a
+    /// `push_seq` that always reflects committed `pending_key` entries.
+    #[tokio::test]
+    async fn test_concurrent_ack_and_forward_no_loss() {
+        let storage = Arc::new(create_temp_storage().await);
+        let upstream = "ack-fwd-upstream";
+        let downstream = "ack-fwd-downstream";
+        storage.create_queue(upstream, 0).await.unwrap();
+        storage.create_queue(downstream, 0).await.unwrap();
+
+        const PRODUCERS: usize = 4;
+        const TRANSFORMERS: usize = 8;
+        const DOWNSTREAM_CLAIMERS: usize = 4;
+        const PER_PRODUCER: u64 = 200;
+        const TOTAL: u64 = (PRODUCERS as u64) * PER_PRODUCER;
+
+        // Pushers: produce TOTAL messages onto upstream.
+        let mut producers = Vec::new();
+        for p in 0..PRODUCERS {
+            let storage = storage.clone();
+            producers.push(tokio::spawn(async move {
+                let msgs: Vec<Message> = (0..PER_PRODUCER)
+                    .map(|i| {
+                        Message::new(upstream.to_string(), format!("p{p}-msg{i}").into_bytes())
+                    })
+                    .collect();
+                for chunk in msgs.chunks(8) {
+                    storage.push_messages(upstream, chunk).await.unwrap();
+                    tokio::task::yield_now().await;
+                }
+            }));
+        }
+
+        // Transformers: claim from upstream + ack_and_forward to downstream.
+        // Track msg-id correspondences so we can verify 1:1 conservation.
+        let forwarded: Arc<tokio::sync::Mutex<std::collections::HashSet<String>>> =
+            Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new()));
+
+        let mut transformers = Vec::new();
+        for t in 0..TRANSFORMERS {
+            let storage = storage.clone();
+            let forwarded = forwarded.clone();
+            let worker_id = format!("xform-{t}");
+            let lease_id = format!("xform-{t}-lease");
+            transformers.push(tokio::spawn(async move {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+                while std::time::Instant::now() < deadline {
+                    let batch = storage
+                        .claim_messages(upstream, 16, &worker_id, &lease_id)
+                        .await
+                        .unwrap();
+                    if batch.is_empty() {
+                        if forwarded.lock().await.len() as u64 >= TOTAL {
+                            break;
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                        continue;
+                    }
+                    let upstream_ids: Vec<String> =
+                        batch.iter().map(|c| c.message.msg_id.clone()).collect();
+                    let upstream_tokens: Vec<String> =
+                        batch.iter().map(|c| c.claim_token.clone()).collect();
+                    // 1:1 — wrap each upstream msg into a downstream msg.
+                    let downstream_msgs: Vec<Message> = batch
+                        .iter()
+                        .map(|c| Message::new(downstream.to_string(), c.message.payload.clone()))
+                        .collect();
+
+                    storage
+                        .ack_and_forward(
+                            upstream,
+                            &upstream_ids,
+                            &upstream_tokens,
+                            &worker_id,
+                            &lease_id,
+                            downstream,
+                            &downstream_msgs,
+                        )
+                        .await
+                        .unwrap();
+
+                    let mut f = forwarded.lock().await;
+                    for d in &downstream_msgs {
+                        f.insert(d.msg_id.clone());
+                    }
+                }
+            }));
+        }
+
+        // Downstream claimers: drain downstream and count.
+        let downstream_seen: Arc<tokio::sync::Mutex<std::collections::HashSet<String>>> =
+            Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new()));
+        let mut downstream_handles = Vec::new();
+        for w in 0..DOWNSTREAM_CLAIMERS {
+            let storage = storage.clone();
+            let downstream_seen = downstream_seen.clone();
+            let worker_id = format!("dn-{w}");
+            let lease_id = format!("dn-{w}-lease");
+            downstream_handles.push(tokio::spawn(async move {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+                while std::time::Instant::now() < deadline {
+                    let batch = storage
+                        .claim_messages(downstream, 32, &worker_id, &lease_id)
+                        .await
+                        .unwrap();
+                    if batch.is_empty() {
+                        if downstream_seen.lock().await.len() as u64 >= TOTAL {
+                            break;
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                        continue;
+                    }
+                    let ids: Vec<String> = batch.iter().map(|c| c.message.msg_id.clone()).collect();
+                    let tokens: Vec<String> = batch.iter().map(|c| c.claim_token.clone()).collect();
+                    {
+                        let mut s = downstream_seen.lock().await;
+                        for id in &ids {
+                            s.insert(id.clone());
+                        }
+                    }
+                    storage
+                        .ack_messages(downstream, &ids, &tokens, &worker_id, &lease_id)
+                        .await
+                        .unwrap();
+                }
+            }));
+        }
+
+        for p in producers {
+            p.await.unwrap();
+        }
+        for t in transformers {
+            t.await.unwrap();
+        }
+        for h in downstream_handles {
+            h.await.unwrap();
+        }
+
+        let forwarded = forwarded.lock().await;
+        let downstream_seen = downstream_seen.lock().await;
+        assert_eq!(
+            forwarded.len() as u64,
+            TOTAL,
+            "transform stage forwarded {} of {} upstream msgs",
+            forwarded.len(),
+            TOTAL,
+        );
+        assert_eq!(
+            downstream_seen.len() as u64,
+            TOTAL,
+            "downstream claimers saw {} of {} forwarded msgs",
+            downstream_seen.len(),
+            TOTAL,
+        );
+        assert_eq!(
+            *forwarded, *downstream_seen,
+            "forwarded set must equal downstream-seen set (no msg lost or duplicated)",
+        );
+    }
+
+    /// Realistic chaos scenario: producers stream msgs while one batch of
+    /// "dead" workers claims and never acks. Background reclaim runs with
+    /// `active_leases` *excluding* the dead workers (the production
+    /// pattern from `recover_expired_claims`), so live workers' in-flight
+    /// claims are respected and only the dead workers' claims are nacked.
+    /// After everything settles, every msg must end up acked.
+    ///
+    /// This exercises three concurrent code paths simultaneously:
+    /// `push_messages`, `nack_messages_internal` (via reclaim), and
+    /// `claim_messages` — covering all of the publish-commit
+    /// invariant's writer side.
+    #[tokio::test]
+    async fn test_dead_worker_recovery_under_concurrent_pushes_and_claims() {
+        let storage = Arc::new(create_temp_storage().await);
+        let queue = "dead-worker-race";
+        storage.create_queue(queue, 0).await.unwrap();
+
+        const PRODUCERS: usize = 4;
+        const LIVE_CLAIMERS: usize = 6;
+        const PER_PRODUCER: u64 = 200;
+        const TOTAL: u64 = (PRODUCERS as u64) * PER_PRODUCER;
+
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let acked: Arc<tokio::sync::Mutex<std::collections::HashSet<String>>> =
+            Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new()));
+
+        // Pre-claim as a "dead worker": grab a small batch and never ack.
+        // Reclaim will need to nack these back to pending. We do this
+        // before producers start so the dead claim is one of the very
+        // first reservations on the queue.
+        let mut producer_handles = Vec::new();
+        for p in 0..PRODUCERS {
+            let storage = storage.clone();
+            producer_handles.push(tokio::spawn(async move {
+                for batch_idx in 0..(PER_PRODUCER / 10) {
+                    let msgs: Vec<Message> = (0..10)
+                        .map(|i| {
+                            Message::new(
+                                queue.to_string(),
+                                format!("p{p}-b{batch_idx}-m{i}").into_bytes(),
+                            )
+                        })
+                        .collect();
+                    storage.push_messages(queue, &msgs).await.unwrap();
+                    tokio::task::yield_now().await;
+                }
+            }));
+        }
+
+        // Dead worker — claim something, never ack.
+        let dead_claim_task = {
+            let storage = storage.clone();
+            tokio::spawn(async move {
+                // Wait briefly for some msgs to be available.
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                let _ = storage
+                    .claim_messages(queue, 50, "dead-worker", "dead-lease")
+                    .await
+                    .unwrap();
+                // Never ack. The lease "dead-lease" will not be in
+                // active_leases when reclaim runs, so reclaim treats this
+                // worker as gone and nacks its claims.
+            })
+        };
+
+        // Reclaim task: passes only live claimers' leases as active. The
+        // dead worker's lease is absent → its claims are reclaimed.
+        let reclaim_handle = {
+            let storage = storage.clone();
+            let stop = stop.clone();
+            tokio::spawn(async move {
+                let mut active = HashMap::<String, f64>::new();
+                for w in 0..LIVE_CLAIMERS {
+                    active.insert(
+                        format!("claimer-{w}-lease"),
+                        crate::types::now_secs() + 1_000_000.0, // far future = always alive
+                    );
+                }
+                while !stop.load(std::sync::atomic::Ordering::Acquire) {
+                    // timeout=0 means "any non-alive lease is dead"; with
+                    // far-future last_seen on live leases, only `dead-lease`
+                    // will be considered for reclaim.
+                    let _ = storage
+                        .recover_expired_claims(0.0, Some(&active))
+                        .await
+                        .unwrap();
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+            })
+        };
+
+        // Live claimers: claim, ack, repeat. Always succeed (no contention
+        // with reclaim because reclaim respects their leases).
+        let mut claim_handles = Vec::new();
+        for w in 0..LIVE_CLAIMERS {
+            let storage = storage.clone();
+            let acked = acked.clone();
+            let worker_id = format!("claimer-{w}");
+            let lease_id = format!("claimer-{w}-lease");
+            claim_handles.push(tokio::spawn(async move {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+                while std::time::Instant::now() < deadline {
+                    if acked.lock().await.len() as u64 >= TOTAL {
+                        break;
+                    }
+                    let batch = storage
+                        .claim_messages(queue, 16, &worker_id, &lease_id)
+                        .await
+                        .unwrap();
+                    if batch.is_empty() {
+                        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+                        continue;
+                    }
+                    let ids: Vec<String> = batch.iter().map(|c| c.message.msg_id.clone()).collect();
+                    let tokens: Vec<String> = batch.iter().map(|c| c.claim_token.clone()).collect();
+                    storage
+                        .ack_messages(queue, &ids, &tokens, &worker_id, &lease_id)
+                        .await
+                        .unwrap();
+                    let mut s = acked.lock().await;
+                    for id in &ids {
+                        s.insert(id.clone());
+                    }
+                }
+            }));
+        }
+
+        for p in producer_handles {
+            p.await.unwrap();
+        }
+        dead_claim_task.await.unwrap();
+        for h in claim_handles {
+            h.await.unwrap();
+        }
+        stop.store(true, std::sync::atomic::Ordering::Release);
+        reclaim_handle.await.unwrap();
+
+        let acked_set = acked.lock().await;
+        assert_eq!(
+            acked_set.len() as u64,
+            TOTAL,
+            "dead-worker recovery race: {} of {} msgs acked — rest orphaned by \
+             push/nack/claim publish-commit race",
+            acked_set.len(),
+            TOTAL,
+        );
+    }
 }
