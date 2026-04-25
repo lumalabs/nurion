@@ -1244,9 +1244,27 @@ impl AnvilStorage {
         Ok(deleted)
     }
 
+    /// Reclaim expired claims back to pending. Two independent timeouts:
+    ///
+    /// - `lease_timeout_secs`: how long a lease's heartbeat can lag before
+    ///   the worker is considered dead. A lease is "alive" when its
+    ///   `last_seen` is within this many seconds of `now`. Tunes
+    ///   *worker-death detection*.
+    /// - `claim_age_timeout_secs`: how long a single claim can be held
+    ///   before being treated as stuck, even if the worker's lease still
+    ///   appears alive. Tunes *task-duration SLA* and covers the lag
+    ///   window between a Ray-level worker death and the broker noticing
+    ///   the lease drop.
+    ///
+    /// Previously these were a single `timeout_secs` knob, which forced
+    /// callers to pick one number that worked for both — e.g. the chaos
+    /// tests had to use 10 s for both, even though task duration and
+    /// dead-worker detection are completely different concerns. Splitting
+    /// them lets each test (and production) tune them independently.
     pub async fn recover_expired_claims(
         &self,
-        timeout_secs: f64,
+        lease_timeout_secs: f64,
+        claim_age_timeout_secs: f64,
         active_leases: Option<&HashMap<String, f64>>,
     ) -> Result<usize, StorageError> {
         let now = crate::types::now_secs();
@@ -1257,11 +1275,7 @@ impl AnvilStorage {
         for (queue, msg_id, claim_info) in all_claimed {
             let lease_alive = if let Some(leases) = active_leases {
                 if let Some(last_seen) = leases.get(&claim_info.lease_id) {
-                    if now - *last_seen <= timeout_secs {
-                        true
-                    } else {
-                        false // Lease exists but heartbeat expired
-                    }
+                    now - *last_seen <= lease_timeout_secs
                 } else {
                     // Lease not in active set — worker is dead
                     false
@@ -1271,17 +1285,12 @@ impl AnvilStorage {
             };
 
             if lease_alive {
-                // Live lease — only recover if claim_timeout exceeded. This
-                // covers two cases: a genuinely stuck worker (alive but not
-                // making progress on this claim), AND the lag window where
-                // a Ray-level worker death has happened but the broker's
-                // lease tracker hasn't yet noticed (heartbeat not yet
-                // missed). Without this branch, killing a worker mid-task
-                // leaves its claim wedged until the lease finally expires
-                // from active_leases, which can be much longer than
-                // claim_timeout_secs and causes data-loss-style flakes in
-                // the chaos / stability suites.
-                if now - claim_info.claimed_at > timeout_secs {
+                // Live lease — only recover if the claim has been held longer
+                // than `claim_age_timeout_secs`. This catches both a genuinely
+                // stuck worker (alive but not making progress) AND the lag
+                // window between a Ray-level worker death and the broker
+                // noticing the lease drop.
+                if now - claim_info.claimed_at > claim_age_timeout_secs {
                     let mut info = claim_info.clone();
                     info.msg_id = msg_id;
                     expired_by_queue.entry(queue).or_default().push(info);
@@ -1846,8 +1855,61 @@ impl AnvilStorage {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
 
     static TEST_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Test timing constants — named values for what would otherwise be
+    // magic numbers scattered across the concurrency tests.
+    //
+    // Two reasons to centralize:
+    //   1. There used to be one `claim_timeout_secs` knob doing three jobs
+    //      (lease freshness, claim age, derived heartbeat interval), and
+    //      every test picked a different number trying to make the one
+    //      knob fit its scenario. Splitting recover_expired_claims into
+    //      `lease_timeout_secs` + `claim_age_timeout_secs` removed the
+    //      conflation; these constants pin the conventions.
+    //   2. The async deadlines in the concurrency tests are scenario-
+    //      driven (how long should a finite test wait?) rather than
+    //      semantic-driven; naming them makes it clear what's a
+    //      production-meaningful number vs. a "give the runtime enough
+    //      slack" number.
+    // ─────────────────────────────────────────────────────────────────────
+
+    /// Production default for `BrokerConfig::claim_timeout_secs` (60 s).
+    /// The single-knob compatibility layer in `recovery.rs` uses this same
+    /// value for both lease freshness and claim age — see the comment in
+    /// `RecoveryTask::start`.
+    const LEASE_TIMEOUT_SECS_PRODUCTION: f64 = 60.0;
+    const CLAIM_AGE_TIMEOUT_SECS_PRODUCTION: f64 = 60.0;
+
+    /// Aggressive lease-freshness timeout for fast-recovery tests:
+    /// dead-lease branch fires immediately on missing leases, so this
+    /// only matters for live-but-stale leases. In a unit test, leases are
+    /// in-process so their `last_seen` is exactly accurate; nothing
+    /// realistic ever falls in the live-but-stale band.
+    const LEASE_TIMEOUT_SECS_TEST_FAST: f64 = 1.0;
+
+    /// Claim-age timeout that's long enough to never fire on a healthy
+    /// in-process claimer (ack latency ≪ 1 s) but short enough that a
+    /// hung claim is detected within a single test's runtime budget.
+    const CLAIM_AGE_TIMEOUT_SECS_TEST_LIVE_SAFE: f64 = 5.0;
+
+    /// Heartbeat offset to mark a test lease as "definitely fresh" — far
+    /// future so any reasonable lease-freshness timeout passes.
+    const LEASE_FAR_FUTURE_SECS: f64 = 1_000_000.0;
+
+    /// Async deadlines for the concurrency tests. These bound how long
+    /// the test waits for producers/claimers to drain; they are not
+    /// modeling any production semantic.
+    const CONCURRENCY_TEST_DRAIN_DEADLINE: Duration = Duration::from_secs(5);
+    const HEAVY_CONCURRENCY_TEST_DRAIN_DEADLINE: Duration = Duration::from_secs(15);
+    const RACE_REPRODUCER_TRIAL_DEADLINE: Duration = Duration::from_millis(500);
+
+    /// Polling intervals inside the concurrency tests' inner loops.
+    const TEST_BUSY_SLEEP: Duration = Duration::from_millis(1);
+    const TEST_RECOVERY_TICK: Duration = Duration::from_millis(20);
 
     async fn create_temp_storage() -> AnvilStorage {
         let counter = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
@@ -2135,7 +2197,12 @@ mod tests {
 
         // Advance sim time so claim is expired
         advance_sim_time_secs(1.0);
-        let recovered = storage.recover_expired_claims(0.0, None).await.unwrap();
+        // No active_leases → every claim is dead-lease → reclaimed regardless
+        // of timeouts. Both timeouts at 0 to cover the no-grace-period case.
+        let recovered = storage
+            .recover_expired_claims(0.0, 0.0, None)
+            .await
+            .unwrap();
         assert_eq!(recovered, 1);
 
         let claimed_again = storage
@@ -2175,12 +2242,14 @@ mod tests {
         let mut active = HashMap::new();
         active.insert("lease-1".to_string(), crate::types::now_secs());
 
-        // timeout=60: the claim is 1s old, lease just heartbeated, so recovery
-        // should leave it alone. (Originally written with timeout=0, which
-        // double-tripped both the lease-expiry check AND the claim-age check;
-        // production never uses timeout=0 — default is 60.)
+        // Both timeouts comfortably above the 1 s elapsed: lease just
+        // heartbeated AND claim is fresh, so recovery should leave it alone.
         let recovered = storage
-            .recover_expired_claims(60.0, Some(&active))
+            .recover_expired_claims(
+                LEASE_TIMEOUT_SECS_PRODUCTION,
+                CLAIM_AGE_TIMEOUT_SECS_PRODUCTION,
+                Some(&active),
+            )
             .await
             .unwrap();
         assert_eq!(recovered, 0);
@@ -2429,7 +2498,12 @@ mod tests {
             .unwrap();
 
         advance_sim_time_secs(1.0);
-        let recovered = storage.recover_expired_claims(0.0, None).await.unwrap();
+        // No active leases at all → every claim falls into the dead-lease
+        // branch; both timeouts irrelevant.
+        let recovered = storage
+            .recover_expired_claims(0.0, 0.0, None)
+            .await
+            .unwrap();
         assert_eq!(recovered, 1);
 
         let claimed = storage
@@ -2571,7 +2645,7 @@ mod tests {
             let worker_id = format!("claimer-{w}");
             let lease_id = format!("claimer-{w}-lease");
             claim_handles.push(tokio::spawn(async move {
-                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                let deadline = std::time::Instant::now() + CONCURRENCY_TEST_DRAIN_DEADLINE;
                 while std::time::Instant::now() < deadline {
                     let batch = storage
                         .claim_messages(queue, 32, &worker_id, &lease_id)
@@ -2582,7 +2656,7 @@ mod tests {
                         if seen >= TOTAL {
                             break;
                         }
-                        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                        tokio::time::sleep(TEST_BUSY_SLEEP).await;
                         continue;
                     }
                     let (msg_ids, claim_tokens) = split_claims(&batch);
@@ -2684,7 +2758,7 @@ mod tests {
             let lease_id = format!("claimer-{w}-lease");
             handles.push(tokio::spawn(async move {
                 barrier.wait().await;
-                let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
+                let deadline = std::time::Instant::now() + RACE_REPRODUCER_TRIAL_DEADLINE;
                 while std::time::Instant::now() < deadline {
                     let batch = storage
                         .claim_messages(queue, 16, &worker_id, &lease_id)
@@ -2776,7 +2850,7 @@ mod tests {
             let worker_id = format!("xform-{t}");
             let lease_id = format!("xform-{t}-lease");
             transformers.push(tokio::spawn(async move {
-                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+                let deadline = std::time::Instant::now() + HEAVY_CONCURRENCY_TEST_DRAIN_DEADLINE;
                 while std::time::Instant::now() < deadline {
                     let batch = storage
                         .claim_messages(upstream, 16, &worker_id, &lease_id)
@@ -2786,7 +2860,7 @@ mod tests {
                         if forwarded.lock().await.len() as u64 >= TOTAL {
                             break;
                         }
-                        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                        tokio::time::sleep(TEST_BUSY_SLEEP).await;
                         continue;
                     }
                     let upstream_ids: Vec<String> =
@@ -2830,7 +2904,7 @@ mod tests {
             let worker_id = format!("dn-{w}");
             let lease_id = format!("dn-{w}-lease");
             downstream_handles.push(tokio::spawn(async move {
-                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+                let deadline = std::time::Instant::now() + HEAVY_CONCURRENCY_TEST_DRAIN_DEADLINE;
                 while std::time::Instant::now() < deadline {
                     let batch = storage
                         .claim_messages(downstream, 32, &worker_id, &lease_id)
@@ -2840,7 +2914,7 @@ mod tests {
                         if downstream_seen.lock().await.len() as u64 >= TOTAL {
                             break;
                         }
-                        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                        tokio::time::sleep(TEST_BUSY_SLEEP).await;
                         continue;
                     }
                     let ids: Vec<String> = batch.iter().map(|c| c.message.msg_id.clone()).collect();
@@ -2945,7 +3019,7 @@ mod tests {
             let storage = storage.clone();
             tokio::spawn(async move {
                 // Wait briefly for some msgs to be available.
-                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                tokio::time::sleep(TEST_RECOVERY_TICK).await;
                 let _ = storage
                     .claim_messages(queue, 50, "dead-worker", "dead-lease")
                     .await
@@ -2966,21 +3040,25 @@ mod tests {
                 for w in 0..LIVE_CLAIMERS {
                     active.insert(
                         format!("claimer-{w}-lease"),
-                        crate::types::now_secs() + 1_000_000.0, // far future = always alive
+                        crate::types::now_secs() + LEASE_FAR_FUTURE_SECS,
                     );
                 }
                 while !stop.load(std::sync::atomic::Ordering::Acquire) {
-                    // timeout=5s: dead-lease claims (lease not in active set)
-                    // are recovered immediately by the dead-lease branch.
-                    // Live-lease claims need to sit > 5s before recover takes
-                    // them — well beyond any live claimer's ack latency, so
-                    // we don't accidentally rip claims out from under healthy
-                    // workers.
+                    // Lease-timeout: short, so a missing lease (= dead worker)
+                    // is recovered immediately by the dead-lease branch.
+                    // Claim-age timeout: long enough to never fire on a
+                    // healthy live claimer (worst-case ack latency in this
+                    // test is sub-millisecond), but small enough that an
+                    // entire test run can fit comfortably inside it.
                     let _ = storage
-                        .recover_expired_claims(5.0, Some(&active))
+                        .recover_expired_claims(
+                            LEASE_TIMEOUT_SECS_TEST_FAST,
+                            CLAIM_AGE_TIMEOUT_SECS_TEST_LIVE_SAFE,
+                            Some(&active),
+                        )
                         .await
                         .unwrap();
-                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                    tokio::time::sleep(TEST_RECOVERY_TICK).await;
                 }
             })
         };
@@ -2994,7 +3072,7 @@ mod tests {
             let worker_id = format!("claimer-{w}");
             let lease_id = format!("claimer-{w}-lease");
             claim_handles.push(tokio::spawn(async move {
-                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+                let deadline = std::time::Instant::now() + HEAVY_CONCURRENCY_TEST_DRAIN_DEADLINE;
                 while std::time::Instant::now() < deadline {
                     if acked.lock().await.len() as u64 >= TOTAL {
                         break;
@@ -3004,7 +3082,7 @@ mod tests {
                         .await
                         .unwrap();
                     if batch.is_empty() {
-                        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+                        tokio::time::sleep(TEST_BUSY_SLEEP).await;
                         continue;
                     }
                     let ids: Vec<String> = batch.iter().map(|c| c.message.msg_id.clone()).collect();
