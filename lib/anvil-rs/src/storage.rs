@@ -61,16 +61,20 @@ pub struct QueueCounters {
     /// nothing reads it to decide what's claimable.
     pub push_seq_alloc: AtomicU64,
     /// In-flight push reservations keyed by their `base_seq`. Each entry's
-    /// `done` flag flips to `true` when the writer's batch.write returns
-    /// (success or failure both flip; on failure, the pending_key for
-    /// that range will simply be missing and claimers will warn-and-skip,
-    /// localizing the loss without blocking the watermark).
+    /// `done` flag flips to `true` when the `PushReservationGuard` (returned
+    /// by `reserve_push_range`) is dropped — and the guard's `Drop` impl is
+    /// what advances the watermark, so the path runs uniformly on success,
+    /// on early-return errors, on panic, and on cancellation of the
+    /// surrounding async task.
     ///
-    /// The committer (`commit_push_reservation`) walks the log from the
-    /// front, advancing `push_seq` through contiguous done entries.
-    /// Mutex is held only briefly — never across `db.write` — so writers
-    /// proceed in parallel up to and through their batch commit.
-    pub push_commit_log: tokio::sync::Mutex<BTreeMap<u64, PushReservation>>,
+    /// `std::sync::Mutex` rather than tokio's because:
+    ///   1. The critical section is sub-microsecond (one BTreeMap insert
+    ///      or a short walk of the front), so blocking the runtime is
+    ///      cheaper than a context switch.
+    ///   2. `Drop` impls can't lock a `tokio::sync::Mutex` (lock is async).
+    ///      Switching to std lets the guard's Drop close the loop without
+    ///      spawning a fire-and-forget task.
+    pub push_commit_log: std::sync::Mutex<BTreeMap<u64, PushReservation>>,
     /// Next sequence to claim (written by: claim via CAS)
     pub claim_seq: AtomicU64,
     /// Total messages ever pushed (written by: push)
@@ -87,6 +91,57 @@ pub struct QueueCounters {
 pub struct PushReservation {
     pub count: u64,
     pub done: bool,
+}
+
+/// RAII guard for an in-flight push reservation. Holds an `Arc` to the
+/// per-queue counters; `Drop` flips the matching log entry to `done` and
+/// advances the watermark through every contiguous-done reservation at
+/// the front of the log.
+///
+/// Using a guard (instead of an explicit `commit_push_reservation` call)
+/// guarantees the watermark advances on every exit path — `Ok` return,
+/// early-`?` propagation, panic, async-task cancellation. Forgetting any
+/// one of those caused a real production bug where `validate_claims`
+/// returning `Err` from `ack_internal` left the downstream-push
+/// reservation Pending forever, wedging the watermark and orphaning
+/// every subsequent push.
+pub struct PushReservationGuard {
+    counters: Arc<QueueCounters>,
+    base_seq: u64,
+}
+
+impl Drop for PushReservationGuard {
+    fn drop(&mut self) {
+        let c = &self.counters;
+        let mut log = match c.push_commit_log.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if let Some(entry) = log.get_mut(&self.base_seq) {
+            entry.done = true;
+        }
+        // Advance push_seq through the contiguous-done prefix.
+        // Out-of-order commits wait at the gap until the earlier
+        // reservations land.
+        loop {
+            let next = log.iter().next().map(|(&k, e)| (k, e.count, e.done));
+            match next {
+                Some((k, count, true)) => {
+                    let cur = c.push_seq.load(Ordering::Acquire);
+                    if k == cur {
+                        c.push_seq.store(k + count, Ordering::Release);
+                        log.remove(&k);
+                    } else {
+                        // Reservation at the front isn't the watermark —
+                        // an earlier reservation is still in flight. Wait
+                        // for its guard to drop.
+                        break;
+                    }
+                }
+                _ => break,
+            }
+        }
+    }
 }
 
 /// Queue metadata for O(1) operations (return type for get_queue_stats)
@@ -290,57 +345,36 @@ impl AnvilStorage {
         );
     }
 
-    /// Reserve a contiguous push range and register a pending entry in the
-    /// queue's commit log. Returns `base_seq` of the reservation. The
-    /// caller is expected to call `commit_push_reservation` exactly once
-    /// after `db.write` returns (success or failure).
+    /// Reserve a contiguous push range and register a pending entry in
+    /// the queue's commit log. Returns a `PushReservationGuard` that
+    /// closes the reservation on `Drop` (advancing the watermark through
+    /// the contiguous-committed prefix).
     ///
-    /// This is the entry-point used by all push-side writers
-    /// (`push_messages`, `nack_messages_internal`, the downstream-push
-    /// branch of `ack_internal`) so they share a single bookkeeping path.
-    /// Holds `push_commit_log.lock()` only briefly — never across
-    /// `db.write` — so writers run their commits in parallel.
-    async fn reserve_push_range(c: &QueueCounters, count: u64) -> u64 {
+    /// **Crucial**: callers MUST hold the guard for the entire span of
+    /// "writing this push to the DB" — `Ok` returns, `?`-propagated
+    /// errors, panics, and async-task cancellation all run the same
+    /// `Drop` path. Without this, an early return between
+    /// `reserve_push_range` and a separate explicit-commit call would
+    /// leave a `Pending` entry in the log forever, wedging the watermark
+    /// and orphaning every subsequent push to that queue. (That bug
+    /// was real on this PR's first iteration — see
+    /// `docs/lessons/anvil-publish-commit-race.md` for the trace.)
+    ///
+    /// All three push-side writers (`push_messages`,
+    /// `nack_messages_internal`, the downstream-push branch of
+    /// `ack_internal`) share this single bookkeeping path. The
+    /// `push_commit_log` mutex is held only briefly here and inside
+    /// `Drop` — never across `db.write` — so concurrent writers run
+    /// their commits fully in parallel.
+    fn reserve_push_range(c: &Arc<QueueCounters>, count: u64) -> PushReservationGuard {
         let base_seq = c.push_seq_alloc.fetch_add(count, Ordering::Relaxed);
-        let mut log = c.push_commit_log.lock().await;
-        log.insert(base_seq, PushReservation { count, done: false });
-        base_seq
-    }
-
-    /// Mark the reservation at `base_seq` as committed and advance the
-    /// claimer-visible `push_seq` watermark through every contiguous done
-    /// reservation at the front of the log. Out-of-order commits are fine
-    /// — the watermark just waits at the gap until earlier reservations
-    /// flip to `done`.
-    ///
-    /// Called on both success and failure of `db.write`. On failure,
-    /// `pending_key(seq)` will be missing for that range; claimers fall
-    /// into the warn-and-skip path (`storage.rs` claim_messages branch).
-    /// That localizes the loss to the failed batch instead of stalling
-    /// the watermark and starving the queue.
-    async fn commit_push_reservation(c: &QueueCounters, base_seq: u64) {
-        let mut log = c.push_commit_log.lock().await;
-        if let Some(entry) = log.get_mut(&base_seq) {
-            entry.done = true;
+        {
+            let mut log = c.push_commit_log.lock().expect("push_commit_log poisoned");
+            log.insert(base_seq, PushReservation { count, done: false });
         }
-        // Advance `push_seq` through the contiguous-done prefix.
-        loop {
-            let next = log.iter().next().map(|(&k, e)| (k, e.count, e.done));
-            match next {
-                Some((k, count, true)) => {
-                    let cur = c.push_seq.load(Ordering::Acquire);
-                    if k == cur {
-                        c.push_seq.store(k + count, Ordering::Release);
-                        log.remove(&k);
-                    } else {
-                        // Reservation start doesn't match the watermark —
-                        // it must be ahead of an earlier still-pending
-                        // reservation. Wait for that one to complete.
-                        break;
-                    }
-                }
-                _ => break,
-            }
+        PushReservationGuard {
+            counters: c.clone(),
+            base_seq,
         }
     }
 
@@ -395,7 +429,7 @@ impl AnvilStorage {
             Arc::new(QueueCounters {
                 push_seq: AtomicU64::new(push_seq),
                 push_seq_alloc: AtomicU64::new(push_seq),
-                push_commit_log: tokio::sync::Mutex::new(BTreeMap::new()),
+                push_commit_log: std::sync::Mutex::new(BTreeMap::new()),
                 claim_seq: AtomicU64::new(claim_seq),
                 total_pushed: AtomicU64::new(total_pushed),
                 total_claimed: AtomicU64::new(total_claimed),
@@ -419,7 +453,7 @@ impl AnvilStorage {
             let c = Arc::new(QueueCounters {
                 push_seq: AtomicU64::new(old_meta.push_seq),
                 push_seq_alloc: AtomicU64::new(old_meta.push_seq),
-                push_commit_log: tokio::sync::Mutex::new(BTreeMap::new()),
+                push_commit_log: std::sync::Mutex::new(BTreeMap::new()),
                 claim_seq: AtomicU64::new(old_meta.claim_seq),
                 total_pushed: AtomicU64::new(old_meta.total_pushed),
                 total_claimed: AtomicU64::new(migrated_total_claimed),
@@ -542,11 +576,10 @@ impl AnvilStorage {
     ///
     /// Reserves a unique seq range via `reserve_push_range` (briefly
     /// touches the per-queue commit log mutex), runs `db.write` without
-    /// holding any per-queue lock, and finally calls
-    /// `commit_push_reservation` to advance the claimer-visible
-    /// `push_seq` watermark through the contiguous-committed prefix.
-    /// Concurrent pushers / nacks proceed fully in parallel through their
-    /// `db.write`s.
+    /// holding any per-queue lock, and lets the returned guard's `Drop`
+    /// advance the claimer-visible `push_seq` watermark through the
+    /// contiguous-committed prefix on every exit path. Concurrent
+    /// pushers / nacks proceed fully in parallel through their `db.write`s.
     pub async fn push_messages(
         &self,
         queue: &str,
@@ -563,8 +596,9 @@ impl AnvilStorage {
 
         // Reserve seq range + register pending commit. push_seq does NOT
         // advance yet — claimers can't see this range until the watermark
-        // catches up after our commit.
-        let base_seq = Self::reserve_push_range(&c, count).await;
+        // catches up after this guard drops.
+        let _push_guard = Self::reserve_push_range(&c, count);
+        let base_seq = _push_guard.base_seq;
         let new_total_pushed = c.total_pushed.fetch_add(count, Ordering::Relaxed) + count;
 
         let mut batch = WriteBatch::new();
@@ -578,14 +612,10 @@ impl AnvilStorage {
         let new_alloc = c.push_seq_alloc.load(Ordering::Acquire);
         Self::persist_push_counters(&mut batch, queue, new_alloc, new_total_pushed);
 
-        let result = self.db.write(batch).await;
-
-        // Mark the reservation done and advance the watermark, regardless
-        // of success — on failure the pending_key range is empty and any
-        // claimer reading it will warn-and-skip without losing live data.
-        Self::commit_push_reservation(&c, base_seq).await;
-
-        result?;
+        // Guard drops at end-of-scope — both on the Ok return below and on
+        // the `?` propagation from `db.write` errors. No early-return path
+        // can leak the reservation.
+        self.db.write(batch).await?;
         Ok(())
     }
 
@@ -744,15 +774,20 @@ impl AnvilStorage {
         }
 
         // For the downstream-push branch we need a reservation on the
-        // downstream queue's seq range (same invariant as push_messages /
-        // nack_messages_internal). Reserve up front; commit after db.write
-        // below, regardless of success.
-        let downstream_reservation: Option<(Arc<QueueCounters>, u64)> =
+        // downstream queue's seq range (same invariant as push_messages
+        // and nack_messages_internal). The guard drops at end-of-scope so
+        // the watermark advances even if any later step (validate_claims,
+        // serde_json::to_vec, db.write) returns Err via `?`. This is the
+        // bug that orphaned a transform_output batch in PR #84's CI run:
+        // ack_and_forward had reserved the downstream range, validate_claims
+        // returned a stale-token error, and the previous code never
+        // closed the reservation — wedging the watermark behind it and
+        // hiding every subsequent committed pending_key.
+        let _downstream_push_guard: Option<PushReservationGuard> =
             match (opts.downstream_queue, opts.downstream_messages) {
                 (Some(dq), Some(msgs)) if !msgs.is_empty() => {
                     let dc = self.load_or_init_counters(dq).await?;
-                    let base = Self::reserve_push_range(&dc, msgs.len() as u64).await;
-                    Some((dc, base))
+                    Some(Self::reserve_push_range(&dc, msgs.len() as u64))
                 }
                 _ => None,
             };
@@ -790,14 +825,16 @@ impl AnvilStorage {
         }
 
         // 2. Push downstream messages (capacity checked in step 0,
-        //    seq range reserved via downstream_reservation above).
+        //    seq range reserved via _downstream_push_guard above).
         if let (Some(downstream_queue), Some(messages)) =
             (opts.downstream_queue, opts.downstream_messages)
         {
             if !messages.is_empty() {
-                let (dc, base_seq) = downstream_reservation
+                let guard = _downstream_push_guard
                     .as_ref()
-                    .expect("downstream_reservation set when we have messages");
+                    .expect("downstream guard set when we have messages");
+                let dc = &guard.counters;
+                let base_seq = guard.base_seq;
                 let count = messages.len() as u64;
                 let new_dp = dc.total_pushed.fetch_add(count, Ordering::Relaxed) + count;
 
@@ -830,14 +867,9 @@ impl AnvilStorage {
             }
         }
 
-        let result = self.db.write(batch).await;
-        // Commit any downstream-push reservation regardless of outcome —
-        // mirrors push_messages / nack_messages_internal so the watermark
-        // never stalls behind a failed write.
-        if let Some((dc, base_seq)) = &downstream_reservation {
-            Self::commit_push_reservation(dc, *base_seq).await;
-        }
-        result?;
+        // Guard drops at end-of-scope (on success or `?`-propagated error
+        // from db.write), advancing the downstream watermark.
+        self.db.write(batch).await?;
         Ok(())
     }
 
@@ -1055,8 +1087,9 @@ impl AnvilStorage {
         let nack_count = msg_ids.len() as u64;
 
         // Reserve seq range at the tail and register the pending commit.
-        // Watermark stays put until commit_push_reservation runs below.
-        let base_seq = Self::reserve_push_range(&c, nack_count).await;
+        // Watermark stays put until this guard drops at end-of-scope.
+        let _push_guard = Self::reserve_push_range(&c, nack_count);
+        let base_seq = _push_guard.base_seq;
         let new_unclaimed = c.total_unclaimed.fetch_add(nack_count, Ordering::Relaxed) + nack_count;
 
         let mut batch = WriteBatch::new();
@@ -1094,9 +1127,11 @@ impl AnvilStorage {
             }
         }
 
-        let result = self.db.write(batch).await;
-        Self::commit_push_reservation(&c, base_seq).await;
-        result?;
+        // Guard drops at end-of-scope; on `?` propagation from db.write
+        // the reservation is still closed out (just with no pending_key
+        // committed for the missing batch — which is the correct
+        // localization of a failed nack).
+        self.db.write(batch).await?;
         Ok(())
     }
 

@@ -724,15 +724,7 @@ jobs:
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
       run: |
         cd engine
-        # Distributed elasticity tests hit the same data-loss-assertion
-        # flake category as chaos/stability — kill a worker, occasionally
-        # lose ~1% of in-flight records. Retry AssertionError twice
-        # (matching chaos/stability jobs). PR #83 carries the same change
-        # standalone for develop; cherry-picked here so this PR's CI run
-        # actually goes green.
-        uv run --no-sync pytest tests/ -v --tb=short -m "distributed" \
-          --reruns 2 --reruns-delay 10 --only-rerun AssertionError \
-          --cov=_internal --cov-report=
+        uv run --no-sync pytest tests/ -v --tb=short -m "distributed" --cov=_internal --cov-report=
 
     - name: Upload coverage artifact
       if: (steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push') && always()
