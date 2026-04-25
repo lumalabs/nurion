@@ -1891,10 +1891,14 @@ mod tests {
     /// realistic ever falls in the live-but-stale band.
     const LEASE_TIMEOUT_SECS_TEST_FAST: f64 = 1.0;
 
-    /// Claim-age timeout that's long enough to never fire on a healthy
-    /// in-process claimer (ack latency ≪ 1 s) but short enough that a
-    /// hung claim is detected within a single test's runtime budget.
-    const CLAIM_AGE_TIMEOUT_SECS_TEST_LIVE_SAFE: f64 = 5.0;
+    /// Claim-age timeout for live-lease claimers. Set high enough that a
+    /// healthy claimer is *never* preempted, even on a slow CI runner
+    /// under coverage instrumentation (where in-process claim/ack cycles
+    /// were observed > 5 s in CI logs). The dead-worker test never relies
+    /// on this knob: the dead lease is detected by absence from
+    /// `active_leases`, which fires immediately regardless of claim age.
+    /// So we can set this conservatively without blunting the test.
+    const CLAIM_AGE_TIMEOUT_SECS_TEST_LIVE_SAFE: f64 = 60.0;
 
     /// Heartbeat offset to mark a test lease as "definitely fresh" — far
     /// future so any reasonable lease-freshness timeout passes.
