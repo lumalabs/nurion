@@ -3187,4 +3187,60 @@ mod tests {
             TOTAL,
         );
     }
+
+    /// `check_queue_completion` must NOT report `drained=true` while a push
+    /// reservation is in flight. Regression guard for the bug fixed in
+    /// commit 666f7c8: the watermark refactor introduced a window between
+    /// `push_seq_alloc.fetch_add` and the post-commit `push_seq` advance
+    /// where `push_seq - claim_seq == 0` even though real work was
+    /// pending. Stage masters polling the broker during that window saw
+    /// `drained=true` and marked their output finished prematurely,
+    /// losing the about-to-commit batch.
+    ///
+    /// Verified to fail against the pre-fix code (`get_meta`-based
+    /// pending_count): "in-flight reservation must show up as pending —
+    /// expected 5, got 0".
+    #[tokio::test]
+    async fn test_check_queue_completion_observes_in_flight_reservations() {
+        let storage = Arc::new(create_temp_storage().await);
+        let queue = "drained-race";
+        storage.create_queue(queue, 0).await.unwrap();
+        storage.mark_queue_finished(queue).await.unwrap();
+
+        // No work yet → drained=true.
+        let (finished, drained, pending, claimed) =
+            storage.check_queue_completion(queue).await.unwrap();
+        assert!(finished);
+        assert!(drained);
+        assert_eq!(pending, 0);
+        assert_eq!(claimed, 0);
+
+        // Manually open a push reservation (mimics the in-flight window of
+        // push_messages / nack_messages_internal / ack_internal between
+        // `reserve_push_range` and `db.write` completing).
+        let counters = storage.load_or_init_counters(queue).await.unwrap();
+        let guard = AnvilStorage::reserve_push_range(&counters, 5);
+
+        // Reservation is open, no batch committed → push_seq still 0,
+        // push_seq_alloc == 5. Pre-fix this reported pending=0,
+        // drained=true (the bug). Post-fix it reports pending=5 and
+        // drained=false so stage masters wait for the commit.
+        let (finished, drained, pending, claimed) =
+            storage.check_queue_completion(queue).await.unwrap();
+        assert!(finished, "queue is still marked finished");
+        assert_eq!(pending, 5, "in-flight reservation must show up as pending");
+        assert_eq!(claimed, 0);
+        assert!(
+            !drained,
+            "drained must be false while a push reservation is in flight"
+        );
+
+        // Drop the guard (mimics db.write completing). Watermark
+        // advances past the reservation; queue is still pending=5
+        // because no claimer has taken those seqs yet.
+        drop(guard);
+        let (_, drained, pending, _) = storage.check_queue_completion(queue).await.unwrap();
+        assert!(!drained, "still not drained — claim_seq hasn't caught up");
+        assert_eq!(pending, 5);
+    }
 }
