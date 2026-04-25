@@ -1499,10 +1499,25 @@ impl AnvilStorage {
         queue: &str,
     ) -> Result<(bool, bool, u64, u64), StorageError> {
         let finished = self.is_queue_finished(queue).await?;
-        let meta = self.get_meta(queue).await?;
+        let c = self.load_or_init_counters(queue).await?;
 
-        let pending_count = meta.push_seq.saturating_sub(meta.claim_seq);
-        let claimed_count = meta.claimed_count;
+        // For "is the queue drained?" we must include both committed pending
+        // (push_seq) AND in-flight reservations (push_seq_alloc) — otherwise
+        // a writer that has fetch_add'd push_seq_alloc but hasn't yet
+        // committed its WriteBatch creates a transient window where
+        // `push_seq - claim_seq == 0` even though there's real work in
+        // flight. A stage master calling this during that window would
+        // see drained=true and prematurely mark its output finished,
+        // losing the about-to-be-committed batch.
+        //
+        // The reported pending_count uses push_seq_alloc as well, so
+        // upstream "has unprocessed messages" checks behave consistently.
+        let alloc_seq = c.push_seq_alloc.load(Ordering::Acquire);
+        let claim_seq = c.claim_seq.load(Ordering::Acquire);
+        let pending_count = alloc_seq.saturating_sub(claim_seq);
+        let total_claimed = c.total_claimed.load(Ordering::Relaxed);
+        let total_unclaimed = c.total_unclaimed.load(Ordering::Relaxed);
+        let claimed_count = total_claimed.saturating_sub(total_unclaimed);
 
         // A queue is drained only when explicitly marked finished AND fully empty.
         // The old heuristic (total_pushed > 0) let temporarily-empty queues look
