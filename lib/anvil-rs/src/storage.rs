@@ -1271,16 +1271,21 @@ impl AnvilStorage {
             };
 
             if lease_alive {
-                // Live lease — the worker is still heartbeating and owns the
-                // claim. Skip reclaim regardless of claim age. Previously this
-                // branch *also* reclaimed when `now - claimed_at > timeout_secs`
-                // (framed as "stuck worker"), but that conflated two different
-                // timeouts (worker liveness vs. task age) onto a single knob,
-                // and it was flagrantly wrong for `timeout_secs = 0`: every
-                // heartbeating worker holding a >0 s claim got reclaimed out
-                // from under itself. Stuck-task detection is a separate
-                // concern and should use a different mechanism (e.g., task
-                // progress heartbeats), not the lease-liveness timeout.
+                // Live lease — only recover if claim_timeout exceeded. This
+                // covers two cases: a genuinely stuck worker (alive but not
+                // making progress on this claim), AND the lag window where
+                // a Ray-level worker death has happened but the broker's
+                // lease tracker hasn't yet noticed (heartbeat not yet
+                // missed). Without this branch, killing a worker mid-task
+                // leaves its claim wedged until the lease finally expires
+                // from active_leases, which can be much longer than
+                // claim_timeout_secs and causes data-loss-style flakes in
+                // the chaos / stability suites.
+                if now - claim_info.claimed_at > timeout_secs {
+                    let mut info = claim_info.clone();
+                    info.msg_id = msg_id;
+                    expired_by_queue.entry(queue).or_default().push(info);
+                }
                 continue;
             }
 
@@ -2170,8 +2175,12 @@ mod tests {
         let mut active = HashMap::new();
         active.insert("lease-1".to_string(), crate::types::now_secs());
 
+        // timeout=60: the claim is 1s old, lease just heartbeated, so recovery
+        // should leave it alone. (Originally written with timeout=0, which
+        // double-tripped both the lease-expiry check AND the claim-age check;
+        // production never uses timeout=0 — default is 60.)
         let recovered = storage
-            .recover_expired_claims(0.0, Some(&active))
+            .recover_expired_claims(60.0, Some(&active))
             .await
             .unwrap();
         assert_eq!(recovered, 0);
@@ -2961,11 +2970,14 @@ mod tests {
                     );
                 }
                 while !stop.load(std::sync::atomic::Ordering::Acquire) {
-                    // timeout=0 means "any non-alive lease is dead"; with
-                    // far-future last_seen on live leases, only `dead-lease`
-                    // will be considered for reclaim.
+                    // timeout=5s: dead-lease claims (lease not in active set)
+                    // are recovered immediately by the dead-lease branch.
+                    // Live-lease claims need to sit > 5s before recover takes
+                    // them — well beyond any live claimer's ack latency, so
+                    // we don't accidentally rip claims out from under healthy
+                    // workers.
                     let _ = storage
-                        .recover_expired_claims(0.0, Some(&active))
+                        .recover_expired_claims(5.0, Some(&active))
                         .await
                         .unwrap();
                     tokio::time::sleep(std::time::Duration::from_millis(20)).await;
