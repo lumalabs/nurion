@@ -644,6 +644,26 @@ impl AnvilStorage {
         let c = self.load_or_init_counters(queue).await?;
 
         // CAS loop to reserve a range of sequences.
+        //
+        // **Counter ordering**: total_claimed must be bumped *before* the
+        // CAS that advances claim_seq. Otherwise a concurrent reader of
+        // `check_queue_completion` can observe `(claim_seq=new,
+        // total_claimed=old)` — meaning `pending_count == 0` AND
+        // `claimed_count == 0` — and falsely report `drained=true`.
+        // That's the residual data-loss race that survived the
+        // `check_queue_completion` reorder fix in a prior commit (the
+        // reorder works for the nack/check pair but doesn't cover the
+        // claim/check pair, because here it's `claim_seq` that runs
+        // ahead of `total_claimed`).
+        //
+        // We bump total_claimed by the *reserved* range (target - cur)
+        // before the CAS, then try the CAS. On CAS failure we undo the
+        // bump and retry. On success, the CAS makes claim_seq=new
+        // visible — and any reader observing it will, via Acquire on
+        // total_claimed, also see the bumped total_claimed (writer's
+        // program order: fetch_add(Release) → CAS(AcqRel) means the
+        // CAS's Release inherits a happens-before from the prior
+        // fetch_add).
         let (start, end) = loop {
             let cur = c.claim_seq.load(Ordering::Acquire);
             let lim = c.push_seq.load(Ordering::Acquire);
@@ -651,13 +671,27 @@ impl AnvilStorage {
                 return Ok(Vec::new());
             }
             let target = std::cmp::min(cur + batch_size as u64, lim);
+            let reserved = target - cur;
+
+            // Bump total_claimed BEFORE attempting CAS. Release on this
+            // fetch_add ensures the bumped value is visible to any
+            // Acquire-load reader that subsequently observes the
+            // post-CAS claim_seq.
+            c.total_claimed.fetch_add(reserved, Ordering::Release);
+
             if c.claim_seq
                 .compare_exchange_weak(cur, target, Ordering::AcqRel, Ordering::Acquire)
                 .is_ok()
             {
                 break (cur, target);
             }
-            // CAS failed — another claimer won. Spin retry (nanosecond cost).
+            // CAS failed — another claimer won the race. Undo our
+            // total_claimed bump (Relaxed: we're decrementing back to
+            // where we started, no synchronization needed). The
+            // momentary inflation between bump and undo only makes
+            // claimed_count temporarily larger, which is the safe
+            // direction for drained checks.
+            c.total_claimed.fetch_sub(reserved, Ordering::Relaxed);
         };
 
         // Read messages (we own [start, end), no contention)
@@ -696,12 +730,22 @@ impl AnvilStorage {
         }
 
         if claimed_items.is_empty() {
+            // All pending_keys in [start, end) were missing — nothing to
+            // commit. claim_seq already advanced (CAS), and total_claimed
+            // was bumped optimistically before the CAS. We leave the
+            // bumped value in place: claimed_count stays inflated by the
+            // phantom claims until recovery catches up via mark_finished
+            // and downstream draining. Inflation is the safe direction
+            // for drained checks (drained=false while there are still
+            // "claimed" entries the broker doesn't fully account for).
             return Ok(Vec::new());
         }
 
-        let actual_count = claimed_items.len() as u64;
-        let new_total_claimed =
-            c.total_claimed.fetch_add(actual_count, Ordering::Release) + actual_count;
+        // total_claimed was already bumped above by `reserved` (= end-start)
+        // *before* the CAS succeeded. If some seqs in the range had missing
+        // pending_keys, those turn into "phantom" claims — counted in
+        // total_claimed but with no claimed_key in DB.
+        let new_total_claimed = c.total_claimed.load(Ordering::Acquire);
 
         let mut batch = WriteBatch::new();
         let mut result = Vec::new();
