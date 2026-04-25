@@ -3126,13 +3126,27 @@ mod tests {
                     }
                     let ids: Vec<String> = batch.iter().map(|c| c.message.msg_id.clone()).collect();
                     let tokens: Vec<String> = batch.iter().map(|c| c.claim_token.clone()).collect();
-                    storage
+                    // Under heavy CI scheduling pressure (cargo-llvm-cov
+                    // can stretch a sub-ms ack into a multi-second one),
+                    // a recovery cycle may catch a healthy live claim
+                    // whose age happened to cross the
+                    // `claim_age_timeout_secs` line and reclaim it out
+                    // from under us. Production workers handle this
+                    // benign race by dropping the stale token and
+                    // letting the next claimer pick the msg up; the
+                    // test does the same. The msg isn't lost — it's
+                    // just owned by someone else now, and the final
+                    // assertion (every produced msg is in the acked
+                    // set) covers that.
+                    if storage
                         .ack_messages(queue, &ids, &tokens, &worker_id, &lease_id)
                         .await
-                        .unwrap();
-                    let mut s = acked.lock().await;
-                    for id in &ids {
-                        s.insert(id.clone());
+                        .is_ok()
+                    {
+                        let mut s = acked.lock().await;
+                        for id in &ids {
+                            s.insert(id.clone());
+                        }
                     }
                 }
             }));
