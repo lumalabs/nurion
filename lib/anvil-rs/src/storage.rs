@@ -1271,12 +1271,16 @@ impl AnvilStorage {
             };
 
             if lease_alive {
-                // Live lease — only recover if claim_timeout exceeded (stuck worker)
-                if now - claim_info.claimed_at > timeout_secs {
-                    let mut info = claim_info.clone();
-                    info.msg_id = msg_id;
-                    expired_by_queue.entry(queue).or_default().push(info);
-                }
+                // Live lease — the worker is still heartbeating and owns the
+                // claim. Skip reclaim regardless of claim age. Previously this
+                // branch *also* reclaimed when `now - claimed_at > timeout_secs`
+                // (framed as "stuck worker"), but that conflated two different
+                // timeouts (worker liveness vs. task age) onto a single knob,
+                // and it was flagrantly wrong for `timeout_secs = 0`: every
+                // heartbeating worker holding a >0 s claim got reclaimed out
+                // from under itself. Stuck-task detection is a separate
+                // concern and should use a different mechanism (e.g., task
+                // progress heartbeats), not the lease-liveness timeout.
                 continue;
             }
 
