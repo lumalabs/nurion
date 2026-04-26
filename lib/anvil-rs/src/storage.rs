@@ -729,22 +729,24 @@ impl AnvilStorage {
             }
         }
 
+        let actual_count = claimed_items.len() as u64;
+        let reserved = end - start;
+        // If some seqs in the reserved range had missing pending_keys, undo
+        // the over-bump so claimed_count reflects actual claims. Without
+        // this, the inflated total_claimed keeps claimed_count > 0
+        // forever, drained never flips true, and the stage hangs.
+        if actual_count < reserved {
+            c.total_claimed
+                .fetch_sub(reserved - actual_count, Ordering::Relaxed);
+        }
+
         if claimed_items.is_empty() {
-            // All pending_keys in [start, end) were missing — nothing to
-            // commit. claim_seq already advanced (CAS), and total_claimed
-            // was bumped optimistically before the CAS. We leave the
-            // bumped value in place: claimed_count stays inflated by the
-            // phantom claims until recovery catches up via mark_finished
-            // and downstream draining. Inflation is the safe direction
-            // for drained checks (drained=false while there are still
-            // "claimed" entries the broker doesn't fully account for).
+            // No real claims — drop. claim_seq still advanced via CAS, so
+            // those seqs are skipped permanently (phantom seqs from
+            // missing pending_keys), but at least the counter is right.
             return Ok(Vec::new());
         }
 
-        // total_claimed was already bumped above by `reserved` (= end-start)
-        // *before* the CAS succeeded. If some seqs in the range had missing
-        // pending_keys, those turn into "phantom" claims — counted in
-        // total_claimed but with no claimed_key in DB.
         let new_total_claimed = c.total_claimed.load(Ordering::Acquire);
 
         let mut batch = WriteBatch::new();
