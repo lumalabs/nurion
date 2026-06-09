@@ -79,7 +79,7 @@ RUN PYSPARK_JARS=$(python -c "import pyspark; print(pyspark.__path__[0])")/jars 
     wget -q ${M}/org/apache/spark/spark-hadoop-cloud_2.13/4.1.1/spark-hadoop-cloud_2.13-4.1.1.jar \
          ${M}/org/apache/hadoop/hadoop-aws/3.3.4/hadoop-aws-3.3.4.jar \
          ${M}/com/amazonaws/aws-java-sdk-bundle/1.12.367/aws-java-sdk-bundle-1.12.367.jar \
-         ${M}/org/lance/lance-spark-bundle-4.1_2.13/0.4.0/lance-spark-bundle-4.1_2.13-0.4.0.jar \
+         ${M}/org/lance/lance-spark-bundle-4.1_2.13/0.5.1/lance-spark-bundle-4.1_2.13-0.5.1.jar \
          -P ${PYSPARK_JARS}/
 
 # Install Python runtime dependencies (minimal set for Ray + data processing)
@@ -89,7 +89,7 @@ RUN uv pip install --system --no-cache \
     pandas>=2.0.0 \
     click>=8.1.7 \
     "fsspec[s3]>=2024.6.0" \
-    pylance>=0.38.0 \
+    pylance==7.0.0 \
     s3fs>=2024.6.0 \
     grpcio>=1.68.0
 
