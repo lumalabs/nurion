@@ -60,7 +60,7 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && \
 
 # Build RayDP JARs (Spark 4.1 / Scala 2.13 track), then cleanup Maven artifacts.
 RUN cd /app/build/java && \
-    mvn -P scala-2.13 clean package -DskipTests -q && \
+    mvn -P scala-2.13 clean package -DskipTests -e && \
     mkdir -p /app/lib/raydp/jars && \
     cp raydp-main/target/raydp_2.13-*.jar /app/lib/raydp/jars/ && \
     cp shims/common/target/raydp-shims-*_2.13-*.jar /app/lib/raydp/jars/ && \
