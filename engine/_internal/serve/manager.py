@@ -468,6 +468,17 @@ class ModelServiceManager:
         except Exception as e:
             logger.warning(f"Error killing registry: {e}")
 
+        # In detached mode, recreate registry so manager remains functional if reconnected
+        if self._detached:
+            actor_options: dict[str, Any] = {
+                "name": REGISTRY_ACTOR_NAME,
+                "lifetime": "detached",
+                "namespace": SERVE_NAMESPACE,
+            }
+            self._registry = ray.remote(ModelRegistry).options(**actor_options).remote()  # type: ignore[assignment]
+            ray.get(self._registry.start.remote())  # type: ignore[union-attr]
+            logger.info("ModelRegistry recreated for detached mode")
+
         if self._detached:
             killed = 0
             for actor_info in ray.util.list_named_actors(all_namespaces=True):
