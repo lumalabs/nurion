@@ -104,7 +104,7 @@ ARG LANCE_SPARK_REF=656c882
 RUN PYSPARK_JARS=$(python -c "import pyspark; print(pyspark.__path__[0])")/jars && \
     git clone "$LANCE_SPARK_REPO" /tmp/lance-spark && \
     cd /tmp/lance-spark && git checkout "$LANCE_SPARK_REF" && \
-    mvn -pl lance-spark-bundle-4.1_2.13 -am package -DskipTests -Dspotless.skip=true -q && \
+    mvn -pl lance-spark-bundle-4.1_2.13 -am package -DskipTests -Dspotless.skip=true -Dmaven.javadoc.skip=true -q && \
     cp "$(ls lance-spark-bundle-4.1_2.13/target/lance-spark-bundle-4.1_2.13-*.jar | grep -vE 'sources|javadoc' | head -1)" ${PYSPARK_JARS}/ && \
     cd / && rm -rf /tmp/lance-spark /root/.m2
 
