@@ -1,0 +1,5 @@
+# Ruff configuration for the entire Nurion workspace
+extend-exclude = [
+    "lib/anvil-rs/python/anvil_py/anvil_pb2.py",
+    "lib/anvil-rs/python/anvil_py/anvil_pb2_grpc.py",
+]

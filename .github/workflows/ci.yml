@@ -1,0 +1,1154 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+# Cancel in-progress runs for the same branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pr-title-check:
+    name: PR Title Check
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    permissions:
+      pull-requests: read
+      contents: read
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Check PR title format
+      uses: amannn/action-semantic-pull-request@v5
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        types: |
+          feat
+          fix
+          docs
+          style
+          refactor
+          perf
+          test
+          build
+          ci
+          chore
+          revert
+        requireScope: false
+        disallowScopes: |
+          wip
+          temp
+        subjectPattern: ^(?![A-Z]).+$
+        subjectPatternError: |
+          The subject "{subject}" found in the pull request title "{title}"
+          didn't match the configured pattern. Please ensure that the subject
+          doesn't start with an uppercase character.
+        validateSingleCommit: false
+
+  # ============================================================================
+  # Build artifacts that can be shared across jobs (with caching)
+  # ============================================================================
+  
+  build-raydp:
+    name: Build RayDP (JARs + Wheel)
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Cache raydp wheels
+      id: cache-raydp
+      uses: actions/cache@v4
+      with:
+        path: /tmp/raydp-wheel/
+        # v2: dual-flavor (spark3 + spark4) build, invalidate the pre-split cache.
+        key: raydp-wheel-v2-${{ hashFiles('lib/raydp/**') }}
+
+    - name: Set up Java 17
+      if: steps.cache-raydp.outputs.cache-hit != 'true'
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        # Spark 4.1 requires Java 17+ at runtime; spark3 track (target 1.8) builds fine on 17.
+        java-version: '17'
+        cache: 'maven'
+        cache-dependency-path: 'lib/raydp/java/pom.xml'
+
+    - name: Install uv
+      if: steps.cache-raydp.outputs.cache-hit != 'true'
+      uses: astral-sh/setup-uv@v4
+      with:
+        version: "latest"
+
+    - name: Build raydp wheels (spark3 + spark4)
+      if: steps.cache-raydp.outputs.cache-hit != 'true'
+      run: |
+        set -euo pipefail
+        mkdir -p /tmp/raydp-wheel/
+        for flavor in spark3 spark4; do
+          echo "::group::Build $flavor wheel"
+          pushd lib/raydp/packaging/$flavor
+          uvx --from build pyproject-build --wheel
+          ls -la dist/
+          # Verify the matching Scala-suffixed JARs are bundled.
+          unzip -l dist/*.whl | grep -E "\.jar$"
+          cp dist/*.whl /tmp/raydp-wheel/
+          popd
+          echo "::endgroup::"
+        done
+        echo "Staged wheels:"
+        ls -la /tmp/raydp-wheel/
+
+    - name: Upload wheel artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: raydp-wheel
+        path: /tmp/raydp-wheel/*.whl
+        retention-days: 1
+
+  build-anvil-rs:
+    name: Build anvil-rs Wheel
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Cache anvil-rs wheel
+      id: cache-anvil
+      uses: actions/cache@v4
+      with:
+        path: /tmp/anvil-rs-wheel/
+        key: anvil-rs-wheel-${{ hashFiles('lib/anvil-rs/**') }}
+
+    - name: Set up Rust
+      if: steps.cache-anvil.outputs.cache-hit != 'true'
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Install protoc
+      if: steps.cache-anvil.outputs.cache-hit != 'true'
+      uses: arduino/setup-protoc@v3
+      with:
+        version: "25.x"
+
+    - name: Rust cache
+      if: steps.cache-anvil.outputs.cache-hit != 'true'
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: "lib/anvil-rs -> target"
+
+    - name: Install uv
+      if: steps.cache-anvil.outputs.cache-hit != 'true'
+      uses: astral-sh/setup-uv@v4
+      with:
+        version: "latest"
+
+    - name: Build anvil-rs wheel
+      if: steps.cache-anvil.outputs.cache-hit != 'true'
+      run: |
+        cd lib/anvil-rs
+        uvx maturin build --release
+        echo "Built wheel:"
+        ls -la target/wheels/
+        # Copy to cache directory
+        mkdir -p /tmp/anvil-rs-wheel/
+        cp target/wheels/*.whl /tmp/anvil-rs-wheel/
+
+    - name: Upload wheel artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: anvil-rs-wheel
+        path: /tmp/anvil-rs-wheel/*.whl
+        retention-days: 1
+
+  # ============================================================================
+  # Test anvil-rs (Rust unit tests)
+  # ============================================================================
+
+  test-anvil-rs:
+    name: Anvil-rs Tests
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Get changed files
+      id: changed-files
+      uses: tj-actions/changed-files@v45
+      with:
+        files: |
+          lib/anvil-rs/**
+
+    - name: Skip if no anvil-rs changes
+      if: steps.changed-files.outputs.any_changed == 'false' && github.event_name == 'pull_request'
+      run: echo "No anvil-rs files changed, skipping..."
+
+    - name: Set up Rust
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: llvm-tools-preview
+
+    - name: Install protoc
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      uses: arduino/setup-protoc@v3
+      with:
+        version: "25.x"
+
+    - name: Rust cache
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: "lib/anvil-rs -> target"
+
+    - name: Install cargo-llvm-cov
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      uses: taiki-e/install-action@cargo-llvm-cov
+
+    - name: Run Rust tests with coverage
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      run: |
+        cd lib/anvil-rs
+        cargo llvm-cov --release --codecov --output-path codecov.json
+
+    - name: Upload Rust coverage artifact
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-anvil-rs
+        path: lib/anvil-rs/codecov.json
+        retention-days: 1
+
+  # ============================================================================
+  # Rust code quality (clippy + rustfmt)
+  # ============================================================================
+
+  lint-anvil-rs:
+    name: Anvil-rs Lint
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Get changed files
+      id: changed-files
+      uses: tj-actions/changed-files@v45
+      with:
+        files: |
+          lib/anvil-rs/**
+
+    - name: Skip if no anvil-rs changes
+      if: steps.changed-files.outputs.any_changed == 'false' && github.event_name == 'pull_request'
+      run: echo "No anvil-rs files changed, skipping..."
+
+    - name: Set up Rust
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: clippy, rustfmt
+
+    - name: Install protoc
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      uses: arduino/setup-protoc@v3
+      with:
+        version: "25.x"
+
+    - name: Rust cache
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: "lib/anvil-rs -> target"
+
+    - name: Check formatting
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      run: |
+        cd lib/anvil-rs
+        cargo fmt -- --check
+
+    - name: Run clippy
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      run: |
+        cd lib/anvil-rs
+        cargo clippy --lib --tests -- -W clippy::all -D warnings
+
+  # ============================================================================
+  # Lint and code quality checks
+  # ============================================================================
+
+  lint:
+    name: Code Quality Check
+    runs-on: ubuntu-latest
+    needs: [build-raydp, build-anvil-rs]
+    if: always() && !cancelled()
+    
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Get changed files
+      id: changed-files
+      uses: tj-actions/changed-files@v45
+      with:
+        files: |
+          control/**
+          engine/**
+          lib/**
+          scripts/**
+          pyproject.toml
+          uv.lock
+    
+    - name: Skip if no relevant changes
+      if: steps.changed-files.outputs.any_changed == 'false' && github.event_name == 'pull_request'
+      run: echo "No relevant files changed, skipping..."
+    
+    - name: Download pre-built wheels
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      uses: actions/download-artifact@v4
+      with:
+        pattern: '*-wheel'
+        path: /tmp/wheels/
+        merge-multiple: true
+      continue-on-error: true
+    
+    - name: Install uv
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      uses: astral-sh/setup-uv@v4
+      with:
+        version: "latest"
+        enable-cache: true
+        cache-dependency-glob: "uv.lock"
+    
+    - name: Set up Python 3.12
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      run: uv python install 3.12
+    
+    - name: Check license headers
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      run: |
+        python3 scripts/check_license_headers.py
+    
+    - name: Check control
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      run: |
+        cd control
+        uv sync --dev --python 3.12
+        uv run --no-sync ruff check .
+        uv run --no-sync ruff format --check .
+
+    - name: Check engine
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      run: |
+        cd engine
+        # CI mode: use pre-built wheels via --find-links, skip editable sources
+        uv sync --dev --python 3.12 --no-sources --find-links /tmp/wheels/
+        uv run --no-sync ruff check .
+        uv run --no-sync ruff format --check .
+    
+  # ============================================================================
+  # Engine type checks
+  # ============================================================================
+
+  mypy:
+    name: mypy
+    runs-on: ubuntu-latest
+    needs: [build-raydp, build-anvil-rs]
+    if: always() && !cancelled()
+    
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Get changed files
+      id: changed-files
+      uses: tj-actions/changed-files@v45
+      with:
+        files: |
+          control/**
+          engine/**
+          lib/**
+          uv.lock
+
+    - name: Skip if no relevant changes
+      if: steps.changed-files.outputs.any_changed == 'false' && github.event_name == 'pull_request'
+      run: echo "No control/engine/lib files changed, skipping..."
+
+    - name: Download pre-built wheels
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      uses: actions/download-artifact@v4
+      with:
+        pattern: '*-wheel'
+        path: /tmp/wheels/
+        merge-multiple: true
+      continue-on-error: true
+    
+    - name: Install uv
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      uses: astral-sh/setup-uv@v4
+      with:
+        version: "latest"
+        enable-cache: true
+        cache-dependency-glob: "uv.lock"
+    
+    - name: Set up Python 3.12
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      run: uv python install 3.12
+    
+    - name: Check control
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      run: |
+        cd control
+        uv sync --dev --python 3.12
+        uv run --no-sync mypy control/
+
+    - name: Check engine
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      run: |
+        cd engine
+        # CI mode: use pre-built wheels via --find-links, skip editable sources
+        uv sync --dev --python 3.12 --no-sources --find-links /tmp/wheels/
+        uv run --no-sync mypy _internal/ nurion/
+
+  # ============================================================================
+  # Aether tests (Python 3.12, no Rust/Java dependencies)
+  # ============================================================================
+
+  test-control:
+    name: Control Plane Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Get changed files
+      id: changed-files
+      uses: tj-actions/changed-files@v45
+      with:
+        files: |
+          control/**
+          scripts/**
+          pyproject.toml
+          uv.lock
+    
+    - name: Skip if no relevant changes
+      if: steps.changed-files.outputs.any_changed == 'false' && github.event_name == 'pull_request'
+      run: echo "No relevant files changed, skipping..."
+    
+    - name: Install uv
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      uses: astral-sh/setup-uv@v4
+      with:
+        version: "latest"
+        enable-cache: true
+        cache-dependency-glob: "uv.lock"
+    
+    - name: Set up Python 3.12
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      run: uv python install 3.12
+    
+    - name: Install dependencies
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      run: |
+        cd control
+        uv sync --dev
+    
+    - name: Run tests
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      run: |
+        cd control
+        uv run --no-sync pytest tests/ -v
+    
+    - name: Control coverage summary
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      run: |
+        if [ -f control/coverage.xml ]; then
+          echo "## Control Plane Coverage" >> $GITHUB_STEP_SUMMARY
+          cd control && uv run --no-sync coverage report --format=markdown >> $GITHUB_STEP_SUMMARY 2>/dev/null || true
+        fi
+
+  # ============================================================================
+  # Engine unit tests (no external services, fast)
+  # ============================================================================
+
+  test-engine-unit:
+    name: Engine Unit Tests
+    runs-on: ubuntu-latest
+    needs: [build-raydp, build-anvil-rs]
+    if: always() && !cancelled()
+    
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Get changed files
+      id: changed-files
+      uses: tj-actions/changed-files@v45
+      with:
+        files: |
+          engine/**
+          lib/**
+    
+    - name: Skip if no Engine/lib changes
+      if: steps.changed-files.outputs.any_changed == 'false' && github.event_name == 'pull_request'
+      run: echo "No Engine/lib files changed, skipping..."
+    
+    - name: Download pre-built wheels
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      uses: actions/download-artifact@v4
+      with:
+        pattern: '*-wheel'
+        path: /tmp/wheels/
+        merge-multiple: true
+      continue-on-error: true
+    
+    - name: Install uv
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      uses: astral-sh/setup-uv@v4
+      with:
+        version: "latest"
+        enable-cache: true
+        cache-dependency-glob: "uv.lock"
+    
+    - name: Set up Python 3.12
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      run: uv python install 3.12
+      
+    - name: Install dependencies
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      run: |
+        cd engine
+        # CI mode: use pre-built wheels via --find-links, skip editable sources
+        uv sync --dev --python 3.12 --no-sources --find-links /tmp/wheels/
+    
+    - name: Run unit tests
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      run: |
+        cd engine
+        uv run --no-sync pytest tests/ -v --tb=short -m "not integration and not distributed and not workflow and not chaos and not stability" --cov=_internal --cov-report=
+
+    - name: Upload coverage artifact
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-engine-unit
+        path: engine/.coverage
+        include-hidden-files: true
+        retention-days: 1
+        if-no-files-found: ignore
+
+    - name: Upload Ray logs on failure
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: ray-logs-unit-${{ github.run_id }}
+        path: /tmp/ray/
+        retention-days: 1
+        if-no-files-found: ignore
+
+  # ============================================================================
+  # Engine integration tests (requires Aether, Spark JARs)
+  # ============================================================================
+
+  test-engine-integration:
+    name: Engine Integration Tests
+    runs-on: ubuntu-latest
+    needs: [build-raydp, build-anvil-rs]
+    if: always() && !cancelled()
+    
+    steps:
+    - name: Free up disk space
+      run: |
+        echo "Disk space before cleanup:"
+        df -h /
+        sudo rm -rf /usr/share/dotnet
+        sudo rm -rf /usr/local/lib/android
+        sudo rm -rf /opt/ghc
+        sudo rm -rf /opt/hostedtoolcache/CodeQL
+        sudo docker image prune --all --force
+        echo "Disk space after cleanup:"
+        df -h /
+
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Download pre-built wheels
+      uses: actions/download-artifact@v4
+      with:
+        pattern: '*-wheel'
+        path: /tmp/wheels/
+        merge-multiple: true
+      continue-on-error: true
+    
+    - name: Set up Java 17
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        java-version: '17'
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Start control plane services
+      run: |
+        cd control
+        docker compose build
+        docker compose up -d 
+        
+        echo "Waiting for aether to be ready..."
+        for i in {1..30}; do
+          if curl -f http://localhost:8000/api/health 2>/dev/null; then
+            echo "Control plane is ready!"
+            break
+          fi
+          echo "Waiting... ($i/30)"
+          sleep 2
+        done
+        
+        docker compose ps
+    
+    - name: Install uv
+      uses: astral-sh/setup-uv@v4
+      with:
+        version: "latest"
+        enable-cache: true
+        cache-dependency-glob: "uv.lock"
+    
+    - name: Set up Python 3.12
+      run: uv python install 3.12
+      
+    - name: Install dependencies
+      run: |
+        cd engine
+        # CI mode: use pre-built wheels via --find-links, skip editable sources
+        uv sync --dev --python 3.12 --no-sources --find-links /tmp/wheels/
+    
+    - name: Run integration tests
+      run: |
+        cd engine
+        uv run --no-sync pytest tests/ -v --tb=short -m "integration" --cov=_internal --cov-report=
+
+    - name: Upload coverage artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-engine-integration
+        path: engine/.coverage
+        include-hidden-files: true
+        retention-days: 1
+        if-no-files-found: ignore
+
+    - name: Upload Ray logs on failure
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: ray-logs-integration-${{ github.run_id }}
+        path: /tmp/ray/
+        retention-days: 1
+        if-no-files-found: ignore
+    
+    - name: Stop services
+      if: always()
+      run: |
+        cd control
+        docker compose down -v
+
+  # ============================================================================
+  # Engine distributed tests (multi-worker Ray pipelines)
+  # ============================================================================
+
+  test-engine-distributed:
+    name: Engine Distributed Tests
+    runs-on: ubuntu-latest
+    needs: [build-raydp, build-anvil-rs]
+    if: always() && !cancelled()
+    
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Get changed files
+      id: changed-files
+      uses: tj-actions/changed-files@v45
+      with:
+        files: |
+          engine/**
+          lib/**
+    
+    - name: Skip if no Engine/lib changes
+      if: steps.changed-files.outputs.any_changed == 'false' && github.event_name == 'pull_request'
+      run: echo "No Engine/lib files changed, skipping..."
+    
+    - name: Download pre-built wheels
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      uses: actions/download-artifact@v4
+      with:
+        pattern: '*-wheel'
+        path: /tmp/wheels/
+        merge-multiple: true
+      continue-on-error: true
+    
+    - name: Install uv
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      uses: astral-sh/setup-uv@v4
+      with:
+        version: "latest"
+        enable-cache: true
+        cache-dependency-glob: "uv.lock"
+    
+    - name: Set up Python 3.12
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      run: uv python install 3.12
+      
+    - name: Install dependencies
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      run: |
+        cd engine
+        # CI mode: use pre-built wheels via --find-links, skip editable sources
+        uv sync --dev --python 3.12 --no-sources --find-links /tmp/wheels/
+    
+    - name: Run distributed tests
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      run: |
+        cd engine
+        uv run --no-sync pytest tests/ -v --tb=short -m "distributed" --cov=_internal --cov-report=
+
+    - name: Upload coverage artifact
+      if: (steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push') && always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-engine-distributed
+        path: engine/.coverage
+        include-hidden-files: true
+        retention-days: 1
+        if-no-files-found: ignore
+
+    - name: Upload Ray logs on failure
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: ray-logs-distributed-${{ github.run_id }}
+        path: /tmp/ray/
+        retention-days: 1
+        if-no-files-found: ignore
+
+  # ============================================================================
+  # Engine stability tests (deterministic fault injection)
+  # ============================================================================
+
+  test-engine-stability:
+    name: Engine Stability Tests
+    runs-on: ubuntu-latest
+    needs: [build-raydp, build-anvil-rs]
+    if: always() && !cancelled()
+    
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Get changed files
+      id: changed-files
+      uses: tj-actions/changed-files@v45
+      with:
+        files: |
+          engine/**
+          lib/**
+    
+    - name: Skip if no Engine/lib changes
+      if: steps.changed-files.outputs.any_changed == 'false' && github.event_name == 'pull_request'
+      run: echo "No Engine/lib files changed, skipping..."
+    
+    - name: Download pre-built wheels
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      uses: actions/download-artifact@v4
+      with:
+        pattern: '*-wheel'
+        path: /tmp/wheels/
+        merge-multiple: true
+      continue-on-error: true
+    
+    - name: Install uv
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      uses: astral-sh/setup-uv@v4
+      with:
+        version: "latest"
+        enable-cache: true
+        cache-dependency-glob: "uv.lock"
+    
+    - name: Set up Python 3.12
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      run: uv python install 3.12
+      
+    - name: Install dependencies
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      run: |
+        cd engine
+        # CI mode: use pre-built wheels via --find-links, skip editable sources
+        uv sync --dev --python 3.12 --no-sources --find-links /tmp/wheels/
+    
+    - name: Run stability tests
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      run: |
+        cd engine
+        # Stability tests inject worker failures; data-loss assertions
+        # occasionally flake (in-flight batches lost on restart). Retry
+        # AssertionError twice before giving up.
+        uv run --no-sync pytest tests/ -v --tb=short -m "stability" --timeout=1200 \
+          --reruns 2 --reruns-delay 10 --only-rerun AssertionError \
+          --cov=_internal --cov-report=
+
+    - name: Upload coverage artifact
+      if: (steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push') && always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-engine-stability
+        path: engine/.coverage
+        include-hidden-files: true
+        retention-days: 1
+        if-no-files-found: ignore
+
+    - name: Upload Ray logs on failure
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: ray-logs-stability-${{ github.run_id }}
+        path: /tmp/ray/
+        retention-days: 1
+        if-no-files-found: ignore
+
+  # ============================================================================
+  # Engine workflow tests (end-to-end pipeline tests, slow)
+  # ============================================================================
+
+  test-engine-workflow:
+    name: Engine Workflow Tests
+    runs-on: ubuntu-latest
+    needs: [build-raydp, build-anvil-rs]
+    if: always() && !cancelled()
+    # Workflow tests are slow - doesn't block PR merge
+    continue-on-error: true
+    
+    steps:
+    - name: Free up disk space
+      run: |
+        echo "Disk space before cleanup:"
+        df -h /
+        sudo rm -rf /usr/share/dotnet
+        sudo rm -rf /usr/local/lib/android
+        sudo rm -rf /opt/ghc
+        sudo rm -rf /opt/hostedtoolcache/CodeQL
+        sudo docker image prune --all --force
+        echo "Disk space after cleanup:"
+        df -h /
+
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Get changed files
+      id: changed-files
+      uses: tj-actions/changed-files@v45
+      with:
+        files: |
+          engine/**
+          lib/**
+    
+    - name: Skip if no Engine/lib changes
+      if: steps.changed-files.outputs.any_changed == 'false' && github.event_name == 'pull_request'
+      run: echo "No Engine/lib files changed, skipping..."
+    
+    - name: Install system dependencies
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y ffmpeg
+    
+    - name: Download pre-built wheels
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      uses: actions/download-artifact@v4
+      with:
+        pattern: '*-wheel'
+        path: /tmp/wheels/
+        merge-multiple: true
+      continue-on-error: true
+    
+    - name: Install uv
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      uses: astral-sh/setup-uv@v4
+      with:
+        version: "latest"
+        enable-cache: true
+        cache-dependency-glob: "uv.lock"
+    
+    - name: Set up Python 3.12
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      run: uv python install 3.12
+      
+    - name: Install dependencies
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      run: |
+        cd engine
+        # CI mode: use pre-built wheels via --find-links, skip editable sources
+        uv sync --dev --python 3.12 --no-sources --find-links /tmp/wheels/
+    
+    - name: Run workflow tests
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      run: |
+        cd engine
+        uv run --no-sync pytest tests/ -v --tb=short -m "workflow" --timeout=1200 --cov=_internal --cov-report=
+
+    - name: Upload coverage artifact
+      if: (steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push') && always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-engine-workflow
+        path: engine/.coverage
+        include-hidden-files: true
+        retention-days: 1
+        if-no-files-found: ignore
+
+    - name: Upload Ray logs on failure
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: ray-logs-workflow-${{ github.run_id }}
+        path: /tmp/ray/
+        retention-days: 1
+        if-no-files-found: ignore
+    
+    - name: Cleanup test artifacts
+      if: always()
+      run: |
+        rm -rf /tmp/video_workflow_test_*
+        rm -rf /tmp/minhash_*
+        rm -rf /tmp/nurion_cache
+
+  # ============================================================================
+  # Engine chaos tests (experimental, unstable)
+  # ============================================================================
+
+  test-engine-chaos:
+    name: Engine Chaos Tests
+    runs-on: ubuntu-latest
+    needs: [build-raydp, build-anvil-rs]
+    if: always() && !cancelled()
+    # Chaos tests are experimental and may be flaky - doesn't block PR merge
+    continue-on-error: true
+    
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Get changed files
+      id: changed-files
+      uses: tj-actions/changed-files@v45
+      with:
+        files: |
+          engine/**
+          lib/**
+    
+    - name: Skip if no Engine/lib changes
+      if: steps.changed-files.outputs.any_changed == 'false' && github.event_name == 'pull_request'
+      run: echo "No Engine/lib files changed, skipping..."
+    
+    - name: Download pre-built wheels
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      uses: actions/download-artifact@v4
+      with:
+        pattern: '*-wheel'
+        path: /tmp/wheels/
+        merge-multiple: true
+      continue-on-error: true
+    
+    - name: Install uv
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      uses: astral-sh/setup-uv@v4
+      with:
+        version: "latest"
+        enable-cache: true
+        cache-dependency-glob: "uv.lock"
+    
+    - name: Set up Python 3.12
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      run: uv python install 3.12
+      
+    - name: Install dependencies
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      run: |
+        cd engine
+        # CI mode: use pre-built wheels via --find-links, skip editable sources
+        uv sync --dev --python 3.12 --no-sources --find-links /tmp/wheels/
+
+    - name: Run chaos tests
+      if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push'
+      run: |
+        cd engine
+        # Chaos tests kill workers mid-flight; small data-loss assertions are
+        # known to flake. Retry AssertionError failures twice before giving up.
+        uv run --no-sync pytest tests/ -v --tb=short -m "chaos" --timeout=600 \
+          --reruns 2 --reruns-delay 10 --only-rerun AssertionError \
+          --cov=_internal --cov-report=
+
+    - name: Upload coverage artifact
+      if: (steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'push') && always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-engine-chaos
+        path: engine/.coverage
+        include-hidden-files: true
+        retention-days: 1
+        if-no-files-found: ignore
+
+    - name: Upload Ray logs on failure
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: ray-logs-chaos-${{ github.run_id }}
+        path: /tmp/ray/
+        retention-days: 1
+        if-no-files-found: ignore
+
+  # ============================================================================
+  # Coverage report (aggregates all test jobs)
+  # ============================================================================
+
+  coverage-report:
+    name: Coverage Report
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    needs:
+      - build-raydp
+      - build-anvil-rs
+      - test-anvil-rs
+      - test-engine-unit
+      - test-engine-integration
+      - test-engine-distributed
+      - test-engine-stability
+      - test-engine-workflow
+      - test-engine-chaos
+    if: always() && !cancelled()
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Download all coverage artifacts
+      uses: actions/download-artifact@v4
+      with:
+        pattern: coverage-*
+        path: /tmp/coverage/
+        merge-multiple: false
+
+    - name: Download pre-built wheels
+      uses: actions/download-artifact@v4
+      with:
+        pattern: '*-wheel'
+        path: /tmp/wheels/
+        merge-multiple: true
+      continue-on-error: true
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v4
+      with:
+        version: "latest"
+        enable-cache: true
+        cache-dependency-glob: "uv.lock"
+
+    - name: Set up Python 3.12
+      run: uv python install 3.12
+
+    - name: Install dependencies
+      run: |
+        cd engine
+        uv sync --dev --python 3.12 --no-sources --find-links /tmp/wheels/
+
+    # ---- Python (engine) overall + diff coverage ----
+    - name: Combine Python coverage
+      run: |
+        cd engine
+        # Collect all .coverage files from artifacts into numbered files for combine
+        i=0
+        for f in $(find /tmp/coverage/ -name '.coverage' -type f); do
+          cp "$f" ".coverage.$i"
+          i=$((i + 1))
+        done
+        if [ "$i" -gt 0 ]; then
+          uv run --no-sync coverage combine
+          uv run --no-sync coverage xml -o coverage.xml
+          echo "## Python (engine) Overall Coverage" >> $GITHUB_STEP_SUMMARY
+          uv run --no-sync coverage report --format=markdown >> $GITHUB_STEP_SUMMARY
+        else
+          echo "## Python (engine) Coverage" >> $GITHUB_STEP_SUMMARY
+          echo "No Python coverage data collected." >> $GITHUB_STEP_SUMMARY
+        fi
+
+    - name: Python diff coverage
+      if: github.event_name == 'pull_request'
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        cd engine
+        if [ -f coverage.xml ]; then
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Python (engine) Diff Coverage" >> $GITHUB_STEP_SUMMARY
+          uv run --no-sync diff-cover coverage.xml \
+            --compare-branch=origin/${{ github.base_ref }} \
+            --markdown-report=/tmp/diff-cover.md \
+            --fail-under=0 || true
+          cat /tmp/diff-cover.md >> $GITHUB_STEP_SUMMARY
+
+          # Post coverage comment on PR (update existing or create new)
+          OVERALL=$(uv run --no-sync coverage report --format=total 2>/dev/null || echo "N/A")
+          {
+            echo "## Coverage Report"
+            echo ""
+            echo "**Overall**: ${OVERALL}%"
+            echo ""
+            echo "<details><summary>Diff Coverage (changed files only)</summary>"
+            echo ""
+            cat /tmp/diff-cover.md
+            echo ""
+            echo "</details>"
+          } > /tmp/pr-comment.md
+
+          # Find and update existing comment, or create new one
+          COMMENT_ID=$(gh api repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments \
+            --jq '.[] | select(.body | startswith("## Coverage Report")) | .id' | head -1)
+          if [ -n "$COMMENT_ID" ]; then
+            gh api repos/${{ github.repository }}/issues/comments/$COMMENT_ID \
+              -X PATCH -F "body=@/tmp/pr-comment.md"
+          else
+            gh pr comment ${{ github.event.pull_request.number }} --body-file /tmp/pr-comment.md
+          fi
+        fi
+
+    # ---- Rust (anvil-rs) coverage ----
+    - name: Rust coverage summary
+      run: |
+        if [ -f /tmp/coverage/coverage-anvil-rs/codecov.json ]; then
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Rust (anvil-rs) Coverage" >> $GITHUB_STEP_SUMMARY
+          echo "Rust coverage data available in job summary." >> $GITHUB_STEP_SUMMARY
+        else
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Rust (anvil-rs) Coverage" >> $GITHUB_STEP_SUMMARY
+          echo "No Rust coverage data collected." >> $GITHUB_STEP_SUMMARY
+        fi

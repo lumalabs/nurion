@@ -1,0 +1,659 @@
+# Copyright 2025 nurion team
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Stage Master - orchestrates workers for a pipeline stage.
+
+StageMaster delegates concerns to component managers:
+- WorkerManager: worker lifecycle (spawn, stop, status)
+- RecoveryManager: failure tracking and worker recovery
+- SourceManager: SplitPlanner / DirectProducer lifecycle
+- SinkManager: SinkCommitter background commit lifecycle
+
+QueueGroup Model:
+- All inter-stage data flows through QueueGroup (1 partition for non-shuffle, N for shuffle)
+- Workers claim from group via claim_from_group() (broker picks best partition)
+- Source planner queues remain as single queues (internal coordination only)
+"""
+
+from __future__ import annotations
+
+import asyncio
+import enum
+import time
+from typing import TYPE_CHECKING, Any, Dict, Optional
+
+from _internal.core.managers import RecoveryManager, SinkManager, SourceManager, WorkerManager
+from _internal.core.models import (
+    FailurePolicy,
+    FailureTracker,
+    QueueEndpoint,
+    StageStatus,
+)
+from _internal.core.split_payload_store import SplitPayloadStore
+from _internal.core.stage_worker import StageWorker
+from _internal.queue import AnvilQueueClient
+from _internal.utils.logging import create_ray_logger
+from _internal.webui.state.schema import encode_json, job_namespace, stage_key, worker_key
+
+if TYPE_CHECKING:
+    from _internal.core.stage import Stage, StageRuntime
+    from _internal.runtime.queue_stats import QueueRef
+
+from _internal.config import get_config
+
+
+__all__ = [
+    "StageMaster",
+    "StageWorker",
+    "QueueEndpoint",
+    "StageStatus",
+    "FailurePolicy",
+    "FailureTracker",
+]
+
+
+class _StageState(enum.Enum):
+    """Stage lifecycle: INIT → RUNNING → FINISHED | FAILED."""
+
+    INIT = "init"
+    RUNNING = "running"
+    FINISHED = "finished"
+    FAILED = "failed"
+
+
+class StageMaster:
+    """Orchestrates workers for a pipeline stage.
+
+    Lifecycle:
+        start() -> [source produces] -> [sink commit queue + bg loop] -> spawn workers
+        run()   -> worker loop -> workers done -> [sink finalize] -> mark complete
+        stop()  -> cancel commit loop, stop workers
+    """
+
+    def __init__(
+        self,
+        job_id: str,
+        stage: "Stage",
+        payload_store: SplitPayloadStore,
+        runtime: "StageRuntime",
+    ):
+        self.job_id = job_id
+        self.stage_id = stage.stage_id
+        self.stage = stage
+        self.runtime = runtime
+        self.logger = create_ray_logger(f"Master-{self.stage_id}")
+
+        # Upstream reference (mutable: SplitPlanner overrides with its planner queue)
+        self.upstream: Optional[QueueRef] = runtime.upstream
+
+        # SplitPayloadStore - shared across all stages
+        self.payload_store = payload_store
+
+        # Queue client and output group
+        self._queue_client: Optional[AnvilQueueClient] = None
+
+        # All inter-stage output uses QueueGroup: 1 partition for non-shuffle, N for shuffle
+        self._output_group_name = f"{job_id}_{self.stage_id}_output"
+        self._num_partitions: int = max(1, stage.operator_config.get_output_partition_count())
+
+        # Lifecycle state
+        self._state = _StageState.INIT
+        self._failure_message: Optional[str] = None
+        self._start_time: Optional[float] = None
+        self._last_completion_time: Optional[float] = None  # set when first worker completes
+
+        # Worker and recovery managers (created in _init_managers)
+        self._worker_manager: Optional[WorkerManager] = None
+        self._recovery_manager: Optional[RecoveryManager] = None
+
+        # Source pause flag — set by PipelineController each tick
+        self._source_paused: bool = False
+
+        # Source manager (SplitPlanner or DirectProducer)
+        source = stage.operator_config.create_source()
+        self._source_manager: Optional[SourceManager] = (
+            SourceManager(source, job_id, self.stage_id) if source else None
+        )
+
+        # Sink manager (SinkCommitter)
+        sink_committer = stage.operator_config.create_sink_committer()
+        self._sink_manager: Optional[SinkManager] = (
+            SinkManager(sink_committer, job_id, self.stage_id) if sink_committer else None
+        )
+
+    # =========================================================================
+    # Queue Setup
+    # =========================================================================
+
+    async def _create_queue_client(self) -> None:
+        """Create queue client and output queue."""
+        assert self.runtime.broker_endpoint is not None, "broker_endpoint is required"
+
+        broker_url = f"{self.runtime.broker_endpoint.host}:{self.runtime.broker_endpoint.port}"
+        from _internal.queue.anvil import _compute_heartbeat_interval
+
+        self._queue_client = AnvilQueueClient(
+            broker_url,
+            worker_id=f"master-{self.stage_id}",
+            heartbeat_interval_secs=_compute_heartbeat_interval(self.runtime.claim_timeout_secs),
+        )
+        self._queue_client.start()
+        self.logger.info(f"Connected to broker at {broker_url}")
+
+        # All inter-stage output uses QueueGroup.
+        # Divide total budget by partition count.  Use ceil so the aggregate is
+        # at most num_partitions messages over budget (each partition needs >= 1).
+        import math
+
+        total_bound = self.runtime.max_pending_total
+        per_partition = (
+            max(math.ceil(total_bound / max(self._num_partitions, 1)), 1) if total_bound > 0 else 0
+        )
+        self._queue_client.create_queue_group(
+            self._output_group_name,
+            self._num_partitions,
+            max_pending_per_partition=per_partition,
+        )
+        self.logger.info(
+            f"Created output group '{self._output_group_name}' with "
+            f"{self._num_partitions} partition(s) for stage {self.stage_id}"
+            f"{f', max_pending_per_partition={per_partition}' if per_partition else ''}"
+        )
+
+    def _init_managers(self) -> None:
+        """Initialize worker and recovery managers."""
+        from _internal.core.stage_worker import OutputRouting
+
+        partition_column = (
+            self.stage.operator_config.get_partition_column() if self._num_partitions > 1 else None
+        )
+        output = OutputRouting(
+            group_name=self._output_group_name,
+            num_partitions=self._num_partitions,
+            partition_column=partition_column,
+            commit_queue_name=self._sink_manager.commit_queue_name if self._sink_manager else None,
+        )
+        self._worker_manager = WorkerManager(
+            job_id=self.job_id,
+            stage=self.stage,
+            runtime=self.runtime,
+            payload_store=self.payload_store,
+            output=output,
+            upstream=self.upstream,
+        )
+
+        self._recovery_manager = RecoveryManager(
+            stage_id=self.stage_id,
+            worker_manager=self._worker_manager,
+            policy=FailurePolicy(),
+        )
+
+    def _has_unprocessed_messages(self) -> bool:
+        """Check if upstream queue(s) still have pending or claimed messages.
+
+        Uses raw message counts (not ``all_drained``) because the master
+        needs to know "is there actual work?" — regardless of whether
+        upstream has called ``mark_finished`` yet.  The ``finished`` flag
+        is for worker exit decisions (via broker ``upstream_drained``),
+        not for the master's spawn/finish logic.
+        """
+        if not self._queue_client or not self.upstream:
+            return False
+
+        try:
+            if self.upstream.is_group:
+                result = self._queue_client.is_group_finished(self.upstream.name)
+                for p in result.get("partitions", []):
+                    if p.get("pending_count", 0) > 0 or p.get("claimed_count", 0) > 0:
+                        return True
+                return False
+
+            stats = self._queue_client.get_stats(self.upstream.name)
+            pending = stats.get("pending_count", 0)
+            claimed = stats.get("claimed_count", 0)
+            return pending > 0 or claimed > 0
+        except Exception as e:
+            self.logger.warning(f"Error checking upstream queue stats: {e}")
+            return True
+
+    # =========================================================================
+    # Lifecycle: start / run / stop
+    # =========================================================================
+
+    async def start(self) -> None:
+        """Start the stage master."""
+        if self._state == _StageState.RUNNING:
+            return
+
+        self.logger.info(f"Starting stage {self.stage_id}")
+        self._start_time = time.time()
+
+        await self._create_queue_client()
+        queue_client = self._queue_client
+        assert queue_client is not None
+        broker_endpoint = self.runtime.broker_endpoint
+        assert broker_endpoint is not None
+
+        # --- DirectProducer: no workers ---
+        if self._source_manager and self._source_manager.is_direct_producer:
+            await self._source_manager.run_direct_producer(
+                queue_client, self._output_group_name, broker_endpoint
+            )
+            self._write_stage_state(status="RUNNING")
+            self._state = _StageState.RUNNING
+            return
+
+        self._state = _StageState.RUNNING
+
+        # Ensure the payload store actor is ready before prepare() writes to it.
+        # RaySplitPayloadStore is backed by a Ray actor; calling prepare() before
+        # the actor is fully initialised raises ActorUnavailableError.
+        if hasattr(self.payload_store, "wait_ready"):
+            self.payload_store.wait_ready()
+
+        # --- Pre-flight preparation (e.g., anti-join builds exclude key table) ---
+        self.stage.operator_config.prepare(self.payload_store)
+
+        # --- Sink manager: create commit queue and start background loop ---
+        if self._sink_manager:
+            self._sink_manager.create_queue_and_start_loop(queue_client)
+
+        # --- SplitPlanner: override upstream to planner queue ---
+        # SplitPlanner interposes its own queue between source and workers.
+        if self._source_manager is not None and not self._source_manager.is_direct_producer:
+            from _internal.runtime.queue_stats import QueueRef
+
+            planner_queue = self._source_manager.planner_queue_name
+            assert planner_queue is not None
+            self.upstream = QueueRef.queue(planner_queue)
+
+        # --- Init workers (uses self.upstream, already resolved) ---
+        self._init_managers()
+        assert self._worker_manager is not None
+
+        # --- SplitPlanner: launch async production ---
+        if self._source_manager is not None and not self._source_manager.is_direct_producer:
+            self._source_manager.start_split_production(
+                queue_client,
+                pause_fn=lambda: self._source_paused,
+                running_fn=lambda: self._state == _StageState.RUNNING,
+            )
+
+        # When downstream of a shuffle, ensure enough initial workers to cover
+        # all partition queues (partition assignment uses max_parallelism as
+        # modulus, so min_parallelism workers alone may leave gaps).
+        min_workers = self.stage.min_parallelism
+        if self.runtime.upstream_num_partitions > 0:
+            min_workers = max(
+                min_workers, min(self.runtime.upstream_num_partitions, self.stage.max_parallelism)
+            )
+
+        for _ in range(min_workers):
+            worker_id = await self._worker_manager.spawn_worker(is_min_worker=True)
+            if worker_id is None:
+                raise RuntimeError(
+                    f"Stage {self.stage_id}: Failed to spawn minimum required workers"
+                )
+            self._write_worker_state(worker_id, "RUNNING")
+
+        self._write_stage_state(status="RUNNING")
+
+        self.logger.info(
+            f"Stage {self.stage_id} started with {self._worker_manager.worker_count} workers"
+        )
+
+    async def run(self) -> bool:
+        """Run the stage until completion."""
+        if self._state != _StageState.RUNNING:
+            await self.start()
+        queue_client = self._queue_client
+        assert queue_client is not None
+
+        # --- DirectProducer: immediate finish ---
+        if self._source_manager and self._source_manager.is_direct_producer:
+            self._state = _StageState.FINISHED
+            try:
+                queue_client.mark_group_finished(self._output_group_name)
+            except Exception as e:
+                self.logger.warning(f"Failed to mark output group as finished: {e}")
+            self._write_stage_state(status="COMPLETED")
+            return True
+
+        # --- Worker-based run loop ---
+        assert self._worker_manager is not None
+        assert self._recovery_manager is not None
+        self._last_completion_time = time.monotonic()
+
+        try:
+            while self._state == _StageState.RUNNING:
+                # Fail fast if background tasks have crashed
+                if self._source_manager:
+                    self._source_manager.raise_if_production_failed()
+                if self._sink_manager:
+                    self._sink_manager.raise_if_commit_failed()
+
+                if self._worker_manager.worker_count == 0:
+                    if self._has_unprocessed_messages():
+                        self.logger.info(
+                            f"Stage {self.stage_id}: no workers but queue has "
+                            f"unprocessed messages, spawning worker"
+                        )
+                        worker_id = await self._worker_manager.spawn_worker(is_min_worker=False)
+                        if worker_id is None:
+                            await asyncio.sleep(0.5)
+                            continue
+                    else:
+                        self._state = _StageState.FINISHED
+                        break
+
+                completed, failed = await self._worker_manager.wait_for_completion(timeout=1.0)
+                self._worker_manager.cleanup_workers(completed + failed)
+
+                for wid in completed:
+                    self._write_worker_state(wid, "COMPLETED")
+                for wid in failed:
+                    self._write_worker_state(wid, "FAILED")
+
+                if failed:
+                    # With broker-driven exit, workers exit cleanly via
+                    # upstream_drained=True (completed). Only crashes produce
+                    # failures — always recover.
+                    self._recovery_manager.record_failures(
+                        len(failed), self._worker_manager.worker_count
+                    )
+                    result = await self._recovery_manager.recover_failed_workers(
+                        failed_worker_ids=failed,
+                    )
+                    if result.should_give_up:
+                        self._state = _StageState.FAILED
+                        self._failure_message = result.give_up_reason
+                        self.logger.error(
+                            f"Stage {self.stage_id} giving up: {result.give_up_reason}"
+                        )
+                        break
+                if completed:
+                    self._last_completion_time = time.monotonic()
+                    self._recovery_manager.record_success()
+
+                if self._state == _StageState.FAILED:
+                    break
+
+            # --- Sink finalize ---
+            if self._sink_manager and self._state != _StageState.FAILED:
+                await self._sink_manager.finalize(queue_client)
+
+            # Verify output queue is empty before marking finished.
+            # If there are still pending/claimed messages in our output,
+            # marking finished is premature — downstream might miss them.
+            try:
+                out_result = queue_client.is_group_finished(self._output_group_name)
+                for p in out_result.get("partitions", []):
+                    out_pending = p.get("pending_count", 0)
+                    out_claimed = p.get("claimed_count", 0)
+                    if out_pending > 0 or out_claimed > 0:
+                        self.logger.warning(
+                            f"Stage {self.stage_id}: output group has "
+                            f"pending={out_pending} claimed={out_claimed} "
+                            f"at mark_finished time — downstream may lose data!"
+                        )
+            except Exception:
+                pass
+
+            # Mark output queue(s) as finished — failure would leave downstream
+            # waiting forever, so treat it as a stage failure.
+            try:
+                self._mark_finished_with_retry(queue_client)
+            except Exception as mark_err:
+                self.logger.error(f"Failed to mark finished: {mark_err}")
+                if self._state != _StageState.FAILED:
+                    self._state = _StageState.FAILED
+                    self._failure_message = f"Failed to mark output as finished: {mark_err}"
+
+            self._write_stage_state(
+                status="FAILED" if self._state == _StageState.FAILED else "COMPLETED"
+            )
+
+            if self._state == _StageState.FAILED:
+                raise RuntimeError(self._failure_message)
+
+            return True
+
+        finally:
+            await self.stop()
+
+    async def stop(self) -> None:
+        """Stop the stage master."""
+        self._state = _StageState.INIT
+
+        if self._source_manager:
+            await self._source_manager.stop()
+
+        if self._sink_manager:
+            await self._sink_manager.cancel()
+
+        if self._worker_manager:
+            await self._worker_manager.stop_all_workers()
+
+        self.logger.info(f"Stage {self.stage_id} stopped")
+
+    # =========================================================================
+    # Controller interface (called by PipelineController)
+    # =========================================================================
+
+    def set_source_paused(self, paused: bool) -> None:
+        """Set source pause flag (called by PipelineController each tick)."""
+        self._source_paused = paused
+
+    def fail(self, reason: str) -> None:
+        """Fail this stage (called by PipelineController on liveness timeout)."""
+        if self._state == _StageState.RUNNING:
+            self._state = _StageState.FAILED
+            self._failure_message = f"Stage {self.stage_id}: {reason}"
+            self.logger.error(self._failure_message)
+
+    def reset_progress_timer(self) -> None:
+        """Reset progress timer (called by controller when output is saturated)."""
+        self._last_completion_time = time.monotonic()
+
+    def report_completion_age(self) -> float:
+        """Seconds since last worker completion (used by controller for liveness)."""
+        if self._last_completion_time is None:
+            return 0.0
+        return time.monotonic() - self._last_completion_time
+
+    # =========================================================================
+    # Helpers
+    # =========================================================================
+
+    def _write_worker_state(self, worker_id: str, status: str, **extra: Any) -> None:
+        """Write worker lifecycle metadata into Anvil state."""
+        if not self._queue_client:
+            return
+        data: Dict[str, Any] = {
+            "worker_id": worker_id,
+            "stage_id": self.stage_id,
+            "status": status,
+            "timestamp": time.time(),
+        }
+        if status == "RUNNING":
+            data["start_time"] = time.time()
+        if status in ("COMPLETED", "FAILED", "STOPPED"):
+            data["end_time"] = time.time()
+        data.update(extra)
+        try:
+            self._queue_client.state_put(
+                job_namespace(self.job_id),
+                puts={worker_key(self.stage_id, worker_id): encode_json(data)},
+            )
+        except Exception as e:
+            self.logger.debug(f"Failed to write worker state: {e}")
+
+    def _mark_finished_with_retry(self, queue_client, max_retries: int | None = None) -> None:
+        """Mark output group as finished with retries to prevent downstream hangs."""
+        if max_retries is None:
+            max_retries = get_config().stage_mark_finished_max_retries
+        for attempt in range(max_retries):
+            try:
+                queue_client.mark_group_finished(self._output_group_name)
+                break
+            except Exception as e:
+                if attempt == max_retries - 1:
+                    self.logger.error(
+                        f"Failed to mark group {self._output_group_name} "
+                        f"as finished after {max_retries} attempts: {e}"
+                    )
+                    raise
+                self.logger.warning(
+                    f"Retry {attempt + 1}/{max_retries} marking group finished: {e}"
+                )
+                time.sleep(0.5 * (attempt + 1))
+
+    def _write_stage_state(self, status: str) -> None:
+        """Write stage status into Anvil state."""
+        if not self._queue_client:
+            return
+        operator_class = self.stage.operator_config.operator_class
+        operator_name = operator_class.__name__ if operator_class else "Unknown"
+        data = {
+            "stage_id": self.stage_id,
+            "status": status,
+            "timestamp": time.time(),
+            "operator_type": operator_name,
+            "min_parallelism": self.stage.min_parallelism,
+            "max_parallelism": self.stage.max_parallelism,
+        }
+        if status == "FAILED":
+            data["failure_message"] = self._failure_message
+        try:
+            self._queue_client.state_put(
+                job_namespace(self.job_id),
+                puts={stage_key(self.stage_id): encode_json(data)},
+            )
+        except Exception as e:
+            self.logger.debug(f"Failed to write stage state: {e}")
+
+    # =========================================================================
+    # Public Interface (for RayJobRunner, Autoscaler, WebUI)
+    # =========================================================================
+
+    async def notify_upstream_finished(self) -> None:
+        """Notify this stage that all upstream stages have finished.
+
+        Informational only — workers detect completion via broker's
+        upstream_drained flag in claim responses.
+        """
+        self.logger.info(f"Stage {self.stage_id} notified: upstream finished")
+
+    def get_queue_client(self) -> Optional[AnvilQueueClient]:
+        return self._queue_client
+
+    def get_output_group_name(self) -> str:
+        """Get the output QueueGroup name."""
+        return self._output_group_name
+
+    def get_num_partitions(self) -> int:
+        """Get number of output partitions (>= 1; 1 for non-shuffle)."""
+        return self._num_partitions
+
+    def get_input_ref(self) -> Optional["QueueRef"]:
+        """Get input queue reference (for controller stats collection)."""
+        return self.upstream
+
+    def get_output_ref(self) -> "QueueRef":
+        """Get output queue reference (for controller stats collection)."""
+        from _internal.runtime.queue_stats import QueueRef
+
+        if self._sink_manager:
+            return QueueRef.queue(self._sink_manager.commit_queue_name)
+        return QueueRef.group(self._output_group_name)
+
+    def get_status(self) -> StageStatus:
+        output_size = 0
+        if self._queue_client:
+            try:
+                if self._sink_manager:
+                    stats = self._queue_client.get_stats(self._sink_manager.commit_queue_name)
+                    output_size = stats.get("pending_count", 0)
+                else:
+                    stats = self._queue_client.get_group_stats(self._output_group_name)
+                    output_size = stats.get("total_pending", 0)
+            except Exception:
+                pass
+
+        return StageStatus(
+            stage_id=self.stage_id,
+            worker_count=self._worker_manager.worker_count if self._worker_manager else 0,
+            output_queue_size=output_size,
+            is_running=self._state == _StageState.RUNNING,
+            is_finished=self._state == _StageState.FINISHED,
+            failed=self._state == _StageState.FAILED,
+            failure_message=self._failure_message,
+            backpressure_active=self._source_paused,
+        )
+
+    async def scale_down(self, count: int) -> int:
+        if not self._worker_manager or count <= 0:
+            return 0
+        current = self._worker_manager.worker_count
+        min_workers = self.stage.min_parallelism
+        actual_remove = min(count, max(0, current - min_workers))
+        if actual_remove == 0:
+            return 0
+        worker_ids = self._worker_manager.worker_ids[-actual_remove:]
+        removed = 0
+        for worker_id in worker_ids:
+            if await self._worker_manager.stop_worker(worker_id):
+                self._write_worker_state(worker_id, "STOPPED")
+                removed += 1
+        self.logger.info(
+            f"Scaled down {self.stage_id}: removed {removed}/{count} workers "
+            f"(now {self._worker_manager.worker_count} workers)"
+        )
+        return removed
+
+    async def scale_up(self, count: int) -> int:
+        if not self._worker_manager or count <= 0:
+            return 0
+        current = self._worker_manager.worker_count
+        max_workers = self.stage.max_parallelism
+        actual_add = min(count, max(0, max_workers - current))
+        if actual_add == 0:
+            return 0
+        added = 0
+        for _ in range(actual_add):
+            try:
+                worker_id = await self._worker_manager.spawn_worker(is_min_worker=False)
+                if worker_id:
+                    self._write_worker_state(worker_id, "RUNNING")
+                    added += 1
+            except Exception as e:
+                self.logger.warning(f"Failed to spawn worker: {e}")
+                break
+        self.logger.info(
+            f"Scaled up {self.stage_id}: added {added}/{count} workers "
+            f"(now {self._worker_manager.worker_count} workers)"
+        )
+        return added
+
+    async def cleanup_queue(self) -> None:
+        if self._queue_client:
+            self._queue_client.stop()
+            self._queue_client = None
+
+    @property
+    def _workers(self) -> Dict[str, Any]:
+        """Access workers dict (used by tests and helpers)."""
+        if self._worker_manager:
+            return self._worker_manager.workers
+        return {}
