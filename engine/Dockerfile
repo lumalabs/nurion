@@ -72,18 +72,41 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && \
     apt-get remove -y protobuf-compiler && apt-get autoremove -y && \
     rm -rf /var/lib/apt/lists/*
 
-# Install pyspark (Spark 4.1.x, Scala 2.13)
-RUN uv pip install --system --no-cache "pyspark>=4.1,<5"
+# Install pyspark 4.1.2 (Scala 2.13)
+RUN uv pip install --system --no-cache "pyspark==4.1.2"
 
-# Download extra JARs for Spark S3/Lance support (Scala 2.13 / Spark 4.1 variants)
+# Download Spark S3 support jars (Scala 2.13 / Spark 4.1). Drop pyspark's bundled
+# arrow jars — arrow is provided by the lance-spark bundle built below.
 ENV M=https://repo1.maven.org/maven2
 RUN PYSPARK_JARS=$(python -c "import pyspark; print(pyspark.__path__[0])")/jars && \
     rm -f ${PYSPARK_JARS}/arrow-*.jar && \
     wget -q ${M}/org/apache/spark/spark-hadoop-cloud_2.13/4.1.1/spark-hadoop-cloud_2.13-4.1.1.jar \
          ${M}/org/apache/hadoop/hadoop-aws/3.3.4/hadoop-aws-3.3.4.jar \
          ${M}/com/amazonaws/aws-java-sdk-bundle/1.12.367/aws-java-sdk-bundle-1.12.367.jar \
-         ${M}/org/lance/lance-spark-bundle-4.1_2.13/0.5.1/lance-spark-bundle-4.1_2.13-0.5.1.jar \
-         -P ${PYSPARK_JARS}/
+         -P ${PYSPARK_JARS}/ && \
+    # Drop the Spark Connect client fat jar: it shades Arrow under
+    # org.sparkproject.* and carries a second org.apache.spark.sql.util.ArrowUtils
+    # whose toArrowSchema returns the shaded Schema. On the RayDP executor
+    # classpath it shadows spark-sql-api's real ArrowUtils and breaks Arrow-based
+    # pandas UDFs (mapInPandas) with NoSuchMethodError.
+    rm -rf ${PYSPARK_JARS}/connect-repl
+
+# Build the lance-spark bundle from upstream main and install it into pyspark/jars.
+# Main pins lance-core 8.0.0-beta.9, which includes lance #6946 — the JNI
+# dispatcher classloader fix required for native lance writes
+# (df.write.format("lance")) under RayDP. The released lance-spark-bundle 0.5.1 on
+# Maven embeds pre-fix lance-core 7.0.0 (native dispatcher thread does find_class
+# on the system classloader -> "AsyncScanner class not found" because Ray loads
+# job jars in a child classloader). Pinned to a main commit until a fixed bundle
+# is published to Maven.
+ARG LANCE_SPARK_REPO=https://github.com/lance-format/lance-spark
+ARG LANCE_SPARK_REF=656c882
+RUN PYSPARK_JARS=$(python -c "import pyspark; print(pyspark.__path__[0])")/jars && \
+    git clone "$LANCE_SPARK_REPO" /tmp/lance-spark && \
+    cd /tmp/lance-spark && git checkout "$LANCE_SPARK_REF" && \
+    mvn -pl lance-spark-bundle-4.1_2.13 -am package -DskipTests -Dspotless.skip=true -Dmaven.javadoc.skip=true -q && \
+    cp "$(ls lance-spark-bundle-4.1_2.13/target/lance-spark-bundle-4.1_2.13-*.jar | grep -vE 'sources|javadoc' | head -1)" ${PYSPARK_JARS}/ && \
+    cd / && rm -rf /tmp/lance-spark /root/.m2
 
 # Install Python runtime dependencies (minimal set for Ray + data processing)
 RUN uv pip install --system --no-cache \
